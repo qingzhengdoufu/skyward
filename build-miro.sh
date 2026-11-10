@@ -16,6 +16,7 @@ cargo test --locked -p skyward --test commands
 cargo ndk -t arm64-v8a --platform 30 build --locked --release -p skyward
 RUSTFLAGS='-C target-feature=+crt-static' cargo ndk -t arm64-v8a --platform 30 build --locked --release -p skyward-system-init --target-dir target/system-init
 cargo build --locked --release -p skyward-pack
+bash build-7zip.sh
 
 version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' Cargo.toml | tr -d '\r')
 name=skyward-v${version}-miro-OS3.0.303.0.WOMCNXM
@@ -28,5 +29,6 @@ target/release/skyward-pack recovery \
     --mono resources/fonts/KirkMono-Regular.ttf \
     --mono-license resources/fonts/KirkMono-OFL.txt \
     --omapi resources/omapi \
+    --sevenzip target/7zz-android \
     --out "$out/$name.img"
 sha256sum "$out/$name.img"

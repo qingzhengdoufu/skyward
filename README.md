@@ -1,11 +1,15 @@
 # Skyward for REDMI K80 Pro (miro)
 
-Current source naming: **0.2.0+miro.15** (upstream 0.2.0, adaptation 15).
+Current source naming: **0.2.0+miro.16** (upstream 0.2.0, adaptation 16).
 This corrects our earlier independent 0.2.4 numbering; it is not a new upstream
 merge. See [version migration](docs/releases/v0.2.0+miro.13.md).
 
 [miro.15 changes and test limits](docs/releases/v0.2.0+miro.15.md): startup
 intro and first backup/tool safety repair batch. Not full TWRP feature parity.
+
+[miro.16](docs/releases/v0.2.0+miro.16.md) adds a fail-stop script ZIP queue and
+the separate full Android ARM64 7-Zip 26.06 executable. No resizing or backup
+format compatibility work is included.
 
 [简体中文](README.zh-CN.md) | [Build and Status](docs/MIRO.md)
 

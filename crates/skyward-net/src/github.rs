@@ -55,9 +55,14 @@ pub fn trusted_newest(answer: &str, codename: &str, running: &str) -> Result<New
     ensure!(build.size > 4096 && build.size <= 256 << 20, "recovery image size out of bounds");
     let api = format!("https://api.github.com/repos/{REPOSITORY}/releases/assets/");
     let link = format!("https://github.com/{REPOSITORY}/releases/download/{}/{}", manifest.tag, manifest.name);
-    ensure!(build.url.starts_with(&api) && build.link == link, "asset is outside this repository");
+    ensure!(build.url.starts_with(&api) && matches_asset_link(&build.link, &link), "asset is outside this repository");
     ensure!(!build.name.contains(['/', '\\']) && !build.name.contains(".."), "unsafe image filename");
     Ok(newest)
+}
+
+fn matches_asset_link(actual: &str, expected: &str) -> bool {
+    // GitHub escapes '+' in semver build metadata on asset download URLs.
+    actual == expected || actual == expected.replace('+', "%2B")
 }
 
 /// The version of GitHub's API the answer is read as.
@@ -239,6 +244,14 @@ mod tests {
         assert!(miro_newer(&current, &parse("0.2.3")).unwrap());
         assert!(miro_newer(&parse("0.2.0+miro.bad"), &current).is_err());
         assert!(miro_newer(&current, &parse("0.1.0")).is_err());
+    }
+
+    #[test]
+    fn github_encoded_build_metadata_keeps_the_exact_signed_repository_path() {
+        let link = "https://github.com/wmin85099-cmd/skyward/releases/download/v0.2.0+miro.16/skyward-v0.2.0+miro.16-miro-stock.img";
+        assert!(matches_asset_link(&link.replace('+', "%2B"), link));
+        assert!(matches_asset_link(link, link));
+        assert!(!matches_asset_link(&link.replace("wmin85099-cmd", "another-owner"), link));
     }
 
     /// What GitHub answered of the newest release on 2026-11-07, with the

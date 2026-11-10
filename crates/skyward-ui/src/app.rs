@@ -41,6 +41,7 @@ pub enum Screen {
     /// Mounting and unmounting the slot's partitions.
     Mount,
     Install,
+    ZipQueue,
     /// A place's folders and the files in them that can be installed, to
     /// choose one.
     Choose(Place),
@@ -854,6 +855,7 @@ impl Data {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
+    ZipQueue,
     SkywardUpdate,
     Avb,
     Reboot,
@@ -1175,6 +1177,9 @@ pub const TIME_ZONES: [(Text, Text, &str); 9] = [
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    QueueAdd,
+    QueueRemove(usize),
+    QueueUp(usize),
     AvbToggle(avbctl::Check),
     CancelAvb,
     Open(Screen),
@@ -1646,6 +1651,10 @@ pub struct State {
     pub source: Source,
     /// The name of the file being installed, when it is one on the phone.
     pub package_name: Option<String>,
+    pub zip_queue: Vec<(Place, String)>,
+    pub queue_picking: bool,
+    pub queue_running: bool,
+    pub queue_results: Vec<(usize, Outcome)>,
     /// What the install script last run showed, its latest lines.
     pub script_output: Vec<String>,
     /// A zip's install script runs only if the zip was signed with one of
@@ -1829,6 +1838,10 @@ impl Default for State {
             install: Install::Idle,
             source: Source::Computer,
             package_name: None,
+            zip_queue: Vec::new(),
+            queue_picking: false,
+            queue_running: false,
+            queue_results: Vec::new(),
             script_output: Vec::new(),
             check_signature: false,
             recovery_partitions: false,
@@ -2041,6 +2054,7 @@ pub enum Shot {
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
+    InstallQueue(Vec<(Place, String)>),
     ReadAvb,
     SetAvb { expected: avbctl::State, check: avbctl::Check, disabled: bool },
     Reboot(Target),
@@ -3955,6 +3969,7 @@ impl App {
     /// it is one on the phone: nothing the last install showed stays.
     fn begin_install(&mut self, install: Install, source: Source, name: Option<String>) {
         let s = &mut self.state;
+        if !s.queue_running { s.queue_results.clear(); }
         (s.install, s.source, s.package_name) = (install, source, name);
         s.script_output.clear();
         s.reflash = None;
@@ -5160,6 +5175,12 @@ impl App {
         }
         let install = &mut self.state.install;
         match ev {
+            Event::QueueAt { index, count, name } => {
+                self.state.package_name = Some(format!("{}/{} · {name}", index + 1, count));
+                *install = Install::Scripting { stage: None, running: false };
+                self.state.script_output.clear();
+            }
+            Event::QueueDone { index, outcome } => self.state.queue_results.push((index, outcome)),
             Event::Waiting => *install = Install::Waiting,
             Event::Checking { size } => *install = Install::Checking { size, stage: None },
             Event::Ready { version, wipe } => *install = Install::Confirming { version, wipe },
@@ -5196,6 +5217,7 @@ impl App {
             Event::Reflashed(reflash) => self.state.reflash = Some(reflash),
             Event::Wipe | Event::Reboot(_) => unreachable!("the runtime carries out what rescue asks of it"),
             Event::Done(outcome) | Event::Finished(outcome) => {
+                self.state.queue_running = false;
                 let damage = match (&outcome, &*install) {
                     (Outcome::Failed(_), Install::Updating { overwriting: true, .. }) => Some(Damage::System),
                     (Outcome::Failed(_), Install::Flashing { partition, stage: Some(Stage::Flashing { done, .. }) }) if *done > 0 => {
@@ -5222,6 +5244,7 @@ impl App {
     /// how it learns which control a user's screen lock is answered with.
     fn arrive_at(&mut self, s: Screen) -> Vec<Effect> {
         match s {
+            Screen::ZipQueue => { self.state.queue_picking = false; Vec::new() }
             Screen::ImageBackup => {
                 self.state.image_partitions = None;
                 self.state.image_partition = None;
@@ -5294,6 +5317,24 @@ impl App {
     fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
+            Action::QueueAdd => {
+                if self.state.zip_queue.len() >= skyward_install::queue::LIMIT {
+                    self.say(l.pick(["队列最多 10 个 ZIP", "佇列最多 10 個 ZIP", "Queue holds at most 10 ZIPs"]), now);
+                } else if self.state.place_open(self.state.backup_to) {
+                    self.state.queue_picking = true;
+                    let place = self.state.backup_to;
+                    self.open(Screen::Choose(place));
+                    return self.arrive_at(Screen::Choose(place));
+                } else {
+                    self.say(l.pick(["请先解密存储或连接 U 盘", "請先解密儲存空間或連接 USB 隨身碟", "Unlock storage or connect a USB drive"]), now);
+                }
+            }
+            Action::QueueRemove(index) => {
+                if index < self.state.zip_queue.len() { self.state.zip_queue.remove(index); self.state.confirm = 0.0; self.refresh(); }
+            }
+            Action::QueueUp(index) => {
+                if index > 0 && index < self.state.zip_queue.len() { self.state.zip_queue.swap(index, index - 1); self.state.confirm = 0.0; self.refresh(); }
+            }
             Action::Open(s) => {
                 if s == Screen::Search && self.screen() == Screen::Home {
                     // The bar moves up from where it stands unfolded: a
@@ -5707,7 +5748,24 @@ impl App {
                         self.state.folder_mut(screen).leave(scroll);
                         return vec![Effect::ReadPlace(place, path)];
                     }
-                    FileKind::File | FileKind::Link { folder: false, .. } => return self.install_file(place, path, entry.size, now),
+                    FileKind::File | FileKind::Link { folder: false, .. } => {
+                        if self.state.queue_picking {
+                            if !path.to_ascii_lowercase().ends_with(".zip") {
+                                self.say(l.pick(["队列仅接受 ZIP", "佇列僅接受 ZIP", "Queue accepts ZIPs only"]), now);
+                            } else if !self.state.zip_queue.contains(&(place, path.clone())) {
+                                self.state.zip_queue.push((place, path));
+                                self.state.confirm = 0.0;
+                                self.state.queue_picking = false;
+                                self.leave(true);
+                                self.stack.pop();
+                                self.settle_page();
+                                self.refresh();
+                                return Vec::new();
+                            } else {
+                                self.say(l.pick(["ZIP 已在队列中", "ZIP 已在佇列中", "ZIP already queued"]), now);
+                            }
+                        } else { return self.install_file(place, path, entry.size, now); }
+                    }
                     FileKind::Special => unreachable!("a place lists no special files"),
                 }
             }
@@ -6662,6 +6720,21 @@ impl App {
     fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::ZipQueue => {
+                if self.state.zip_queue.is_empty() { self.say(l.pick(["请添加 ZIP", "請加入 ZIP", "Add a ZIP first"]), now); }
+                else if self.state.zip_queue.iter().any(|(place, _)| !self.state.place_open(*place)) {
+                    self.say(l.pick(["队列中的存储位置不可用", "佇列中的儲存位置無法使用", "A queued storage location is unavailable"]), now);
+                } else if !matches!(self.state.install, Install::Idle | Install::Finished { .. }) {
+                    self.say(l.pick(INSTALL_UNFINISHED), now);
+                } else {
+                    let paths = self.state.zip_queue.clone();
+                    self.state.queue_running = true;
+                    self.state.queue_results.clear();
+                    self.begin_install(Install::Scripting { stage: None, running: false }, Source::File(paths[0].0), Some("ZIP queue".into()));
+                    self.open(Screen::Installing);
+                    fx.push(Effect::InstallQueue(paths));
+                }
+            }
             Confirm::SkywardUpdate => {
                 let slot = self.state.skyward_job.as_ref().and_then(|job| match job.outcome { Some(SkywardEnd::Ready(slot)) => Some(slot), _ => None });
                 if let (Some(slot), Some(build)) = (slot, self.state.skyward_newest().and_then(|newest| newest.build.clone())) {
@@ -9564,6 +9637,43 @@ mod tests {
         assert_eq!(app.state.script_output.len(), SCRIPT_LINES);
         assert_eq!(app.state.script_output[0], "line 2");
         assert_eq!(app.frame(&f, &i).rows.as_ref().map(Rows::count), Some(SCRIPT_LINES));
+    }
+
+    #[test]
+    fn zip_queue_can_order_remove_and_start_only_after_slide() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::ZipQueue, W, H, PPD);
+        app.state.data = Data::Open;
+        app.state.zip_queue = vec![(Place::Storage, "a.zip".into()), (Place::Storage, "b.zip".into())];
+        tap(&mut app, &f, &i, Action::QueueUp(1));
+        assert_eq!(app.state.zip_queue[0].1, "b.zip");
+        tap(&mut app, &f, &i, Action::QueueRemove(1));
+        assert_eq!(app.state.zip_queue.len(), 1);
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::ZipQueue), vec![Effect::InstallQueue(vec![(Place::Storage, "b.zip".into())])]);
+        assert!(app.state.queue_running);
+        app.install(Event::QueueAt { index: 0, count: 1, name: "b.zip".into() }, 0);
+        app.install(Event::QueueDone { index: 0, outcome: Outcome::Ran { wipe_cache: false } }, 0);
+        app.install(Event::Finished(Outcome::Ran { wipe_cache: false }), 0);
+        assert!(!app.state.queue_running);
+        assert_eq!(app.state.queue_results.len(), 1);
+    }
+
+    #[test]
+    fn queue_picker_adds_zip_without_starting_installer() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::ZipQueue, W, H, PPD);
+        app.state.data = Data::Open;
+        assert!(matches!(tap(&mut app, &f, &i, Action::QueueAdd).as_slice(), [Effect::ReadPlace(Place::Storage, _)]));
+        app.show_folder(Screen::Choose(Place::Storage), "".into(), Ok(vec![
+            FileRow { name: "boot.img".into(), kind: FileKind::File, size: 10, modified: 0, mode: 0o100644, uid: 0, gid: 0 },
+            FileRow { name: "a.zip".into(), kind: FileKind::File, size: 10, modified: 0, mode: 0o100644, uid: 0, gid: 0 },
+        ]), 0);
+        assert!(tap(&mut app, &f, &i, Action::ChooseEntry(0)).is_empty());
+        assert!(app.state.zip_queue.is_empty());
+        assert!(tap(&mut app, &f, &i, Action::ChooseEntry(1)).is_empty());
+        assert_eq!(app.screen(), Screen::ZipQueue);
+        assert_eq!(app.state.zip_queue, vec![(Place::Storage, "a.zip".into())]);
+        assert_eq!(app.state.install, Install::Idle);
     }
 
     #[test]

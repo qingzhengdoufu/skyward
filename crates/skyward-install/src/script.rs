@@ -21,6 +21,13 @@ pub fn tool_links(sbin: &std::path::Path, system_bin: &std::path::Path) -> anyho
         std::os::unix::fs::symlink(system_bin.join(name), &link)
             .with_context(|| format!("link the script tool {}", link.display()))?;
     }
+    for name in ["7z", "7zz"] {
+        let target = system_bin.join(name);
+        let link = sbin.join(name);
+        if target.try_exists()? && matches!(std::fs::symlink_metadata(&link), Err(error) if error.kind() == ErrorKind::NotFound) {
+            std::os::unix::fs::symlink(target, link)?;
+        }
+    }
     Ok(())
 }
 

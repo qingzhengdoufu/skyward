@@ -12,6 +12,7 @@ pub mod image;
 pub mod keep;
 pub mod ota;
 pub mod package;
+pub mod queue;
 pub mod script;
 pub mod signature;
 pub mod sparse;
@@ -76,6 +77,8 @@ pub struct Options {
 /// What the installer tells the screen, in the order it happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    QueueAt { index: usize, count: usize, name: String },
+    QueueDone { index: usize, outcome: Outcome },
     /// USB is ready for `adb sideload`.
     Waiting,
     /// A package of this many bytes is being looked at: one the computer

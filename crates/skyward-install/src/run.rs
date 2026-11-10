@@ -83,6 +83,45 @@ impl Installer {
         Installer::spawn(Origin::File, detach, options, move |ctx| run_file(ctx, &path))
     }
 
+    /// All paths are preflighted before the first script. One slide authorizes
+    /// the ordered script list, not images, OTA wipes or arbitrary auto-reboots.
+    pub fn queue(paths: Vec<PathBuf>, detach: Detach, options: Options) -> Result<Installer> {
+        crate::queue::check_paths(&paths)?;
+        Installer::spawn(Origin::Queue, detach, options, move |ctx| {
+            let count = paths.len();
+            let hashes = match paths.iter().map(|path| crate::queue::digest(path)).collect::<Result<Vec<_>>>() {
+                Ok(hashes) => hashes,
+                Err(error) => return failed(error),
+            };
+            let original_slot = match skyward_vab::current_slot() {
+                Ok(Some(slot)) => slot,
+                _ => return failed(anyhow!("cannot determine queue slot")),
+            };
+            crate::queue::run(&paths, |index, path| {
+                if ctx.shared.cancelled() { return Outcome::Cancelled; }
+                match crate::queue::digest(path) {
+                    Ok(hash) if hash == hashes[index] => {}
+                    _ => return failed(anyhow!("queued ZIP changed before execution")),
+                }
+                if let Err(error) = crate::queue::check_script(path) { return failed(error); }
+                ctx.send(Event::QueueAt { index, count, name: path.file_name().unwrap_or_default().to_string_lossy().into_owned() });
+                let mut last = run_file(ctx, path);
+                if ctx.reflash_failed.get() { last = failed(anyhow!("recovery preservation failed; queue stopped")); }
+                if index + 1 < count && crate::queue::may_continue(&last) {
+                    match skyward_vab::boot::next_slot() {
+                        Ok(next) if next == original_slot => {}
+                        _ => last = failed(anyhow!("boot slot changed or cannot be checked; remaining queue stopped to avoid installing on the wrong slot")),
+                    }
+                }
+                if let Err(error) = fs::copy(SCRIPT_LOG, format!("{SCRIPT_LOG}.queue-{}", index + 1)) {
+                    let _ = kmsg(&format!("queue log could not be retained: {error}"));
+                }
+                ctx.send(Event::QueueDone { index, outcome: last.clone() });
+                last
+            })
+        })
+    }
+
     /// Install the package the system asked for, from a thread of its own,
     /// with no one at the screen to agree to it: an update package or a zip
     /// with an install script, as Android's own recovery installs one.
@@ -115,7 +154,7 @@ impl Installer {
         let (commands, command_rx) = mpsc::channel();
         let shared = Arc::new(Shared::default());
         let mut ctx =
-            Context { events: event_tx, signal, commands: command_rx, shared: shared.clone(), detach: Some(detach), options, origin };
+            Context { events: event_tx, signal, commands: command_rx, shared: shared.clone(), detach: Some(detach), options, origin, reflash_failed: std::cell::Cell::new(false) };
         let thread = thread::Builder::new()
             .name("installer".into())
             .spawn(move || {
@@ -186,6 +225,7 @@ impl Drop for Installer {
 /// Where the package comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
+    Queue,
     /// The computer, with `adb sideload` or `adb rescue`.
     Computer,
     /// A file on the phone.
@@ -212,6 +252,7 @@ fn name_of(path: &Path) -> Option<Name> {
 }
 
 struct Context {
+    reflash_failed: std::cell::Cell<bool>,
     events: Sender<Event>,
     /// The write end of the wake pipe.
     signal: OwnedFd,
@@ -224,6 +265,7 @@ struct Context {
 
 impl Context {
     fn send(&self, event: Event) {
+        if matches!(&event, Event::Reflashed(Reflash::Failed(_))) { self.reflash_failed.set(true); }
         if self.events.send(event).is_ok() {
             // A full pipe already wakes the screen.
             unsafe { libc::write(self.signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
@@ -465,7 +507,7 @@ fn conclude(done: Done, served: Result<Option<Fault>>, origin: Origin) -> Outcom
         (_, Err(e)) => failed(e.context("serve the package")),
         (_, Ok(Some(Fault::Transfer(why)))) => Outcome::Failed(match origin {
             Origin::Computer => Failure::Disconnected,
-            Origin::File | Origin::Asked { .. } => Failure::Unreadable(why),
+            Origin::File | Origin::Queue | Origin::Asked { .. } => Failure::Unreadable(why),
         }),
         (_, Ok(Some(Fault::Changed(_)))) => Outcome::Failed(Failure::Changed),
         (Done::Engine(code), Ok(None)) => Outcome::Failed(Failure::Engine(code)),
@@ -477,6 +519,7 @@ fn conclude(done: Done, served: Result<Option<Fault>>, origin: Origin) -> Outcom
 fn install<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done> {
     let file = File::open(mount.path()).context("open the package")?;
     let package = package::identify(BufReader::with_capacity(1 << 16, file))?;
+    ensure!(ctx.origin != Origin::Queue || matches!(&package, Package::Script), "queued file is no longer a script ZIP");
     let _ = kmsg(&format!("install: {}", describe(&package)));
     match package {
         Package::Update(update) => update_system(ctx, mount, &update),
@@ -557,7 +600,7 @@ fn install_system(ctx: &Context, contents: &skyward_systems::package::Contents) 
 /// to itself, as with Android's own recovery.
 fn waits(origin: Origin, wipe: bool) -> bool {
     match origin {
-        Origin::File => true,
+        Origin::File | Origin::Queue => true,
         Origin::Computer => wipe,
         Origin::Asked { .. } => false,
     }
@@ -950,7 +993,7 @@ fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done>
     }
     // A script may write over any partition, so whoever is at the screen
     // agrees to it first; the system agreed to what it asked for.
-    if !matches!(ctx.origin, Origin::Asked { .. }) {
+    if !matches!(ctx.origin, Origin::Asked { .. } | Origin::Queue) {
         ctx.send(Event::Script);
         match ctx.commands.recv() {
             Ok(Command::Install) => {}

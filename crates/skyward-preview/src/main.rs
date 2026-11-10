@@ -162,6 +162,22 @@ fn main() -> Result<()> {
     }
 
     let info = haotian(&cfg);
+    if args.iter().any(|arg| arg == "--zip-queue") {
+        for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
+            for lang in [Lang::Hans, Lang::Hant, Lang::En] {
+                for dark in [false, true] {
+                    let mut app = App::new(Screen::ZipQueue, w, h, dpi as f32 / 160.0);
+                    app.state.lang = lang;
+                    app.state.dark = dark;
+                    app.state.data = Data::Open;
+                    app.state.zip_queue = vec![(Place::Storage, "Download/ROM-with-update-binary.zip".into()),
+                        (Place::Storage, "Download/kernel-addon.zip".into()), (Place::UsbDrive, "patch.zip".into())];
+                    write_png(&out.join(format!("queue-{w}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                }
+            }
+        }
+        return Ok(());
+    }
     if args.iter().any(|arg| arg == "--boot-video") {
         let cfg = DeviceConfig::load(root.join("devices/miro.toml"))?;
         let (w, h, ppd) = (720, 1600, 1.875);

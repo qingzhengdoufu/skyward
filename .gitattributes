@@ -1,0 +1,6 @@
+*.sh text eol=lf
+*.yml text eol=lf
+*.rs text eol=lf
+*.tar.xz binary
+resources/7zip/*License.txt -whitespace
+resources/7zip/License.txt -whitespace

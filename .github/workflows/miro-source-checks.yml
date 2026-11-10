@@ -22,3 +22,5 @@ jobs:
           cargo test --locked -p skyward --test commands --test qcom_haptics
       - name: ARM64 release check
         run: cargo ndk -t arm64-v8a --platform 30 clippy --locked --release -p skyward -- -D warnings
+      - name: Build full Android 7-Zip
+        run: bash build-7zip.sh

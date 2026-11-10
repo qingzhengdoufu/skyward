@@ -69,6 +69,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::Wipe => wipe(cx),
         Screen::Mount => mount(cx),
         Screen::Install => install(cx),
+        Screen::ZipQueue => zip_queue(cx),
         Screen::Choose(place) => choose(cx, place),
         Screen::Installing => installing(cx),
         Screen::About => about(cx),
@@ -119,6 +120,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
 pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
     const INSTALL: Text = ["滑动以安装", "滑動以安裝", "Slide to install"];
     let (label, danger) = match which {
+        Confirm::ZipQueue => (["滑动以执行 ZIP 队列", "滑動以執行 ZIP 佇列", "Slide to run ZIP queue"], true),
         Confirm::Avb => (["滑动以修改 vbmeta", "滑動以修改 vbmeta", "Slide to change vbmeta"], true),
         Confirm::Filesystem => match s.fs_action {
             FsAction::Repair => (["滑动以修复", "滑動以修復", "Slide to repair"], true),
@@ -1048,7 +1050,9 @@ pub fn install(cx: &Ctx) -> Frame {
         .subtitle(l.pick(["super、system、vendor、boot、recovery", "super、system、vendor、boot、recovery", "super, system, vendor, boot, recovery"]));
     let images = widgets::list(&mut c, t, f, y, &[image]);
     out.extend(hits(&images.rows, &[from_storage]));
-    let y = images.bottom;
+    let queued = widgets::list(&mut c, t, f, images.bottom + t.m.card_gap, &[Row::new(l.pick(["ZIP 刷包队列", "ZIP 刷機佇列", "ZIP install queue"])).icon(GREEN, Icon::Layers)]);
+    out.extend(hits(&queued.rows, &[Action::Open(Screen::ZipQueue)]));
+    let y = queued.bottom;
     let y = widgets::section(&mut c, t, f, y, l.pick(["选项", "選項", "Options"]));
     let check = Row::new(l.pick(["验证刷机包签名", "驗證刷機包簽章", "Verify zip signatures"])).trail(Trail::Switch(cx.state.check_signature));
     let signature = widgets::list(&mut c, t, f, y, &[check]);
@@ -1074,6 +1078,35 @@ pub fn install(cx: &Ctx) -> Frame {
 }
 
 const SECURITY_PATCH: Text = ["安全补丁", "安全性修補程式", "Security patch"];
+
+pub fn zip_queue(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let mut y = top;
+    let mut out = Vec::new();
+    for (index, (place, path)) in s.zip_queue.iter().enumerate() {
+        let name = format!("{}. {}", index + 1, path.rsplit('/').next().unwrap_or(path));
+        let entry = widgets::list(&mut c, t, f, y, &[
+            Row::new(&name).subtitle(place_name(l, *place)).trail(Trail::None),
+            Row::new(l.pick(["上移", "上移", "Move up"])).icon(SLATE, Icon::Install),
+            Row::new(l.pick(["移出队列", "移出佇列", "Remove from queue"])).icon(RED, Icon::Wipe),
+        ]);
+        out.extend(hits(&entry.rows[1..], &[Action::QueueUp(index), Action::QueueRemove(index)]));
+        y = entry.bottom + t.m.card_gap;
+    }
+    let places = widgets::list(&mut c, t, f, y, &[
+        Row::new(place_name(l, Place::Storage)).trail(Trail::Check(s.backup_to == Place::Storage)),
+        Row::new(place_name(l, Place::UsbDrive)).trail(Trail::Check(s.backup_to == Place::UsbDrive)),
+        Row::new(l.pick(["添加 ZIP", "加入 ZIP", "Add ZIP"])).icon(BLUE, Icon::Folder),
+    ]);
+    out.extend(hits(&places.rows, &[Action::BackupTo(Place::Storage), Action::BackupTo(Place::UsbDrive), Action::QueueAdd]));
+    let y = widgets::footnote(&mut c, t, f, places.bottom, l.pick(["最多 10 个脚本 ZIP，按顺序执行，失败立即停止。不接受 OTA payload 或分区镜像。脚本可改写任意分区。", "最多 10 個指令碼 ZIP，依序執行，失敗立即停止。不接受 OTA payload 或分割區映像檔。指令碼可改寫任意分割區。", "Up to 10 script ZIPs, in order; stop on failure. No OTA payloads or partition images. Scripts may rewrite any partition."]));
+    let (label, danger) = confirm_label(Confirm::ZipQueue, s);
+    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+    out.push(Hit { rect: track, action: Action::Confirm(Confirm::ZipQueue) });
+    Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(["ZIP 刷包队列", "ZIP 刷機佇列", "ZIP install queue"]), top)
+}
 
 /// How installing from `source` is named: on the install page, and as the
 /// title of the page that installs.
@@ -1550,6 +1583,15 @@ pub fn installing(cx: &Ctx) -> Frame {
         (Source::Asked { .. }, Some(reason)) => widgets::info_card(&mut c, t, f, bottom + t.m.dp(12.0), &[(l.pick(REASON), reason.clone())]),
         _ => bottom,
     };
+    let bottom = if !s.queue_results.is_empty() && matches!(s.install, Install::Finished { .. }) {
+        let details: Vec<_> = s.queue_results.iter().map(|(index, outcome)| {
+            let state = if skyward_install::queue::may_continue(outcome) { l.pick(["成功", "成功", "Succeeded"]) }
+                else { l.pick(["已停止", "已停止", "Stopped"]) };
+            (format!("ZIP {}", index + 1), state.to_string())
+        }).collect();
+        let results: Vec<_> = details.iter().map(|(title, state)| Row::new(title).trail(Trail::Text(state))).collect();
+        widgets::list(&mut c, t, f, bottom + t.m.card_gap, &results).bottom
+    } else { bottom };
     Frame { rows, ..Frame::new(t, fit(c, t, bottom), out, install_title(l, s.source), top) }
 }
 

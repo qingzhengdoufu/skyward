@@ -93,6 +93,9 @@ enum Cmd {
         /// ramdisk, for the configuration to start.
         #[arg(long)]
         omapi: Option<PathBuf>,
+        /// Full Android ARM64 7-Zip binary; separate executable and license files.
+        #[arg(long)]
+        sevenzip: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -136,7 +139,7 @@ fn main() -> Result<()> {
             img.kernel = BootImage::read(&kernel)?.kernel;
             write(&out, &img, &img.to_bytes()?)
         }
-        Cmd::Recovery { stock, binary, system_init, config, font, mono, mono_license, firmware, modules, omapi, out } => {
+        Cmd::Recovery { stock, binary, system_init, config, font, mono, mono_license, firmware, modules, omapi, sevenzip, out } => {
             let size = partition_size(&stock)?;
             let mut img = BootImage::read(&stock)?;
             let mut rd = Ramdisk::decode(&img.ramdisk)?;
@@ -159,6 +162,15 @@ fn main() -> Result<()> {
             let (_, recovery) = paths::RECOVERY.rsplit_once('/').expect("the recovery binary is in a folder");
             for command in paths::COMMANDS {
                 rd.link(command, recovery)?;
+            }
+            if let Some(program) = sevenzip {
+                put(&mut rd, "system/bin/7zz", 0o755, read(&program)?)?;
+                rd.link("system/bin/7za", "7zz")?;
+                rd.link("system/bin/7z", "7zz")?;
+                for name in ["License.txt", "unRarLicense.txt", "copying.txt"] {
+                    let path = PathBuf::from("resources/7zip").join(name);
+                    put(&mut rd, &format!("skyward/licenses/7zip/{name}"), 0o644, read(&path)?)?;
+                }
             }
             // The second system's first program: it runs before any library
             // is there to load, so it is given a place of its own.
