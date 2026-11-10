@@ -4993,6 +4993,7 @@ impl App {
                 if let Some(up) = self.state.folder(Screen::Choose(place)).up() {
                     return vec![Effect::ReadPlace(place, up)];
                 }
+                self.state.queue_picking = false;
             }
             Screen::FileInfo => {
                 self.state.file = None;
@@ -5336,6 +5337,8 @@ impl App {
                 if index > 0 && index < self.state.zip_queue.len() { self.state.zip_queue.swap(index, index - 1); self.state.confirm = 0.0; self.refresh(); }
             }
             Action::Open(s) => {
+                // Ordinary file pickers never inherit the queue-add mode.
+                self.state.queue_picking = false;
                 if s == Screen::Search && self.screen() == Screen::Home {
                     // The bar moves up from where it stands unfolded: a
                     // page easing there for the keys gets there at once.
@@ -5752,6 +5755,8 @@ impl App {
                         if self.state.queue_picking {
                             if !path.to_ascii_lowercase().ends_with(".zip") {
                                 self.say(l.pick(["队列仅接受 ZIP", "佇列僅接受 ZIP", "Queue accepts ZIPs only"]), now);
+                            } else if self.state.zip_queue.len() >= skyward_install::queue::LIMIT {
+                                self.say(l.pick(["队列最多 10 个 ZIP", "佇列最多 10 個 ZIP", "Queue holds at most 10 ZIPs"]), now);
                             } else if !self.state.zip_queue.contains(&(place, path.clone())) {
                                 self.state.zip_queue.push((place, path));
                                 self.state.confirm = 0.0;
@@ -9674,6 +9679,24 @@ mod tests {
         assert_eq!(app.screen(), Screen::ZipQueue);
         assert_eq!(app.state.zip_queue, vec![(Place::Storage, "a.zip".into())]);
         assert_eq!(app.state.install, Install::Idle);
+    }
+
+    #[test]
+    fn cancelling_queue_picker_does_not_hijack_a_later_single_install() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::ZipQueue, W, H, PPD);
+        app.state.data = Data::Open;
+        tap(&mut app, &f, &i, Action::QueueAdd);
+        assert!(app.state.queue_picking);
+        app.key(Key::Back, 0);
+        assert_eq!(app.screen(), Screen::ZipQueue);
+        assert!(!app.state.queue_picking);
+        app.act(Action::Open(Screen::Choose(Place::Storage)), 0);
+        app.show_folder(Screen::Choose(Place::Storage), "".into(), Ok(vec![
+            FileRow { name: "a.zip".into(), kind: FileKind::File, size: 10, modified: 0, mode: 0o100644, uid: 0, gid: 0 },
+        ]), 0);
+        assert_eq!(tap(&mut app, &f, &i, Action::ChooseEntry(0)), vec![Effect::InstallFile(Place::Storage, "a.zip".into())]);
+        assert!(app.state.zip_queue.is_empty());
     }
 
     #[test]

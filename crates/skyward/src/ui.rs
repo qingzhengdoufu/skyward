@@ -2571,11 +2571,15 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         installer = Some(Installer::open(in_place(place, &path), detach(cfg.services.clone()), install_options(&app))?);
                     }
                     Effect::InstallQueue(paths) => {
-                        if installer.is_some() || backuper.is_some() || part_worker.is_some() || skyward_updater.is_some() {
+                        if installer.is_some() || backuper.is_some() || part_worker.is_some() || skyward_updater.is_some()
+                            || merger.is_some() || systems_worker.as_ref().is_some_and(systems::Worker::busy) {
                             app.install(skyward_install::Event::Finished(skyward_install::Outcome::Failed(skyward_install::Failure::Error("Another partition operation is active".into()))), now);
                             continue;
                         }
-                        if !withhold(&mut transfer, &mut app, now)? { continue; }
+                        if !withhold(&mut transfer, &mut app, now)? {
+                            app.install(skyward_install::Event::Finished(skyward_install::Outcome::Failed(skyward_install::Failure::Error("File transfer could not release storage; queue did not start".into()))), now);
+                            continue;
+                        }
                         let paths = paths.into_iter().map(|(place, path)| in_place(place, &path)).collect();
                         match Installer::queue(paths, detach(cfg.services.clone()), install_options(&app)) {
                             Ok(worker) => installer = Some(worker),

@@ -1,6 +1,6 @@
 # Skyward for REDMI K80 Pro (miro)
 
-当前源码命名：**0.2.0+miro.16**（原始上游 0.2.0，适配修订 16）。
+当前源码命名：**0.2.0+miro.17**（原始上游 0.2.0，适配修订 17）。
 纠正此前独立递增的 0.2.4 编号，不代表合并了新上游功能。
 详见[版本迁移说明](docs/releases/v0.2.0+miro.13.md)。
 
@@ -9,6 +9,9 @@
 
 [miro.16](docs/releases/v0.2.0+miro.16.md) 新增脚本 ZIP 队列和独立的完整 Android ARM64
 7-Zip 26.06；失败停止，不新增逻辑分区扩缩容或备份格式兼容功能。
+
+[miro.17](docs/releases/v0.2.0+miro.17.md) 修复审查发现的队列选择模式退出和启动错误收尾，
+替代 miro.16，建议使用此版本。
 
 [English](README.md) | [构建与状态说明](docs/MIRO.md)
 
