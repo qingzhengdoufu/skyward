@@ -3454,7 +3454,17 @@ impl App {
             *checking = false;
         }
         self.refresh();
-        self.report(&why, now);
+        // The runtime keeps the complete cause in the recovery log. Only the
+        // explicit credential refusals get the short retry message here.
+        let refused = why.split(": ").any(|cause| matches!(cause,
+            "the secure world does not recognise that credential" |
+            "the secure element does not recognise that credential"));
+        let text = if refused && !why.contains("holds off") && !why.contains("holding off") {
+            self.state.lang.pick(["密码错误，请重试", "密碼錯誤，請重試", "Incorrect password. Please try again."])
+        } else {
+            &why
+        };
+        self.report(text, now);
     }
 
     /// The runtime read the mount table again, or could not: keep it and
@@ -10312,6 +10322,43 @@ mod tests {
         assert_eq!(app.deadline(0), Some(TOAST_MS), "with why");
         app.data_waiting(None, Vec::new());
         assert_eq!(app.state.data, Data::Open);
+    }
+
+    #[test]
+    fn wrong_credentials_have_a_short_localized_retry_message() {
+        for (lang, expected) in [
+            (Lang::Hans, "密码错误，请重试"),
+            (Lang::Hant, "密碼錯誤，請重試"),
+            (Lang::En, "Incorrect password. Please try again."),
+        ] {
+            for why in [
+                "have the secure world check user 0: the secure world does not recognise that credential: the service refused",
+                "read the weaver: the secure element does not recognise that credential",
+            ] {
+                let mut app = App::new(Screen::Decrypt, W, H, PPD);
+                app.state.lang = lang;
+                app.data_waiting(Some((0, Keys::Digits)), Vec::new());
+                app.unlock_failed(why.into(), 0);
+                assert_eq!(app.toast.as_ref().unwrap().0, expected);
+                assert_eq!(app.state.data, Data::Locked { user: 0, keys: Keys::Digits, checking: false });
+            }
+        }
+    }
+
+    #[test]
+    fn unlock_service_errors_and_throttling_keep_their_details() {
+        for why in [
+            "the phone is holding off further tries for another 30 seconds",
+            "the secure element does not recognise that credential, and holds off further tries for another 30 seconds",
+            "the secure world does not recognise that credential: the phone is holding off further tries",
+            "the secure world took the credential but wrote no note for the key service",
+            "the phone's weaver cannot answer; this is not about the credential entered",
+            "read locksettings.db: input/output error",
+        ] {
+            let mut app = App::new(Screen::Decrypt, W, H, PPD);
+            app.unlock_failed(why.into(), 0);
+            assert_eq!(app.toast.as_ref().unwrap().0, why);
+        }
     }
 
     #[test]
