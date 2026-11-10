@@ -162,6 +162,36 @@ fn main() -> Result<()> {
     }
 
     let info = haotian(&cfg);
+    if args.iter().any(|arg| arg == "--boot-video") {
+        let cfg = DeviceConfig::load(root.join("devices/miro.toml"))?;
+        let (w, h, ppd) = (720, 1600, 1.875);
+        let theme = Theme::dark(w, h, ppd);
+        let mut title = Canvas::filled(w, h, skyward_ui::Rgba::rgb(0, 0, 0));
+        let mark = widgets::wordmark(&theme, &fonts, "Skyward", h as f32 * 0.43, theme.m.dp(42.0));
+        mark.draw(&mut title, 0.0, 0.0, skyward_ui::Rgba::rgb(245, 245, 247), 1.0);
+        write_png(&out.join("wordmark.png"), &title)?;
+        let mut info = haotian(&cfg);
+        info.model = cfg.device.model.clone();
+        info.codename = cfg.device.codename.clone();
+        info.soc = cfg.device.soc.clone();
+        info.os_version = Some("OS3.0.305.0.WOMCNXM".into());
+        let mut app = App::new(Screen::Home, w, h, ppd);
+        app.state.lang = Lang::Hans;
+        app.state.dark = true;
+        app.state.data = Data::Open;
+        app.frame(&fonts, &info);
+        for ms in (0..1800).step_by(16) { app.tick(ms); }
+        let mut home = Canvas::new(w, h);
+        app.compose(&mut home, &fonts, &info, "12:00", 1800);
+        write_png(&out.join("home.png"), &home)?;
+        let intro = skyward_ui::intro::Intro::new(&theme, &fonts, 0);
+        for ms in [0, 140, 340, 455, 510, 595, 680] {
+            let mut frame = home.clone();
+            intro.draw(&mut frame, ms);
+            write_png(&out.join(format!("runtime-intro-{ms:03}.png")), &frame)?;
+        }
+        return Ok(());
+    }
     if args.iter().any(|arg| arg == "--online-update") {
         for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
             for lang in [Lang::Hans, Lang::Hant, Lang::En] {

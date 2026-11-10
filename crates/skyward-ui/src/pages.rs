@@ -1959,7 +1959,11 @@ pub fn backup(cx: &Ctx) -> Frame {
         ],
     });
     let boot = l.pick(["boot、init_boot、vendor_boot、dtbo、vbmeta 和 recovery", "boot、init_boot、vendor_boot、dtbo、vbmeta 和 recovery", "boot, init_boot, vendor_boot, dtbo, vbmeta and recovery"]);
-    let modem = l.pick(["IMEI、基带设置和传感器校准数据", "IMEI、基頻設定和感應器校正資料", "IMEI, modem settings and sensor calibration"]);
+    let modem = l.pick(if s.efs_backup_available {
+        ["IMEI、基带设置和传感器校准数据", "IMEI、基頻設定和感應器校正資料", "IMEI, modem settings and sensor calibration"]
+    } else {
+        ["本机分区清单尚未验证，不可用", "本機分割區清單尚未驗證，無法使用", "Device partition list not verified; unavailable"]
+    });
     let subs = [boot, system, data, modem];
     let rows: Vec<Row> = BACKUP_PARTS
         .iter()

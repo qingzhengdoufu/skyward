@@ -1667,6 +1667,7 @@ pub struct State {
     pub mount_failure: Option<MountFailure>,
     /// Which of [`BACKUP_PARTS`] a backup takes.
     pub backup: [bool; 4],
+    pub efs_backup_available: bool,
     /// Where a backup goes.
     pub backup_to: Place,
     pub image_partitions: Option<Result<Vec<(String, u64)>, String>>,
@@ -1837,6 +1838,7 @@ impl Default for State {
             mounts: Ok(Vec::new()),
             mount_failure: None,
             backup: [true, true, false, true],
+            efs_backup_available: false,
             backup_to: Place::Storage,
             image_partitions: None,
             image_partition: None,
@@ -5568,6 +5570,10 @@ impl App {
                 self.refresh();
             }
             Action::BackupPart(k) => {
+                if k == 3 && !self.state.efs_backup_available {
+                    self.say(l.pick(["本机 EFS 分区清单尚未验证", "本機 EFS 分割區清單尚未驗證", "This device's EFS partition list is not verified"]), now);
+                    return Vec::new();
+                }
                 self.state.backup[k] = !self.state.backup[k];
                 self.refresh();
             }
@@ -6698,7 +6704,9 @@ impl App {
             }
             Confirm::Backup => {
                 let s = &self.state;
-                let refused = if !s.backup.contains(&true) {
+                let refused = if s.backup[3] && !s.efs_backup_available {
+                    Some(["本机 EFS 备份不可用，请取消勾选", "本機 EFS 備份無法使用，請取消勾選", "EFS backup is unavailable; deselect it"])
+                } else if !s.backup.contains(&true) {
                     Some(["请选择要备份的内容", "請選擇要備份的內容", "Choose what to back up"])
                 } else if s.backup[2] && s.data != Data::Open {
                     Some(["备份 data 分区需先完成「解密」", "備份 data 分割區需先完成「解密」", "Decrypt before backing up the data partition"])
@@ -9757,6 +9765,7 @@ mod tests {
     fn a_backup_takes_what_is_ticked_to_where_it_is_sent() {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Backup, &f, &i);
+        app.state.efs_backup_available = true;
         assert_eq!(app.state.backup, [true, true, false, true]);
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "internal storage waits for the data partition");
         assert_eq!(app.deadline(0), Some(TOAST_MS), "and says so");
@@ -9780,6 +9789,18 @@ mod tests {
             tap(&mut app, &f, &i, Action::BackupPart(k));
         }
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "nothing ticked, nothing backed up");
+    }
+
+    #[test]
+    fn unavailable_efs_cannot_be_selected_or_silently_backed_up() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Backup, &f, &i);
+        app.state.data = Data::Open;
+        app.state.backup = [false; 4];
+        tap(&mut app, &f, &i, Action::BackupPart(3));
+        assert!(!app.state.backup[3]);
+        app.state.backup[3] = true;
+        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty());
     }
 
     /// A backup found in `place`, made at `made`, holding `parts`.

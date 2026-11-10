@@ -1200,6 +1200,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let locale = request.locale.as_deref().or(info.locale.as_deref());
     let named = locale.map(Lang::for_locale).transpose()?;
     app.take_settings(kept.settings(), named);
+    app.state.efs_backup_available = !cfg.backup.efs.is_empty();
+    if !app.state.efs_backup_available { app.state.backup[3] = false; }
     app.state.double_tap_supported = cfg.touch.double_tap;
     let mut keeper = Keeper::new(&kept);
     skyward_sys::kmsg(&format!(
@@ -1224,6 +1226,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let mounts = || read_mounts(&cfg.services).map_err(|e| format!("{e:#}"));
 
     let mut screen = Canvas::new(w, h);
+    let intro_enabled = cfg.device.codename == "miro" && matches!(request.work, Work::Menu) && dump.is_none();
+    let mut intro = None;
+    let mut intro_pending = intro_enabled;
+    let mut intro_frames = 0u32;
     // A page sliding over another draws on three screens' worth of canvas
     // besides the panel's: made ready now, the first slide finds them so.
     Canvas::keep_ready(w, h, 3);
@@ -1529,6 +1535,16 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let mut drive_at = Instant::now();
     loop {
         let now = monotonic_ms();
+        if intro_pending {
+            intro_pending = false;
+            intro = Some(skyward_ui::intro::Intro::new(&app.theme(), &fonts, now));
+            let _ = skyward_sys::kmsg("startup intro: first frame, 680 ms, input skips");
+        }
+        if intro.as_ref().is_some_and(|intro| !intro.active(now)) {
+            intro = None;
+            app.redraw();
+            let _ = skyward_sys::kmsg(&format!("startup intro: completed, {intro_frames} frames presented"));
+        }
         if leave_at.is_some_and(|at| now >= at) {
             leave_at = None;
             power(leave)?;
@@ -1620,9 +1636,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 }
             }
             // A display turned off comes on again with a frame drawn for it.
-            if app.take_dirty() || !surface.is_on() {
+            if app.take_dirty() || !surface.is_on() || intro.is_some() {
                 let t0 = Instant::now();
                 app.compose(&mut screen, &fonts, &info, &shown_clock, now);
+                if let Some(intro) = &intro {
+                    intro.draw(&mut screen, now);
+                    intro_frames += 1;
+                }
                 surface.present(&screen)?;
                 eprintln!("frame {:?} in {} ms", app.screen(), t0.elapsed().as_millis());
                 if let Some(path) = dump {
@@ -1737,6 +1757,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         // shorter wait where anything is due.
         let quiet = surface.is_off() && !ahead && until_due.is_none() && rest_left.is_none();
         let timeout = if quiet { DARK_WAIT } else { timeout };
+        let timeout = if intro.is_some() { timeout.min(16) } else { timeout };
         // With the display off, the phone sleeps unless something needs it
         // awake: work under way, fastboot or sideload, a restart on its way,
         // a command running in the terminal, a network being joined, the
@@ -2396,6 +2417,14 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             .chain(requests.into_iter().map(Incoming::Asked))
             .chain(inputs.read()?.into_iter().map(Incoming::Input));
         for came in incoming {
+            // The first input skips the intro, never operates an invisible
+            // control. A subsequent up has no app-side down to complete.
+            if intro.is_some() && matches!(came, Incoming::Input(_)) {
+                intro = None;
+                app.redraw();
+                let _ = skyward_sys::kmsg(&format!("startup intro: skipped, {intro_frames} frames presented"));
+                continue;
+            }
             let effects = match came {
                 Incoming::Arrived => app.arrive(),
                 Incoming::Drive(drive) => app.set_usb_drive(drive),

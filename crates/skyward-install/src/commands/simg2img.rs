@@ -4,16 +4,32 @@
 use super::Io;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 pub(super) fn run(args: &[OsString], io: &mut Io) -> i32 {
     let result = (|| -> anyhow::Result<()> {
-        anyhow::ensure!(args.len() == 2, "usage: simg2img SPARSE_IMAGE OUTPUT (one input file)");
+        anyhow::ensure!(args.len() == 2, "usage: simg2img SPARSE_IMAGE|- OUTPUT");
         let input = Path::new(&args[0]);
         let output = Path::new(&args[1]);
-        let file = File::open(input)?;
+        let file = if input == Path::new("-") {
+            // The parser seeks, so spool stdin with a bounded RAM-disk budget.
+            // Validate the complete map before opening the target for writing.
+            let mut spool = tempfile::tempfile_in("/tmp")?;
+            let limit = 256u64 << 20;
+            let mut bytes = vec![0; 1 << 20];
+            let mut held = 0u64;
+            loop {
+                let n = io.input.read(&mut bytes)?;
+                if n == 0 { break; }
+                held += n as u64;
+                anyhow::ensure!(held <= limit, "stdin sparse image exceeds 256 MiB spool limit; use a file input");
+                spool.write_all(&bytes[..n])?;
+            }
+            spool.seek(SeekFrom::Start(0))?;
+            spool
+        } else { File::open(input)? };
         let source = file.metadata()?;
         let mut expanded = crate::sparse::Reader::open(file)?;
         let existing = match std::fs::metadata(output) {

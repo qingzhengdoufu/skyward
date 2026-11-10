@@ -41,6 +41,19 @@ impl Part {
     pub const ALL: [Part; 4] = [Part::Boot, Part::System, Part::Data, Part::Efs];
 }
 
+/// Claim a new backup directory before writing or cleaning up anything.
+/// A same-second timestamp must never reuse an existing backup.
+pub fn create_folder(path: &Path, ownership: Ownership) -> Result<()> {
+    let parent = path.parent().context("backup folder needs a parent")?;
+    skyward_files::make_folders(parent, ownership)?;
+    skyward_files::make_new_folder(path, ownership)
+}
+
+pub fn check_efs_selection(selected: bool, partitions: &[String]) -> Result<()> {
+    ensure!(!selected || !partitions.is_empty(), "EFS backup is unavailable: this device has no verified EFS partition list");
+    Ok(())
+}
+
 /// What a backup holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -78,12 +91,32 @@ impl Manifest {
         let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let manifest: Manifest = toml::from_str(&text).with_context(|| format!("read {}", path.display()))?;
         ensure!(manifest.format == FORMAT, "{} is in layout {}, which this recovery does not read", path.display(), manifest.format);
+        manifest.validate()?;
         Ok(manifest)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        use std::collections::HashSet;
+        let plain = |name: &str| !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0']);
+        ensure!(!self.items.is_empty(), "empty backup manifest");
+        let mut names = HashSet::new();
+        let mut files = HashSet::new();
+        for item in &self.items {
+            ensure!(plain(&item.name) && names.insert(item.name.as_str()), "invalid or duplicate partition name");
+            ensure!(item.part != Part::Data || item.name == "data", "invalid data backup name");
+            ensure!(!item.stored.files.is_empty(), "backup part has no files");
+            ensure!(item.stored.sha256.len() == 64 && item.stored.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()), "invalid backup SHA-256");
+            for name in &item.stored.files {
+                ensure!(plain(name) && files.insert(name.as_str()), "unsafe or duplicate backup filename");
+            }
+        }
+        Ok(())
     }
 
     /// Write it into the backup's `folder`, given what `ownership` says.
     pub fn write(&self, folder: &Path, ownership: Ownership) -> Result<()> {
         let path = folder.join(MANIFEST);
+        self.validate()?;
         let text = toml::to_string(self).context("write the manifest")?;
         let mut file = skyward_files::make_file(&path, ownership)?;
         file.write_all(text.as_bytes()).with_context(|| format!("write {}", path.display()))?;
@@ -107,6 +140,23 @@ mod tests {
     use store::Stored;
 
     #[test]
+    fn existing_backup_folder_is_not_claimed_or_modified() {
+        let at = std::env::temp_dir().join(format!("skyward-folder-exclusive-{}", std::process::id()));
+        create_folder(&at, Ownership::Kept).unwrap();
+        std::fs::write(at.join("keep"), b"existing backup").unwrap();
+        assert!(create_folder(&at, Ownership::Kept).is_err());
+        assert_eq!(std::fs::read(at.join("keep")).unwrap(), b"existing backup");
+        std::fs::remove_dir_all(at).unwrap();
+    }
+
+    #[test]
+    fn empty_efs_config_cannot_produce_a_successful_efs_backup() {
+        assert!(check_efs_selection(true, &[]).is_err());
+        assert!(check_efs_selection(false, &[]).is_ok());
+        assert!(check_efs_selection(true, &["device-verified-partition".into()]).is_ok());
+    }
+
+    #[test]
     fn a_manifest_reads_back_as_written() {
         let at = std::env::temp_dir().join(format!("skyward-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&at).unwrap();
@@ -127,6 +177,17 @@ mod tests {
         assert_eq!(Manifest::read(&at).unwrap(), m);
         assert_eq!(m.parts(), [true, false, true, false]);
         assert_eq!(m.size(), 100_663_296 + 4_500_000_000);
+        for name in ["../boot", "/boot", "..", "x\\boot"] {
+            let mut bad = m.clone();
+            bad.items[0].name = name.into();
+            assert!(bad.validate().is_err());
+            let mut bad = m.clone();
+            bad.items[0].stored.files = vec![name.into()];
+            assert!(bad.validate().is_err());
+        }
+        let mut bad = m.clone();
+        bad.items.push(bad.items[0].clone());
+        assert!(bad.validate().is_err());
         std::fs::remove_dir_all(&at).unwrap();
     }
 }

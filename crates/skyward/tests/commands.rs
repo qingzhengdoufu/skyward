@@ -114,6 +114,9 @@ fn a_script_extracts_decompresses_and_expands_a_sparse_partition_image() {
         assert!(script(dir.path(), &command, &zip, &output).success());
         assert_eq!(fs::read(&output).unwrap(), image);
     }
+    let pipe = r#"unzip -p "$ZIPFILE" images/super.img.zst | zstd -dc | simg2img - "$OUT""#;
+    assert!(script(dir.path(), pipe, &zip, &output).success());
+    assert_eq!(fs::read(&output).unwrap(), image);
 }
 
 #[test]

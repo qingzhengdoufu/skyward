@@ -408,6 +408,7 @@ fn no_update() -> Result<()> {
 fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
     let [boot, system, data, efs] = t.parts;
+    skyward_backup::check_efs_selection(efs, &t.efs)?;
     if system {
         no_update()?;
     }
@@ -458,8 +459,10 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
         mount::remount_writable(at, true)?;
     }
     let folder = t.into.join(&t.stamp);
+    let mut owned_folder = false;
     let made = (|| -> Result<()> {
-        skyward_files::make_folders(&folder, t.ownership)?;
+        skyward_backup::create_folder(&folder, t.ownership)?;
+        owned_folder = true;
         let mut items = Vec::new();
         for (k, (part, name, source, size)) in plan.iter().enumerate() {
             let file = match (part, t.compress) {
@@ -505,7 +508,7 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
     })();
     // A backup that did not finish is not left half made.
     let made = match made {
-        Err(e) if folder.exists() => match fs::remove_dir_all(&folder) {
+        Err(e) if owned_folder => match fs::remove_dir_all(&folder) {
             Ok(()) => Err(e),
             Err(r) => Err(e.context(format!("taking away {} afterwards failed too: {r}", folder.display()))),
         },

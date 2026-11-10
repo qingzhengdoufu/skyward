@@ -1,8 +1,11 @@
 # Skyward for REDMI K80 Pro (miro)
 
-当前版本命名：**0.2.0+miro.13**（原始上游 0.2.0，适配修订 13）。
+当前源码命名：**0.2.0+miro.15**（原始上游 0.2.0，适配修订 15）。
 纠正此前独立递增的 0.2.4 编号，不代表合并了新上游功能。
 详见[版本迁移说明](docs/releases/v0.2.0+miro.13.md)。
+
+[miro.15 修复与测试范围](docs/releases/v0.2.0+miro.15.md)：启动动画、首批备份保护及
+脚本工具修复，不代表已经补齐全部 TWRP 功能。
 
 [English](README.md) | [构建与状态说明](docs/MIRO.md)
 
