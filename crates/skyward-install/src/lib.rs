@@ -14,6 +14,7 @@ pub mod ota;
 pub mod package;
 pub mod script;
 pub mod signature;
+pub mod sparse;
 pub mod upgrade;
 pub mod wipe;
 
@@ -62,6 +63,8 @@ pub const SCRIPT_LOG: &str = "/skyward/run/install-script.log";
 /// What the screen asks of an install besides the package.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Options {
+    /// Disable both AVB checks after a successful, explicitly requested install.
+    pub disable_avb: bool,
     /// This recovery goes back into the recovery partitions an install
     /// writes over.
     pub keep: bool,

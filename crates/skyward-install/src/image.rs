@@ -42,6 +42,8 @@ pub enum ImageKind {
     VendorBoot,
     Dtbo,
     Vbmeta,
+    Filesystem,
+    Super,
 }
 
 /// The ramdisk a boot image carries.
@@ -67,6 +69,8 @@ impl ImageKind {
             ImageKind::VendorBoot => &["vendor_boot"],
             ImageKind::Dtbo => &["dtbo"],
             ImageKind::Vbmeta => &["vbmeta", "vbmeta_system", "vbmeta_vendor"],
+            ImageKind::Filesystem => &["system", "system_ext", "vendor", "odm", "product", "vendor_dlkm", "odm_dlkm", "system_dlkm", "mi_ext"],
+            ImageKind::Super => &["super"],
         }
     }
 }
@@ -74,6 +78,18 @@ impl ImageKind {
 /// The image `file` holds, from `head`, its first bytes, and for a boot
 /// image its ramdisk; `None` when it is no image this recovery writes.
 pub fn detect<R: Read + Seek>(file: &mut R, head: &[u8]) -> Result<Option<ImageKind>> {
+    if head.starts_with(crate::sparse::MAGIC) {
+        file.seek(SeekFrom::Start(0))?;
+        let mut expanded = crate::sparse::Reader::open(file)?;
+        let mut head = vec![0; expanded.size().min(8192) as usize];
+        expanded.read_exact(&mut head)?;
+        ensure!(!head.starts_with(crate::sparse::MAGIC), "nested sparse image");
+        return detect_raw(&mut expanded, &head);
+    }
+    detect_raw(file, head)
+}
+
+fn detect_raw<R: Read + Seek>(file: &mut R, head: &[u8]) -> Result<Option<ImageKind>> {
     if head.starts_with(BOOT_MAGIC) {
         let header = Header::parse(&mut Cursor::new(head)).context("read the boot image header")?;
         let kernel = header.kernel_size() > 0;
@@ -96,6 +112,15 @@ pub fn detect<R: Read + Seek>(file: &mut R, head: &[u8]) -> Result<Option<ImageK
     }
     if head.starts_with(VBMETA_MAGIC) {
         return Ok(Some(ImageKind::Vbmeta));
+    }
+    if head.get(1024..1028).is_some_and(|magic| magic == [0xe2, 0xe1, 0xf5, 0xe0] || magic == [0x10, 0x20, 0xf5, 0xf2])
+        || head.get(1080..1082) == Some(&[0x53, 0xef]) {
+        return Ok(Some(ImageKind::Filesystem));
+    }
+    file.seek(SeekFrom::Start(4096))?;
+    let mut geometry = [0; 4];
+    if file.read(&mut geometry)? == 4 && geometry == [0x67, 0x44, 0x6c, 0x61] {
+        return Ok(Some(ImageKind::Super));
     }
     Ok(None)
 }
@@ -183,6 +208,10 @@ pub fn device(dir: &Path, name: &str, slot: Slot) -> PathBuf {
 pub fn partitions(kind: ImageKind, dir: &Path) -> Result<Vec<&'static str>> {
     let mut found = Vec::new();
     for name in kind.partitions() {
+        if kind == ImageKind::Super {
+            if dir.join(name).try_exists()? { found.push(*name); }
+            continue;
+        }
         let mut has = true;
         for slot in [Slot::A, Slot::B] {
             let path = device(dir, name, slot);
@@ -201,6 +230,25 @@ pub fn partitions(kind: ImageKind, dir: &Path) -> Result<Vec<&'static str>> {
 /// fastboot does. `progress` hears the bytes written and read back so far,
 /// of all.
 pub fn flash<R: Read + Seek>(image: &mut R, len: u64, devices: &[PathBuf], progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+    flash_mode(image, len, devices, true, progress)
+}
+
+/// Filesystem and super images retain their exact bytes; AVB footer relocation
+/// is reserved for the existing boot-image path.
+pub fn flash_mode<R: Read + Seek>(image: &mut R, len: u64, devices: &[PathBuf], relocate_footer: bool, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+    image.seek(SeekFrom::Start(0))?;
+    let mut magic = [0; 4];
+    image.read_exact(&mut magic)?;
+    image.seek(SeekFrom::Start(0))?;
+    if magic == crate::sparse::MAGIC {
+        let mut expanded = crate::sparse::Reader::open(image)?;
+        let size = expanded.size();
+        return flash_raw(&mut expanded, size, devices, false, progress);
+    }
+    flash_raw(image, len, devices, relocate_footer, progress)
+}
+
+fn flash_raw<R: Read + Seek>(image: &mut R, len: u64, devices: &[PathBuf], relocate_footer: bool, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
     ensure!(!devices.is_empty(), "no partition to write");
     let mut outs = Vec::with_capacity(devices.len());
     for path in devices {
@@ -214,7 +262,7 @@ pub fn flash<R: Read + Seek>(image: &mut R, len: u64, devices: &[PathBuf], progr
     ensure!(len <= size, "the image is {len} bytes, more than the {size} its partition holds");
 
     let mut footer = [0u8; FOOTER_LEN as usize];
-    let moved = len >= FOOTER_LEN && len < size && {
+    let moved = relocate_footer && len >= FOOTER_LEN && len + FOOTER_LEN <= size && {
         image.seek(SeekFrom::Start(len - FOOTER_LEN)).context("seek to the image's end")?;
         image.read_exact(&mut footer).context("read the image's end")?;
         footer.starts_with(FOOTER_MAGIC)
@@ -405,7 +453,39 @@ mod tests {
         assert_eq!(kind_of(bytes.get_ref()).unwrap(), Some(ImageKind::VendorBoot));
         assert_eq!(kind_of(&[0xd7, 0xb7, 0xab, 0x1e, 0, 0, 0, 0x40]).unwrap(), Some(ImageKind::Dtbo));
         assert_eq!(kind_of(b"AVB0\0\0\0\x01").unwrap(), Some(ImageKind::Vbmeta));
-        assert_eq!(kind_of(b"\x3a\xff\x26\xed sparse").unwrap(), None);
+        assert!(kind_of(b"\x3a\xff\x26\xed sparse").is_err());
+    }
+
+    #[test]
+    fn filesystem_headers_and_shared_super_are_identified_without_mounting() {
+        for (offset, magic) in [(1024, &[0xe2, 0xe1, 0xf5, 0xe0][..]), (1024, &[0x10, 0x20, 0xf5, 0xf2]), (1080, &[0x53, 0xef])] {
+            let mut image = vec![0u8; 8192];
+            image[offset..offset + magic.len()].copy_from_slice(magic);
+            assert_eq!(kind_of(&image).unwrap(), Some(ImageKind::Filesystem));
+        }
+        let mut super_image = vec![0u8; 8192];
+        super_image[4096..4100].copy_from_slice(&[0x67, 0x44, 0x6c, 0x61]);
+        assert_eq!(kind_of(&super_image).unwrap(), Some(ImageKind::Super));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::File::create(dir.path().join("super")).unwrap();
+        assert_eq!(partitions(ImageKind::Super, dir.path()).unwrap(), ["super"]);
+        assert!(!ImageKind::Filesystem.partitions().contains(&"userdata"));
+        assert!(!ImageKind::Filesystem.partitions().contains(&"metadata"));
+    }
+
+    #[test]
+    fn filesystem_footer_is_not_relocated_and_short_boot_footer_cannot_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = partition(dir.path(), "system_a", 8192);
+        let mut image = vec![0x22u8; 4096];
+        image[4032..4036].copy_from_slice(b"AVBf");
+        flash_mode(&mut Cursor::new(&image), image.len() as u64, std::slice::from_ref(&target), false, &mut |_, _| {}).unwrap();
+        let back = std::fs::read(&target).unwrap();
+        assert_eq!(&back[..4096], &image);
+        assert_eq!(&back[4096..], &[0xaa; 4096]);
+        let target = partition(dir.path(), "boot_a", 4100);
+        flash_all(&image, std::slice::from_ref(&target)).unwrap();
+        assert_eq!(&std::fs::read(target).unwrap()[4096..], &[0xaa; 4]);
     }
 
     #[test]

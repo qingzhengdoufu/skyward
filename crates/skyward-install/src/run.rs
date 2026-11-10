@@ -649,6 +649,7 @@ fn update_system<S>(ctx: &mut Context, mount: &Mount<S>, update: &Update) -> Res
             if let Some(kept) = &kept {
                 reflash(ctx, kept, Ok(slot.other()));
             }
+            post_avb(ctx, &[slot.other()])?;
             Done::Decided(Outcome::Installed { slot: slot.other(), wipe })
         }
         code => Done::Engine(code),
@@ -826,9 +827,26 @@ fn lines(from: impl Read, mut each: impl FnMut(&str) -> io::Result<()>) -> io::R
     }
 }
 
-fn flash_image<S>(ctx: &Context, mount: &Mount<S>, kind: ImageKind, size: u64) -> Result<Done> {
+fn flash_image<S>(ctx: &mut Context, mount: &Mount<S>, kind: ImageKind, size: u64) -> Result<Done> {
+    if let Some(refusal) = short_of_charge(ctx.origin)? {
+        return Ok(Done::Decided(Outcome::Refused(refusal)));
+    }
     let dir = Path::new(skyward_block::BY_NAME);
-    let partitions = image::partitions(kind, dir)?;
+    let logical = kind == ImageKind::Filesystem;
+    let dynamic = logical || kind == ImageKind::Super;
+    if dynamic {
+        let state = skyward_vab::snapshot_state()?;
+        if state != SnapshotState::None {
+            return Ok(Done::Decided(Outcome::Refused(Refusal::Pending(state))));
+        }
+    }
+    let current = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    let partitions = if logical {
+        let names = skyward_vab::slot_sizes(current)?;
+        kind.partitions().iter().copied().filter(|name| names.iter().any(|(base, bytes)| base == name && *bytes > 0)).collect()
+    } else {
+        image::partitions(kind, dir)?
+    };
     if partitions.is_empty() {
         return Ok(Done::Decided(Outcome::Refused(Refusal::NoPartition)));
     }
@@ -840,19 +858,68 @@ fn flash_image<S>(ctx: &Context, mount: &Mount<S>, kind: ImageKind, size: u64) -
     };
     ensure!(partitions.contains(&partition), "{partition} is not among {partitions:?}");
     ensure!(!slots.is_empty(), "no slot chosen for {partition}");
+    ensure!(slots.len() <= 2 && !(slots.len() == 2 && slots[0] == slots[1]), "duplicate or excessive slots");
     if [skyward_systems::store::BOOT, skyward_systems::store::INIT_BOOT].contains(&partition) {
         installed_boot_set()?;
     }
-    let devices: Vec<_> = slots.iter().map(|&slot| image::device(dir, partition, slot)).collect();
+    let mut mapped = Vec::new();
+    let prepared = (|| -> Result<Vec<PathBuf>> {
+        if dynamic {
+            // Recheck after confirmation; never give a pending OTA's blocks away.
+            ensure!(skyward_vab::snapshot_state()? == SnapshotState::None, "update state changed; no dynamic partition was written");
+            detach_once(ctx)?;
+        }
+        if logical {
+            for &slot in &slots {
+                let whole = skyward_vab::map_whole(slot, partition, &format!("skyward-flash-{partition}{}", slot.suffix()), false)?;
+                mapped.push(whole);
+            }
+            return Ok(mapped.iter().map(|whole| whole.device.clone()).collect());
+        }
+        if kind == ImageKind::Super {
+            let path = dir.join("super");
+            let real = fs::canonicalize(&path)?;
+            let node = real.file_name().context("super has no block device name")?;
+            // Lazy-unmounted services may still hold a mapping. Refuse rather
+            // than destroy a live holder or write underneath it.
+            let holders = Path::new("/sys/class/block").join(node).join("holders");
+            ensure!(fs::read_dir(&holders)?.next().is_none(), "super still has live device-mapper holders; reboot recovery before flashing it");
+            return Ok(vec![path]);
+        }
+        Ok(slots.iter().map(|&slot| image::device(dir, partition, slot)).collect())
+    })();
+    let result = (|| -> Result<()> {
+    let devices = prepared?;
     let mut file = BufReader::with_capacity(1 << 20, File::open(mount.path()).context("open the package")?);
     let mut told: Option<Instant> = None;
-    image::flash(&mut file, size, &devices, &mut |done, total| {
+    image::flash_mode(&mut file, size, &devices, !dynamic, &mut |done, total| {
         if done == total || told.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
             ctx.send(Event::Progress(Stage::Flashing { done, total }));
             told = Some(Instant::now());
         }
-    })?;
-    Ok(Done::Decided(Outcome::Flashed { partition, slots }))
+    })
+    })();
+    let mut cleanup = Ok(());
+    for whole in mapped.iter().rev() {
+        if let Err(e) = skyward_vab::unmap_whole(whole) { cleanup = Err(e); }
+    }
+    result?;
+    cleanup.context("remove the temporary flash mapping")?;
+    let written_slots = if kind == ImageKind::Super { vec![Slot::A, Slot::B] } else { slots };
+    post_avb(ctx, &written_slots)?;
+    Ok(Done::Decided(Outcome::Flashed { partition, slots: written_slots }))
+}
+
+fn post_avb(ctx: &Context, slots: &[Slot]) -> Result<()> {
+    if !ctx.options.disable_avb || matches!(ctx.origin, Origin::Asked { .. }) { return Ok(()); }
+    for &slot in slots {
+        let backup = crate::commands::avbctl::disable_slot(slot)
+            .with_context(|| format!("the image/package was installed, but disabling AVB on {} failed; do not reboot until checked", slot.letter()))?;
+        let line = format!("AVB disabled on {} (verification + dm-verity); backup: {}", slot.letter(), backup.map_or_else(|| "already disabled".into(), |p| p.display().to_string()));
+        let _ = kmsg(&line);
+        ctx.send(Event::Print(line));
+    }
+    Ok(())
 }
 
 /// Run the install script of the zip being served, `size` bytes, once the
@@ -862,6 +929,10 @@ fn flash_image<S>(ctx: &Context, mount: &Mount<S>, kind: ImageKind, size: u64) -
 /// writable and unmounted. Where the screen asked for it, the zip is first
 /// checked to be signed with one of the phone's update keys.
 fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done> {
+    let state = skyward_vab::snapshot_state()?;
+    if state != SnapshotState::None {
+        return Ok(Done::Decided(Outcome::Refused(Refusal::Pending(state))));
+    }
     if let Some(refusal) = short_of_charge(ctx.origin)? {
         return Ok(Done::Decided(Outcome::Refused(refusal)));
     }
@@ -893,18 +964,17 @@ fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done>
     let kept = hold(ctx, slot)?;
     installed_boot_set()?;
     detach_once(ctx)?;
-    // While an update is in flight, the slot's partitions in super are its
-    // and stay unmapped.
-    let mapped = match skyward_vab::snapshot_state()? {
-        SnapshotState::None => skyward_vab::map_slot(slot)?,
-        state => {
-            let _ = kmsg(&format!("install: the slot's partitions stay unmapped while an update is in flight ({state:?})"));
-            SlotMaps::default()
-        }
-    };
+    // The confirmation may have stayed on screen while another update changed
+    // state. Arbitrary scripts cannot be confined to the snapshot-safe blocks.
+    let state = skyward_vab::snapshot_state()?;
+    if state != SnapshotState::None {
+        return Ok(Done::Decided(Outcome::Refused(Refusal::Pending(state))));
+    }
+    let mapped = skyward_vab::map_slot(slot)?;
     let mounted = skyward_block::mount::mount_ids()?;
     let ran = run_binary(ctx, mount);
-    if let Err(e) = clean_up(&mounted, &mapped) {
+    let cleaned = clean_up(&mounted, &mapped);
+    if let Err(e) = &cleaned {
         let _ = kmsg(&format!("install: not all the script left behind was taken away: {e:#}"));
     }
     // What the script wrote over goes back however it ended, and so does
@@ -914,6 +984,14 @@ fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done>
         reflash(ctx, kept, skyward_vab::boot::next_slot().context("ask which slot starts next"));
     }
     let (code, wipe_cache) = ran?;
+    cleaned.context("clean up the script's mounts and mappings")?;
+    if code == 0 && ctx.options.disable_avb && !matches!(ctx.origin, Origin::Asked { .. }) {
+        // Recovery owns this post-install action. It does not depend on a
+        // declaration, an avbctl call or any other opt-in from the ROM script.
+        // Scripts are arbitrary programs. Only use a slot the boot-control
+        // service positively reports, not a guessed property after a slot switch.
+        post_avb(ctx, &[skyward_vab::boot::next_slot().context("read post-script boot slot")?])?;
+    }
     Ok(Done::Script { code, wipe_cache })
 }
 
@@ -953,6 +1031,7 @@ fn extract_script<S>(mount: &Mount<S>) -> Result<()> {
 
 /// Give scripts written for other recoveries the shell they start with.
 fn shell_at_sbin() -> Result<()> {
+    script::tool_links(Path::new("/sbin"), Path::new("/system/bin"))?;
     let link = Path::new(SBIN_SHELL);
     match fs::symlink_metadata(link) {
         Ok(_) => return Ok(()),

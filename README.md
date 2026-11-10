@@ -1,3 +1,30 @@
+# Skyward for REDMI K80 Pro (miro)
+
+[简体中文](README.zh-CN.md) | [Build and Status](docs/MIRO.md)
+
+Unofficial K80 Pro adaptation of [kirklin/skyward](https://github.com/kirklin/skyward),
+based on [Rinrroy/skyward-for-haotian](https://github.com/Rinrroy/skyward-for-haotian)
+commit `d6e7b7aefcba123bf0ef15252e954e45a6de747f`. The original contributors'
+history and GPL-3.0 license are retained. This is not an official upstream release.
+
+The `miro` branch contains the device adaptation. `main` remains the upstream
+tracking branch; syncing main does not validate or update this phone's build.
+
+Current device-tested candidate: **test11**, stock OS3.0.303 recovery base,
+tested on OS3.0.305 (Android 16). Password decryption, panel-on touch wake
+compatibility, USB charging, haptics and WLAN scanning have been observed.
+ROM flashing, automatic AVB mutation and raw image export still need device
+validation. Hardware panel-off touch resume is not fixed. Fast charging and
+this repository's authenticated self-update channel are not implemented.
+
+**Read [the K80 Pro build notes and limitations](docs/MIRO.md) first.** No stock
+firmware, phone logs, credential data or private signing keys are published.
+
+The rest of this README is inherited Xiaomi 15 Pro documentation, not a claim
+that all of its features or hardware behavior are verified on K80 Pro.
+
+---
+
 ![Skyward Recovery](assets/hero.jpg)
 
 # Skyward for the Xiaomi 15 Pro

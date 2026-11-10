@@ -537,6 +537,7 @@ fn delete_backup(place: Place, folder: &Path) -> Result<()> {
 /// How backing up or restoring ended, as its page tells it.
 fn backup_end(end: backup::End) -> BackupEnd {
     match end {
+        backup::End::ImageSaved(path) => BackupEnd::ImageSaved(path.display().to_string()),
         backup::End::Saved(folder) => {
             BackupEnd::Saved(folder.file_name().expect("a backup's folder has a name").to_string_lossy().into_owned())
         }
@@ -1072,7 +1073,7 @@ fn detach(services: Vec<Service>) -> Detach {
 /// on a phone that has them, and checks a zip's signature before its
 /// install script runs.
 fn install_options(app: &App) -> Options {
-    Options { keep: app.state.keep_recovery && app.state.recovery_partitions, signed: app.state.check_signature }
+    Options { keep: app.state.keep_recovery && app.state.recovery_partitions, signed: app.state.check_signature, disable_avb: app.state.disable_avb }
 }
 
 /// How often the WLAN page scans while it shows.
@@ -1199,6 +1200,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let locale = request.locale.as_deref().or(info.locale.as_deref());
     let named = locale.map(Lang::for_locale).transpose()?;
     app.take_settings(kept.settings(), named);
+    app.state.double_tap_supported = cfg.touch.double_tap;
     let mut keeper = Keeper::new(&kept);
     skyward_sys::kmsg(&format!(
         "the pages speak {:?}, {}, and the locale named is {}",
@@ -1251,6 +1253,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // it could not be has been said already rather than every turn.
     let mut taps_wake = false;
     let mut taps_told = false;
+    // A failed driver request keeps compatibility mode, without retrying
+    // every frame. Changing the preference permits a new attempt while lit.
+    let mut gesture_attempted = None;
+    let mut gesture_applied = None;
     // Whether the panel was dark the last time the readings were told how
     // often to look, so that they are told only when that changes.
     let mut was_dark = false;
@@ -1589,6 +1595,21 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             port_at = Instant::now();
         }
         let panel = app.panel(now);
+        let want_taps = cfg.touch.double_tap && app.state.double_tap;
+        if cfg.touch.xiaomi_v2_gesture && inputs.has_panel() && panel.is_some() && gesture_attempted != Some(want_taps) {
+            gesture_attempted = Some(want_taps);
+            gesture_applied = None;
+            match skyward_sys::touch::xiaomi_v2_double_tap(want_taps) {
+                Ok(()) => {
+                    gesture_applied = Some(want_taps);
+                    let _ = skyward_sys::kmsg(&format!("Xiaomi v2 double-tap={want_taps} read back; real panel-off test, CPU suspend inhibited"));
+                }
+                Err(e) => {
+                    let _ = skyward_sys::kmsg(&format!("hardware gesture setup failed; keeping panel compatibility mode: {e:#}"));
+                }
+            }
+        }
+        let hardware_ready = cfg.touch.xiaomi_v2_gesture && gesture_applied == Some(want_taps);
         let mut shown = false;
         let dozes = doze.as_ref().is_some_and(aod::Panel::usable);
         if panel.is_some() {
@@ -1665,6 +1686,11 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             backlight = None;
         } else if dozing {
             // The panel keeps the face in its doze; there is nothing to rest.
+        } else if panel.is_none() && cfg.touch.keep_panel_on && !hardware_ready {
+            // Keep scanout active behind the black frame. In this mode
+            // is_off() stays false, so Idle also refuses system suspend.
+            rested_at = None;
+            dark_at = None;
         } else if panel.is_some() {
             // Lit, a panel that came on again switches to its fastest
             // refresh.
@@ -1684,6 +1710,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             // display processor feeding it stop drawing power.
             surface.turn_off()?;
             rested_at = None;
+            if hardware_ready {
+                let _ = skyward_sys::kmsg("hardware gesture test: display CRTC off; CPU kept awake; waiting for KEY_WAKEUP or power key");
+            }
         }
         // A panel the doze keeps on the glass is not dark either, so it is
         // not somewhere a phone may be left to sleep.
@@ -1740,7 +1769,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             Some(sh) => !sh.waiting()?,
             None => false,
         };
-        let needed = busy
+        let needed = cfg.touch.xiaomi_v2_gesture
+            || busy
             || fastboot
             || sideloading
             || leave_at.is_some()
@@ -1752,8 +1782,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         // armed once and stays armed, since the phone may be suspended at any
         // moment after it. Nothing is written where no panel has come up, or
         // where the phone asks for no taps at all.
-        let want_taps = cfg.touch.double_tap;
-        if want_taps && surface.is_off() && !taps_wake {
+        if !cfg.touch.xiaomi_v2_gesture && want_taps && surface.is_off() && !taps_wake {
             if let Some(node) = inputs.panel_node() {
                 match skyward_sys::sleep::arm_wakeup(&node) {
                     Ok(true) => {
@@ -2373,9 +2402,22 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     skyward_sys::kmsg(&format!("asked on the recovery socket: {asked:?}"))?;
                     answer(asked, fastboot)
                 }
+                // This experiment must wake from the controller's gesture,
+                // not accidentally pass through software tap counting.
+                Incoming::Input(Event::Touch(_, _)) if hardware_ready && !app.display_on() => Vec::new(),
                 Incoming::Input(Event::Touch(t, at)) => app.touch(t, &fonts, at),
                 Incoming::Input(Event::Key(k, true)) => app.key(k, now),
                 Incoming::Input(Event::Key(k, false)) => app.key_up(k, now),
+                Incoming::Input(Event::Wake) => {
+                    if cfg.touch.xiaomi_v2_gesture && gesture_applied == Some(true) {
+                        let was_on = app.display_on();
+                        // `now` precedes poll(), which may have waited five
+                        // seconds. Start the wake guard at the event receipt.
+                        app.hardware_wake(monotonic_ms());
+                        let _ = skyward_sys::kmsg(&format!("touch KEY_WAKEUP received; display_on {was_on} -> {}", app.display_on()));
+                    }
+                    Vec::new()
+                }
             };
             // What the pages ask for in answer to the work done goes on
             // after it.
@@ -2526,6 +2568,22 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         }
                     },
                     Effect::ReadMounts => app.set_mounts(mounts()),
+                    Effect::ReadAvb => {
+                        app.avb_read(skyward_install::commands::avbctl::current().map_err(|e| e.to_string()), None);
+                    }
+                    Effect::SetAvb { expected, check, disabled } => {
+                        use skyward_install::commands::avbctl;
+                        if installer.is_some() || part_worker.is_some() || systems_worker.as_ref().is_some_and(|_| app.state.systems_work.is_some()) || skyward_updater.is_some() {
+                            app.avb_read(avbctl::current().map_err(|e| e.to_string()), Some(app.state.lang.pick(["其他分区操作尚未结束，禁止修改 AVB。", "其他分割區操作尚未結束，禁止修改 AVB。", "Another partition operation is active. AVB changes are blocked."]).into()));
+                            continue;
+                        }
+                        let result = avbctl::change(&expected, check, disabled);
+                        let notice = Some(match result {
+                            Ok((_, backup)) => format!("{}\n{}", app.state.lang.pick(["已写入并校验，重启后生效。备份：", "已寫入並驗證，重新啟動後生效。備份：", "Written and verified; effective after reboot. Backup:"]), backup.display()),
+                            Err(error) => format!("{}: {error}", app.state.lang.pick(["修改失败，请核对当前状态", "修改失敗，請核對目前狀態", "Change failed; check the current state"])),
+                        });
+                        app.avb_read(avbctl::current().map_err(|e| e.to_string()), notice);
+                    }
                     Effect::ReadSlots => app.set_boot_slots(read_slots()),
                     Effect::SetSlot(slot) => app.slot_switched(set_slot(slot), now),
                     Effect::ReadSystems => systems_worker.as_mut().context("this phone holds no second system")?.send(systems::Task::Read),
@@ -2650,6 +2708,26 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     // An install still stopping may yet write; a backup or
                     // restore waits for it.
+                    Effect::ReadImagePartitions => {
+                        app.image_partitions_read(backup::image_partitions().map_err(|error| format!("{error:#}")));
+                    }
+                    Effect::BackupImage { name, place } => {
+                        if backuper.is_some() || installer.is_some() || part_worker.is_some() || merger.is_some() || systems_worker.is_some() || skyward_updater.is_some() {
+                            app.report(app.state.lang.pick(["其他分区操作尚未结束", "其他分割區操作尚未結束", "Another partition operation is active"]), now);
+                            continue;
+                        }
+                        let root = match place { Place::Storage => Path::new(skyward_crypto::data::SDCARD), Place::UsbDrive => Path::new(USB_DRIVE) };
+                        let into = root.join(skyward_backup::image::FOLDER);
+                        let there = into.ancestors().find(|path| path.exists()).context("no image destination")?;
+                        let owner = match ownership(there) {
+                            Ok(owner) => owner,
+                            Err(error) => { app.report(&format!("{error:#}"), now); continue; }
+                        };
+                        let stamp = skyward_ui::fmt::stamp(unix_now()?, app.state.time_zone);
+                        let task = backup::Task::Image { name, into, stamp, ownership: owner, remount: (place == Place::UsbDrive).then(|| PathBuf::from(USB_DRIVE)) };
+                        backuper = Some(backup::Worker::start(task)?);
+                        app.backup_started(false, place, true);
+                    }
                     Effect::Backup { parts, place, compress, verify } => {
                         ensure!(backuper.is_none(), "a backup or restore is under way already");
                         if installer.is_some() {

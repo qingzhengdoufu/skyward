@@ -20,6 +20,7 @@ use crate::theme::Theme;
 use crate::tr;
 use crate::widgets::{self, Bar, Bolt, Cap, Layer, WlanMark};
 use skyward_info::DeviceInfo;
+use skyward_install::commands::avbctl;
 use skyward_install::{Event, ImageKind, Outcome, Reflash, Refusal, Stage};
 use skyward_net::download::{Failure, Progress};
 use skyward_net::github::{Build, Newest};
@@ -54,6 +55,7 @@ pub enum Screen {
     /// keyboard.
     Search,
     Backup,
+    ImageBackup,
     /// The backups found, to restore one.
     Restore,
     /// One backup, and what to restore from it.
@@ -62,6 +64,7 @@ pub enum Screen {
     BackupJob,
     /// Tools for the experienced: files, a terminal, the logs.
     Advanced,
+    Avb,
     Files,
     /// One file, and what can be done with it.
     FileInfo,
@@ -544,6 +547,7 @@ pub enum Slider {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
     Vibrate,
+    DoubleTap,
     /// Offer internal storage to a computer over USB.
     FileTransfer,
     /// Compress a backup.
@@ -556,6 +560,7 @@ pub enum Switch {
     /// Write Skyward back into the recovery partitions an install writes
     /// over.
     KeepRecovery,
+    DisableAvb,
     Wlan,
     /// Show the clock and the phone's readings on a dark panel, in the
     /// panel's own doze, rather than putting the panel out.
@@ -632,6 +637,7 @@ pub struct BackupAt {
 /// How backing up or restoring ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackupEnd {
+    ImageSaved(String),
     /// A backup made, in the folder of this name.
     Saved(String),
     /// A backup restored, but for what it held in the folders of users gone
@@ -847,10 +853,12 @@ impl Data {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
+    Avb,
     Reboot,
     Wipe,
     Flash,
     Backup,
+    ImageBackup,
     Restore,
     /// Start next from the slot chosen on the slot page.
     Slot,
@@ -1165,6 +1173,8 @@ pub const TIME_ZONES: [(Text, Text, &str); 9] = [
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    AvbToggle(avbctl::Check),
+    CancelAvb,
     Open(Screen),
     /// Leave the decrypt page for the page it was opened from; the page
     /// the recovery started on, for the home page without keeping it
@@ -1215,6 +1225,7 @@ pub enum Action {
     BackupPart(usize),
     /// Send the backup to this place.
     BackupTo(Place),
+    ImagePartition(usize),
     /// Open a backup found, by its place in the list, to restore it.
     OpenBackup(usize),
     /// Tick or untick a part of the backup being restored.
@@ -1582,6 +1593,9 @@ impl Frame {
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
+    pub avb: Option<Result<avbctl::State, String>>,
+    pub avb_pending: Option<(avbctl::Check, bool)>,
+    pub avb_notice: Option<String>,
     /// The language the pages speak.
     pub lang: Lang,
     /// The language was chosen on the language page, now or at an earlier
@@ -1596,6 +1610,9 @@ pub struct State {
     /// place in [`TIME_ZONES`].
     pub time_zone: usize,
     pub vibrate: bool,
+    /// User preference; independent from the device's wake capability.
+    pub double_tap: bool,
+    pub double_tap_supported: bool,
     /// How strongly the motor taps, from 0 at the slider's left end to 1
     /// at its right.
     pub vibration: f32,
@@ -1638,6 +1655,7 @@ pub struct State {
     /// Skyward goes back into the recovery partitions an install writes
     /// over.
     pub keep_recovery: bool,
+    pub disable_avb: bool,
     /// How Skyward went back into the recovery partitions the install
     /// wrote over, where it did.
     pub reflash: Option<Reflash>,
@@ -1649,6 +1667,8 @@ pub struct State {
     pub backup: [bool; 4],
     /// Where a backup goes.
     pub backup_to: Place,
+    pub image_partitions: Option<Result<Vec<(String, u64)>, String>>,
+    pub image_partition: Option<usize>,
     pub compress: bool,
     pub verify: bool,
     /// The backups found, newest first, those that cannot be read last.
@@ -1778,6 +1798,9 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
+            avb: None,
+            avb_pending: None,
+            avb_notice: None,
             lang: Lang::Hans,
             language_chosen: false,
             dark: false,
@@ -1786,6 +1809,8 @@ impl Default for State {
             screen_off: 3,
             time_zone: 0,
             vibrate: true,
+            double_tap: true,
+            double_tap_supported: true,
             vibration: SLIDER_START,
             file_transfer: true,
             // Off, so a freshly flashed phone is put out as it always was and
@@ -1805,11 +1830,14 @@ impl Default for State {
             check_signature: false,
             recovery_partitions: false,
             keep_recovery: true,
+            disable_avb: false,
             reflash: None,
             mounts: Ok(Vec::new()),
             mount_failure: None,
             backup: [true, true, false, true],
             backup_to: Place::Storage,
+            image_partitions: None,
+            image_partition: None,
             compress: false,
             verify: true,
             backups: Vec::new(),
@@ -2009,6 +2037,8 @@ pub enum Shot {
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
+    ReadAvb,
+    SetAvb { expected: avbctl::State, check: avbctl::Check, disabled: bool },
     Reboot(Target),
     /// A short tap of the vibration motor.
     Haptic,
@@ -2146,6 +2176,8 @@ pub enum Effect {
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
     /// and [`App::backup_ended`].
     Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool },
+    ReadImagePartitions,
+    BackupImage { name: String, place: Place },
     /// Restore the parts ticked of the backup in the folder `name` of
     /// `place`, telling how it goes as a backup does.
     Restore { place: Place, name: String, parts: [bool; 4] },
@@ -3198,11 +3230,23 @@ impl App {
         self.stir(now);
     }
 
+    /// A double tap already recognized by the touch controller. Never toggle
+    /// an already-lit screen or activate a page item with this event.
+    pub fn hardware_wake(&mut self, now: u64) {
+        if !self.display_on && self.state.double_tap && self.state.double_tap_supported {
+            self.wake(now);
+        }
+    }
+
     /// A finger came down on the dark panel: the second of two taps that land
     /// near each other, soon enough, lights it, as the phone's own double tap
     /// does. One that comes later than the window is a tap of its own and
     /// starts the count again.
     fn tap(&mut self, now: u64, x: f32, y: f32) {
+        if !self.state.double_tap || !self.state.double_tap_supported {
+            self.tapped = None;
+            return;
+        }
         let tap = Tap { x, y };
         let doubled =
             self.tapped.filter(|(first, at)| now.saturating_sub(*at) <= Tap::WINDOW_MS && first.doubles(&tap, self.w as f32));
@@ -3306,6 +3350,14 @@ impl App {
     /// Something laid over the page changed (the clock): compose again.
     pub fn redraw(&mut self) {
         self.dirty = true;
+    }
+
+    pub fn avb_read(&mut self, state: Result<avbctl::State, String>, notice: Option<String>) {
+        self.state.avb = Some(state);
+        self.state.avb_pending = None;
+        self.state.avb_notice = notice;
+        self.state.confirm = 0.0;
+        self.refresh();
     }
 
     /// The settings the pages show, as they are kept between starts.
@@ -4029,6 +4081,13 @@ impl App {
     pub fn backup_started(&mut self, restore: bool, place: Place, checks: bool) {
         self.state.backup_job = Some(BackupJob { restore, place, checks, plan: Vec::new(), at: None, outcome: None, stopping: false });
         self.open(Screen::BackupJob);
+    }
+
+    pub fn image_partitions_read(&mut self, parts: Result<Vec<(String, u64)>, String>) {
+        self.state.image_partitions = Some(parts);
+        self.state.image_partition = None;
+        self.state.confirm = 0.0;
+        self.refresh();
     }
 
     /// The parts the work goes through, once they are measured.
@@ -5157,6 +5216,17 @@ impl App {
     /// how it learns which control a user's screen lock is answered with.
     fn arrive_at(&mut self, s: Screen) -> Vec<Effect> {
         match s {
+            Screen::ImageBackup => {
+                self.state.image_partitions = None;
+                self.state.image_partition = None;
+                vec![Effect::ReadImagePartitions]
+            }
+            Screen::Avb => {
+                self.state.avb = None;
+                self.state.avb_pending = None;
+                self.state.avb_notice = None;
+                vec![Effect::ReadAvb]
+            }
             Screen::Mount => vec![Effect::ReadMounts],
             Screen::Filesystems => vec![Effect::ReadFilesystems],
             Screen::Slot | Screen::Reboot => vec![Effect::ReadSlots],
@@ -5271,17 +5341,22 @@ impl App {
             Action::Toggle(switch) => {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
+                    Switch::DoubleTap => &mut self.state.double_tap,
                     Switch::FileTransfer => &mut self.state.file_transfer,
                     Switch::Compress => &mut self.state.compress,
                     Switch::Verify => &mut self.state.verify,
                     Switch::Signature => &mut self.state.check_signature,
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
+                    Switch::DisableAvb => &mut self.state.disable_avb,
                     Switch::ShowPassword => &mut self.state.show_password,
                     Switch::AlwaysOn => &mut self.state.always_on,
                     Switch::Wlan => unreachable!("the WLAN switch is turned above"),
                 };
                 *on = !*on;
                 let now_on = *on;
+                if switch == Switch::DoubleTap {
+                    self.tapped = None;
+                }
                 self.refresh();
                 if switch == Switch::FileTransfer {
                     return vec![Effect::FileTransfer(now_on)];
@@ -5315,6 +5390,25 @@ impl App {
                     }
                     (false, _) => self.state.wipe[k] = false,
                 }
+                self.refresh();
+            }
+            Action::AvbToggle(check) => {
+                if let Some(Ok(state)) = &self.state.avb {
+                    if state.unlocked {
+                        self.state.avb_pending = if self.state.avb_pending.is_some_and(|(pending, _)| pending == check) {
+                            None
+                        } else {
+                            Some((check, !state.disabled(check)))
+                        };
+                        self.state.avb_notice = None;
+                        self.state.confirm = 0.0;
+                        self.refresh();
+                    }
+                }
+            }
+            Action::CancelAvb => {
+                self.state.avb_pending = None;
+                self.state.confirm = 0.0;
                 self.refresh();
             }
             Action::Confirm(_) => self.say(l.pick(["请按住圆形按钮向右滑动", "請按住圓形按鈕向右滑動", "Hold the round button and slide it right"]), now),
@@ -5476,6 +5570,13 @@ impl App {
             Action::BackupTo(place) => {
                 self.state.backup_to = place;
                 self.refresh();
+            }
+            Action::ImagePartition(index) => {
+                if self.state.image_partitions.as_ref().and_then(|parts| parts.as_ref().ok()).is_some_and(|parts| index < parts.len()) {
+                    self.state.image_partition = Some(index);
+                    self.state.confirm = 0.0;
+                    self.refresh();
+                }
             }
             // All a backup holds is ticked to restore at first.
             Action::OpenBackup(i) => {
@@ -6551,6 +6652,16 @@ impl App {
     fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::Avb => {
+                if let (Some(Ok(state)), Some((check, disabled))) = (&self.state.avb, self.state.avb_pending) {
+                    if state.unlocked && state.disabled(check) != disabled {
+                        fx.push(Effect::SetAvb { expected: state.clone(), check, disabled });
+                        self.state.avb_pending = None;
+                        self.state.confirm = 0.0;
+                        self.refresh();
+                    }
+                }
+            }
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
@@ -6593,6 +6704,16 @@ impl App {
                 match refused {
                     Some(why) => self.say(l.pick(why), now),
                     None => fx.push(backup),
+                }
+            }
+            Confirm::ImageBackup => {
+                if !self.state.place_open(self.state.backup_to) {
+                    self.say(l.pick(["备份位置不可用，请先解密或连接 U 盘", "備份位置無法使用，請先解密或連接 USB 隨身碟", "Unlock storage or connect a readable USB drive"]), now);
+                } else if let Some((name, _)) = self.state.image_partitions.as_ref().and_then(|parts| parts.as_ref().ok())
+                    .and_then(|parts| self.state.image_partition.and_then(|index| parts.get(index))) {
+                    fx.push(Effect::BackupImage { name: name.clone(), place: self.state.backup_to });
+                } else {
+                    self.say(l.pick(["请选择一个分区", "請選擇一個分割區", "Select one partition"]), now);
                 }
             }
             Confirm::Restore => {
@@ -7205,6 +7326,7 @@ mod tests {
             Screen::Backup,
             Screen::Restore,
             Screen::Advanced,
+            Screen::Avb,
             Screen::Files,
             Screen::Terminal,
             Screen::Language,
@@ -7969,6 +8091,35 @@ mod tests {
         let mut app = opened(Screen::Mount, &f, &i);
         app.set_mounts(Err("read the metadata in super: Input/output error (os error 5)".into()));
         assert!(app.frame(&f, &i).hits.is_empty());
+    }
+
+    #[test]
+    fn avb_switches_only_write_after_confirmation_and_never_enter_saved_settings() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        let saved = app.settings();
+        assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Avb)), vec![Effect::ReadAvb]);
+        let state = avbctl::State { suffix: "_a".into(), flags: 0, unlocked: true, digest: [0; 32] };
+        app.avb_read(Ok(state.clone()), None);
+        assert!(tap(&mut app, &f, &i, Action::AvbToggle(avbctl::Check::Verification)).is_empty());
+        assert_eq!(app.settings(), saved);
+        assert_eq!(app.state.avb, Some(Ok(state.clone())), "a pending switch does not claim a disk change");
+        tap(&mut app, &f, &i, Action::CancelAvb);
+        assert!(app.state.avb_pending.is_none());
+        tap(&mut app, &f, &i, Action::AvbToggle(avbctl::Check::Verification));
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::Avb), vec![Effect::SetAvb { expected: state, check: avbctl::Check::Verification, disabled: true }]);
+        assert!(app.state.avb_pending.is_none());
+    }
+
+    #[test]
+    fn unknown_or_locked_avb_state_offers_no_write_controls() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Avb, W, H, PPD);
+        for state in [Err("cannot read vbmeta".into()), Ok(avbctl::State { suffix: "_a".into(), flags: 3, unlocked: false, digest: [0; 32] })] {
+            app.avb_read(state, None);
+            assert!(app.frame(&f, &i).hits.is_empty());
+            assert!(app.confirmed(Confirm::Avb, 0).is_empty());
+        }
     }
 
     #[test]
@@ -9396,6 +9547,30 @@ mod tests {
     }
 
     #[test]
+    fn image_backup_reads_partitions_requires_one_choice_and_open_destination() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Backup, &f, &i);
+        assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::ImageBackup)), vec![Effect::ReadImagePartitions]);
+        app.image_partitions_read(Ok(vec![("boot_a".into(), 1 << 20), ("super".into(), 8 << 30)]));
+        assert!(swipe(&mut app, &f, &i, Confirm::ImageBackup).is_empty());
+        tap(&mut app, &f, &i, Action::ImagePartition(1));
+        assert!(swipe(&mut app, &f, &i, Confirm::ImageBackup).is_empty(), "closed destination");
+        app.state.data = Data::Open;
+        app.refresh();
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::ImageBackup), vec![Effect::BackupImage { name: "super".into(), place: Place::Storage }]);
+        tap(&mut app, &f, &i, Action::ImagePartition(0));
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::ImageBackup), vec![Effect::BackupImage { name: "boot_a".into(), place: Place::Storage }]);
+        tap(&mut app, &f, &i, Action::BackupTo(Place::UsbDrive));
+        assert!(swipe(&mut app, &f, &i, Confirm::ImageBackup).is_empty(), "no USB drive");
+        app.state.usb_drive = Some(UsbDrive::Shown);
+        app.refresh();
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::ImageBackup), vec![Effect::BackupImage { name: "boot_a".into(), place: Place::UsbDrive }]);
+        app.image_partitions_read(Err("cannot read partitions".into()));
+        assert!(app.state.image_partition.is_none());
+        assert!(swipe(&mut app, &f, &i, Confirm::ImageBackup).is_empty());
+    }
+
+    #[test]
     fn the_install_page_offers_to_keep_skyward_where_the_phone_has_recovery_partitions() {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Install, &f, &i);
@@ -9417,6 +9592,32 @@ mod tests {
         assert!(!app.state.check_signature);
         tap(&mut app, &f, &i, Action::Toggle(Switch::Signature));
         assert!(app.state.check_signature);
+    }
+
+    #[test]
+    fn automatic_avb_is_an_explicit_saved_install_option_not_a_startup_write() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Install, &f, &i);
+        assert!(!app.state.disable_avb);
+        assert!(tap(&mut app, &f, &i, Action::Toggle(Switch::DisableAvb)).is_empty());
+        assert!(app.state.disable_avb);
+        let saved = crate::settings::Settings::of(&app.state);
+        let mut next = State::default();
+        saved.apply(&mut next);
+        assert!(next.disable_avb);
+        assert!(next.avb.is_none());
+    }
+
+    #[test]
+    fn shared_super_does_not_offer_slot_selection_and_still_requires_confirmation() {
+        let (f, i) = (fonts(), info());
+        let mut app = sideloading(&f, &i);
+        app.install(Event::Image { kind: ImageKind::Super, size: 8 << 30, partitions: vec!["super"] }, 0);
+        let frame = app.frame(&f, &i);
+        assert!(!frame.hits.iter().any(|hit| matches!(hit.action, Action::FlashSlots(_))));
+        assert!(frame.hits.iter().any(|hit| hit.action == Action::Confirm(Confirm::Flash)));
+        app.key(Key::Back, 0);
+        assert_ne!(app.state.install, Install::Flashing { partition: "super", stage: None });
     }
 
     #[test]
@@ -11598,6 +11799,68 @@ mod tests {
         app.touch(Touch::Down(x, y), &f, after);
         app.touch(Touch::Up, &f, after + 20);
         assert_eq!(app.screen(), Screen::Settings);
+    }
+
+    #[test]
+    fn double_tap_can_be_disabled_without_disabling_the_power_key() {
+        let f = fonts();
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.act(Action::Toggle(Switch::DoubleTap), 0);
+        assert!(!app.state.double_tap);
+        press(&mut app, Key::Power, 10);
+        for at in [100, 200] {
+            app.touch(Touch::Down(300.0, 500.0), &f, at);
+            app.touch(Touch::Up, &f, at + 20);
+        }
+        assert!(!app.display_on());
+        press(&mut app, Key::Power, 400);
+        assert!(app.display_on());
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.state.double_tap_supported = false;
+        press(&mut app, Key::Power, 0);
+        app.touch(Touch::Down(300.0, 500.0), &f, 100);
+        app.touch(Touch::Down(300.0, 500.0), &f, 200);
+        assert!(!app.display_on(), "a preference does not invent hardware support");
+    }
+
+    #[test]
+    fn hardware_gesture_wakes_without_toggling_or_clicking() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        let (x, y) = spot(&mut app, &f, &i, Action::Open(Screen::Settings));
+        press(&mut app, Key::Power, 0);
+        app.hardware_wake(100);
+        assert!(app.display_on());
+        app.hardware_wake(110);
+        assert!(app.display_on(), "a repeated wake event cannot turn the screen off");
+        app.touch(Touch::Down(x, y), &f, 120);
+        app.touch(Touch::Up, &f, 140);
+        assert_eq!(app.screen(), Screen::Home, "wake keeps the stray-touch guard");
+    }
+
+    #[test]
+    fn hardware_gesture_obeys_preference_and_capability() {
+        for (enabled, supported) in [(false, true), (true, false)] {
+            let mut app = App::new(Screen::Home, W, H, PPD);
+            app.state.double_tap = enabled;
+            app.state.double_tap_supported = supported;
+            press(&mut app, Key::Power, 0);
+            app.hardware_wake(100);
+            assert!(!app.display_on());
+            press(&mut app, Key::Power, 200);
+            assert!(app.display_on(), "power key remains independent");
+        }
+    }
+
+    #[test]
+    fn the_double_tap_switch_is_offered_only_when_supported() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Settings, W, H, PPD);
+        let offered = |app: &mut App| app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::DoubleTap));
+        assert!(offered(&mut app));
+        app.state.double_tap_supported = false;
+        app.refresh();
+        assert!(!offered(&mut app));
     }
 
     /// The two taps of one double tap are close together on the glass and

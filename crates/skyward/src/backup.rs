@@ -120,6 +120,7 @@ pub struct RestoreTask {
 pub enum Task {
     Backup(BackupTask),
     Restore(RestoreTask),
+    Image { name: String, into: PathBuf, stamp: String, ownership: Ownership, remount: Option<PathBuf> },
 }
 
 /// Why backing up or restoring does not start.
@@ -166,6 +167,7 @@ pub enum Event {
 }
 
 pub enum End {
+    ImageSaved(PathBuf),
     /// A backup made, in this folder.
     Saved(PathBuf),
     /// A backup restored, but for the folders a key of their own began in
@@ -209,6 +211,7 @@ impl Worker {
                 let ended = match task {
                     Task::Backup(t) => backup(t, &tell, &stop).map(End::Saved),
                     Task::Restore(t) => restore(t, &tell, &stop).map(|unmade| End::Restored { unmade }),
+                    Task::Image { name, into, stamp, ownership, remount } => export_image(&name, &into, &stamp, ownership, remount.as_deref(), &tell, &stop).map(End::ImageSaved),
                 };
                 let end = match ended {
                     Ok(end) => end,
@@ -219,6 +222,7 @@ impl Worker {
                     },
                 };
                 let said = match &end {
+                    End::ImageSaved(path) => format!("partition image saved in {}", path.display()),
                     End::Saved(folder) => format!("backup saved in {}", folder.display()),
                     End::Restored { unmade } => format!("backup restored, all but {unmade:?}"),
                     End::Stopped => "backup stopped".into(),
@@ -267,6 +271,63 @@ enum Source {
     Logical(String),
     /// The data partition's files.
     Data,
+}
+
+/// Enumerate only independent boot block devices and shared super. No dynamic
+/// mapping, credential partitions or writes to the source are involved.
+pub fn image_partitions() -> Result<Vec<(String, u64)>> {
+    let mut names = Vec::new();
+    for base in skyward_backup::image::BOOT {
+        for slot in [Slot::A, Slot::B] {
+            let name = format!("{base}{}", slot.suffix());
+            let path = partition(&name);
+            if path.try_exists()? { names.push((name, skyward_block::size_bytes(path)?)); }
+        }
+    }
+    let path = partition("super");
+    if path.try_exists()? { names.push(("super".into(), skyward_block::size_bytes(path)?)); }
+    Ok(names)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn export_image(name: &str, into: &Path, stamp: &str, ownership: Ownership, remount: Option<&Path>, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
+    ensure!(skyward_backup::image::allowed(name), "partition is not allowed for image export");
+    // Refuse all raw export while an OTA is in flight, even if only boot was
+    // selected. A byte-consistent image is not an OTA snapshot of the system.
+    no_update()?;
+    let device = partition(name);
+    let mut source = File::open(&device).context("open image source read-only")?;
+    let size = skyward_block::size_bytes(&device)?;
+    let free = free_bytes(into)?;
+    let needed = size.checked_add(1 << 20).context("image size overflow")?;
+    if needed > free { return Err(Refusal::Room { needed, free }.into()); }
+    let there = into.ancestors().find(|p| p.exists()).context("no destination filesystem")?;
+    let c = std::ffi::CString::new(there.as_os_str().as_bytes())?;
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(c.as_ptr(), &mut stat) } != 0 { return Err(io::Error::last_os_error().into()); }
+    ensure!(stat.f_type as u64 != 0x4d44 || size < 1u64 << 32, "FAT32 cannot hold this single image; use exFAT or internal storage");
+    if let Some(at) = remount { mount::remount_writable(at, true)?; }
+    let exported = (|| -> Result<PathBuf> {
+        skyward_files::make_folders(into, ownership)?;
+        // Unique folder creation must succeed before any output is made. Never
+        // reuse or delete a backup whose timestamp already exists.
+        let folder = into.join(format!("{stamp}-{name}"));
+        skyward_files::make_new_folder(&folder, ownership).context("create unique image backup folder")?;
+        tell(Event::Plan(vec![(name.into(), size)]));
+        let mut writing = Telling::new(tell, 0, size, false);
+        let mut verifying = None;
+        skyward_backup::image::export(&mut source, size, &folder, name, ownership, cancel, &mut |done, check| {
+            if check { verifying.get_or_insert_with(|| Telling::new(tell, 0, size, true)).done(done); }
+            else { writing.done(done); }
+        })
+    })();
+    if let Some(at) = remount {
+        let restored = mount::remount_writable(at, false);
+        let path = exported?;
+        restored?;
+        return Ok(path);
+    }
+    exported
 }
 
 /// A partition by its name among the links the phone gives them.

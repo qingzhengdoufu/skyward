@@ -1,0 +1,167 @@
+# Fresh device configuration, verified against the local stock 303 images.
+# Stock provenance is in docs/miro-build.md; no OTA download is requested.
+[device]
+codename = "miro"
+brand = "Redmi"
+model = "REDMI K80 Pro"
+ab = true
+soc = { hans = "骁龙8至尊版移动平台", hant = "驍龍8至尊版行動平台", en = "Snapdragon 8 Elite Mobile Platform" }
+os_version_prop = "ro.mi.os.version.incremental"
+
+[display]
+width = 1440
+height = 3200
+density = 600
+fastest_refresh = false
+
+[modules]
+sources = ["vendor_boot", "vendor_dlkm", "vendor", "system_dlkm"]
+load = ["focaltech_touch", "nxp-nci"]
+
+[touch]
+# Keep scanout active behind black; real panel-off loses touch after wake.
+keep_panel_on = true
+# test05 wakes on double tap but touch does not recover. Disabled by default.
+xiaomi_v2_gesture = false
+double_tap = true
+writes = [{ path = "/sys/class/touch/touch_dev/enable_touch_raw", value = "0" }]
+
+[[owners]]
+user = "nfc"
+group = "nfc"
+mode = 0o660
+paths = ["/dev/nq-nci"]
+
+[firmware]
+partition = "modem"
+# boot_adsp/boot aborts at its missing qcom,adsp-state on the tested kernel.
+# Start only an offline ADSP directly; never stop it or request SSR.
+adsp_boot = "remoteproc"
+
+[partitions]
+mounted = ["persist"]
+
+# Stock init already loads qcom-hv-haptics and registers its input device.
+# Effect 0 is present in miro's live device tree and reports 22 ms in testing.
+[haptics]
+effect = "qcom_waveform"
+click = 0
+# Isolated 0.1/0.2/0.4 probes are distinct; the user prefers the 0.2 midpoint.
+# Do not override voltage/frequency/calibration controls or saved UI settings.
+strength = { lightest = 0.1, strongest = 0.4 }
+
+[[service]]
+path = "/vendor/bin/sh"
+args = ["/vendor/bin/init.kernel.post_boot.sh"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root", "system", "wakelock", "graphics"]
+
+[[service]]
+path = "/vendor/bin/qseecomd"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_property = "vendor.sys.listeners.registered"
+sockets = [{ name = "notify-topology", kind = "stream", mode = 0o660, user = "system", group = "drmrpc" }]
+user = "root"
+groups = ["root", "drmrpc"]
+
+# Account, groups, capabilities and sockets from vendor/etc/init/ssgtzd.rc.
+[[service]]
+path = "/vendor/bin/ssgtzd"
+libraries = ["/system/lib64", "/vendor/lib64"]
+sockets = [
+    { name = "ssgtzd", kind = "stream", mode = 0o660, user = "system", group = "oem_2912" },
+    { name = "ssgtzd_opener", kind = "stream", mode = 0o660, user = "system", group = "system" },
+]
+user = "system"
+groups = ["system", "oem_2912", "wakelock"]
+capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
+
+[[service]]
+path = "/vendor/bin/hlosminkdaemon"
+libraries = ["/system/lib64", "/vendor/lib64"]
+sockets = [{ name = "hlos_mink_opener", kind = "stream", mode = 0o660, user = "system", group = "system" }]
+user = "system"
+groups = ["system"]
+
+[[service]]
+path = "/vendor/bin/hw/android.hardware.security.keymint-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
+registers = [
+    "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
+    "android.hardware.security.secureclock.ISecureClock/default",
+    "android.hardware.security.sharedsecret.ISharedSecret/default",
+]
+user = "system"
+groups = ["system", "drmrpc"]
+
+[[service]]
+path = "/vendor/bin/hw/android.hardware.gatekeeper-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
+description = "/vendor/etc/vintf/manifest_sun.xml"
+user = "system"
+groups = ["system"]
+
+[[service]]
+path = "/odm/bin/hw/android.hardware.nqnfc-service.nxp"
+libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64"]
+ready_service = "android.hardware.nfc.INfc/default"
+description = "/odm/etc/vintf/manifest/manifest_nxp_nfc_ese.xml"
+user = "nfc"
+groups = ["nfc", "oem_2912"]
+
+# NFC's manifest alone does not supply an eSE implementation. The QTI
+# binary contains /eSE1 and libEseUtils handles /dev/nq-nci on this build.
+# Start with stock credentials; root fallback needs device-side evidence.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.secure_element-service.qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+ready_service = "android.hardware.secure_element.ISecureElement/eSE1"
+registers = [
+    "android.hardware.secure_element.ISecureElement/SIM1",
+    "android.hardware.secure_element.ISecureElement/SIM2",
+]
+user = "system"
+groups = ["nfc", "system"]
+
+# Stock ese_weaver.so imports OmapiTransport's vtable and death callback.
+# This is the generic standalone OMAPI service, not a Thales APDU bridge.
+[[service]]
+path = "/system/bin/se_omapi"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.se.omapi.ISecureElementService/default"
+user = "root"
+groups = ["root", "system"]
+
+[[service]]
+path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64"]
+ready_service = "android.hardware.weaver.IWeaver/default"
+description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.nxp.xml"
+user = "vendor_nxp_weaver"
+groups = ["vendor_nxp_weaver"]
+capabilities = ["WAKE_ALARM"]
+
+[[service]]
+path = "/vendor/bin/hw/android.hardware.boot-service.qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.boot.IBootControl/default"
+user = "root"
+groups = ["root"]
+
+# Stock init.target.rc writes this CNSS node at early-boot. The old device
+# log confirms Peach v2 and its dependencies load on the installed 305 system.
+[wlan]
+modules = ["rfkill", "qca_cld3_peach_v2"]
+writes = [{ path = "/sys/kernel/cnss/fs_ready", value = "1" }]
+firmware = [
+    { name = "wlan/qca_cld/peach_v2/WCNSS_qcom_cfg.ini", path = "/vendor/etc/wifi/peach_v2/WCNSS_qcom_cfg.ini" },
+]
+interface = "wlan0"
+supplicant = "/vendor/bin/hw/wpa_supplicant"
+libraries = ["/system/lib64", "/vendor/lib64"]
+service = "android.hardware.wifi.supplicant.ISupplicant/default"
+probe = "http://connect.rom.miui.com/generate_204"

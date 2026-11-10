@@ -1,0 +1,24 @@
+name: Miro source checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [miro]
+  pull_request:
+    branches: [miro]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Selected host tests
+        run: |
+          cargo test --locked -p skyward-config -p skyward-pack -p skyward-bootimg -p skyward-crypto -p skyward-net -p skyward-sys -p skyward-ui -p skyward-install -p skyward-backup -p skyward-files
+          cargo test --locked -p skyward --test commands --test qcom_haptics
+      - name: ARM64 release check
+        run: cargo ndk -t arm64-v8a --platform 30 clippy --locked --release -p skyward -- -D warnings

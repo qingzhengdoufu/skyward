@@ -162,6 +162,73 @@ fn main() -> Result<()> {
     }
 
     let info = haotian(&cfg);
+    if args.iter().any(|arg| arg == "--flash-tools") {
+        for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
+            for lang in [Lang::Hans, Lang::Hant, Lang::En] {
+                for dark in [false, true] {
+                    for (name, kind, partitions) in [
+                        ("logical", ImageKind::Filesystem, vec!["system", "system_ext", "vendor", "odm", "product", "vendor_dlkm", "odm_dlkm", "system_dlkm", "mi_ext"]),
+                        ("super", ImageKind::Super, vec!["super"]),
+                    ] {
+                        let mut app = App::new(Screen::Installing, w, h, dpi as f32 / 160.0);
+                        app.state.lang = lang;
+                        app.state.dark = dark;
+                        app.state.source = Source::File(Place::Storage);
+                        app.state.install = Install::Choosing(Choice { kind, size: 8 << 30, partitions, partition: 0, pick: Pick::Current });
+                        write_png(&out.join(format!("flash-{name}-{w}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                    }
+                    let mut app = App::new(Screen::Install, w, h, dpi as f32 / 160.0);
+                    app.state.lang = lang;
+                    app.state.dark = dark;
+                    app.state.recovery_partitions = true;
+                    write_png(&out.join(format!("install-{w}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                    let mut app = App::new(Screen::ImageBackup, w, h, dpi as f32 / 160.0);
+                    app.state.lang = lang;
+                    app.state.dark = dark;
+                    app.state.data = Data::Open;
+                    let mut parts = Vec::new();
+                    for name in ["boot", "init_boot", "vendor_boot", "dtbo", "recovery", "vbmeta", "vbmeta_system", "vbmeta_vendor"] {
+                        for suffix in ["_a", "_b"] { parts.push((format!("{name}{suffix}"), 100 << 20)); }
+                    }
+                    parts.push(("super".into(), 16 << 30));
+                    app.image_partitions_read(Ok(parts));
+                    app.state.image_partition = Some(16);
+                    write_png(&out.join(format!("image-backup-{w}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    if args.iter().any(|arg| arg == "--avb") {
+        use skyward_install::commands::avbctl::{Check, State};
+        for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
+            for lang in [Lang::Hans, Lang::Hant, Lang::En] {
+                for dark in [false, true] {
+                    for (name, flags, pending) in [("read", 0, None), ("disable", 0, Some((Check::Verification, true))), ("enable", 3, Some((Check::Verity, false)))] {
+                        let mut app = App::new(Screen::Avb, w, h, dpi as f32 / 160.0);
+                        app.state.lang = lang;
+                        app.state.dark = dark;
+                        app.avb_read(Ok(State { suffix: "_a".into(), flags, unlocked: true, digest: [0; 32] }), None);
+                        app.state.avb_pending = pending;
+                        write_png(&out.join(format!("avb-{w}-{}-{dark}-{name}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                    }
+                    let mut app = App::new(Screen::About, w, h, dpi as f32 / 160.0);
+                    app.state.lang = lang;
+                    app.state.dark = dark;
+                    app.frame(&fonts, &info);
+                    app.tick(0);
+                    for ms in (0..2000).step_by(16) {
+                        app.tick(ms);
+                    }
+                    app.tick(2000);
+                    let mut c = Canvas::new(w, h);
+                    app.compose(&mut c, &fonts, &info, CLOCK, 2000);
+                    write_png(&out.join(format!("about-{w}-{}-{dark}.png", lang.tag())), &c)?;
+                }
+            }
+        }
+        return Ok(());
+    }
     let pending = DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info.clone() };
     let pattern = Data::Locked { user: 0, keys: Keys::Pattern, checking: false };
     // Whole pages, the way a long screenshot shows them. The About page's

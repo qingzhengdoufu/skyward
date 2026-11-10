@@ -929,6 +929,8 @@ pub fn image_kind(l: Lang, kind: ImageKind) -> (&'static str, &'static str) {
         }
         ImageKind::Dtbo => (["dtbo 镜像", "dtbo 映像檔", "dtbo image"], ["包含设备树叠加层", "包含裝置樹疊加層", "Holds device tree overlays"]),
         ImageKind::Vbmeta => (["vbmeta 镜像", "vbmeta 映像檔", "vbmeta image"], ["包含启动验证数据", "包含啟動驗證資料", "Holds verified boot data"]),
+        ImageKind::Filesystem => (["文件系统镜像", "檔案系統映像檔", "Filesystem image"], ["写入所选逻辑分区", "寫入所選邏輯分割區", "Writes the selected logical partition"]),
+        ImageKind::Super => (["super 镜像", "super 映像檔", "Super image"], ["覆盖共享 super 分区", "覆寫共用 super 分割區", "Overwrites the shared super partition"]),
     };
     (l.pick(name), l.pick(holds))
 }

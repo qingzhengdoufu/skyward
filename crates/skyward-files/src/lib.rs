@@ -374,6 +374,15 @@ pub fn make_folders(path: &Path, ownership: Ownership) -> Result<()> {
     given(path, &give, true)
 }
 
+/// Create one new folder exclusively, inheriting the requested destination
+/// ownership. Unlike make_folders, an existing folder is always an error.
+pub fn make_new_folder(path: &Path, ownership: Ownership) -> Result<()> {
+    let parent = path.parent().context("a new folder needs a parent")?;
+    let give = give(parent, ownership)?;
+    fs::create_dir(path).with_context(|| format!("make new folder {}", path.display()))?;
+    given(path, &give, true)
+}
+
 /// Make the file `path`, which is not there yet, given what `ownership`
 /// says as a copy into its folder would be, and open it to be written.
 pub fn make_file(path: &Path, ownership: Ownership) -> Result<File> {

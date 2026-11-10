@@ -9,8 +9,10 @@ pub mod bcb;
 pub mod clock;
 pub mod control;
 pub mod cpu;
+pub mod remoteproc;
 #[cfg(target_os = "android")]
 pub mod sleep;
+pub mod touch;
 #[cfg(target_os = "android")]
 pub mod uevent;
 pub mod ueventd;

@@ -146,7 +146,12 @@ fn main() -> Result<()> {
                 anyhow::bail!("{} holds {}, which is not a stock recovery", stock.display(), e.name);
             }
             let read = |p: &PathBuf| std::fs::read(p).with_context(|| format!("read {}", p.display()));
-            skyward_config::DeviceConfig::load(&config)?;
+            let cfg = skyward_config::DeviceConfig::load(&config)?;
+            if cfg.device.codename == "miro" {
+                let name = "init.recovery.qcom.rc";
+                let rc = &rd.find(name).context("miro stock recovery has no init.recovery.qcom.rc")?.data;
+                rd.replace(name, without_adsp_restart(rc)?)?;
+            }
             rd.replace(paths::RECOVERY, read(&binary)?)?;
             // Install scripts look for the commands a stock recovery lacks
             // among its programs, and its unzip there too, a link to ziptool
@@ -277,6 +282,22 @@ fn partition_size(stock: &Path) -> Result<usize> {
 /// fill in from the installed system once it has that mounted.
 const BUILD_VERSION: [&str; 3] = ["ro.build.version.release", "ro.build.version.security_patch", "ro.vendor.build.security_patch"];
 
+/// The stock 303 init restarts ADSP before the recovery starts. Its SSR
+/// shutdown path can hang; Skyward checks the running state and uses boot=1
+/// only when necessary after making the firmware available.
+fn without_adsp_restart(rc: &[u8]) -> Result<Vec<u8>> {
+    let text = std::str::from_utf8(rc).context("the stock init script is not UTF-8")?;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let words: Vec<_> = line.split_whitespace().collect();
+        if words == ["wait", "/sys/kernel/boot_adsp/ssr"] || words == ["write", "/sys/kernel/boot_adsp/ssr", "1"] {
+            continue;
+        }
+        out.push_str(line);
+    }
+    Ok(out.into_bytes())
+}
+
 /// The scheduling profiles a recovery's programs look up by name. A
 /// recovery's cgroup setup mounts no controllers, so of all a system's
 /// profiles do, only the timer slack applies here.
@@ -384,6 +405,14 @@ fn list(image: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn miro_leaves_other_init_actions_and_safe_adsp_boot_untouched() {
+        let rc = b"on fs\n    wait /sys/kernel/boot_adsp/ssr\n    write /sys/kernel/boot_adsp/ssr 1\n    write /sys/kernel/boot_adsp/boot 1\n    wait /sys/class/power_supply/battery\n";
+        let expected = b"on fs\n    write /sys/kernel/boot_adsp/boot 1\n    wait /sys/class/power_supply/battery\n";
+        assert_eq!(without_adsp_restart(rc).unwrap(), expected);
+        assert_eq!(without_adsp_restart(expected).unwrap(), expected);
+    }
 
     #[test]
     fn the_lines_that_set_a_name_are_the_only_ones_left_out() {

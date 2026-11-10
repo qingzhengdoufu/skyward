@@ -341,7 +341,7 @@ impl Station {
     }
 
     fn start(&self) -> Result<Running> {
-        bring_up(&self.cfg, &self.modules)?;
+        let mac = bring_up(&self.cfg, &self.modules)?;
         let mut child = start_supplicant(&self.cfg, self.libraries.as_deref())?;
         let socket = Path::new(HOME).join("sockets").join(&self.cfg.interface);
         let connected = (|| -> Result<(Control, Control)> {
@@ -358,7 +358,7 @@ impl Station {
                 return Err(e);
             }
         };
-        let mac = iface::hardware_address(&self.cfg.interface)?;
+        let _ = skyward_sys::kmsg("WLAN: supplicant control socket answers; requesting a scan");
         Ok(Running {
             child,
             control,
@@ -439,6 +439,7 @@ impl Station {
             found.extend(page);
         }
         self.state.networks = wlan::networks(&found);
+        let _ = skyward_sys::kmsg(&format!("WLAN: scan returned {} access points", found.len()));
         r.found = found;
         Ok(())
     }
@@ -667,17 +668,24 @@ impl Station {
 
 /// Load the driver where its interface is not there yet, and bring the
 /// interface up.
-fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
+fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<[u8; 6]> {
     let net = Path::new("/sys/class/net").join(&cfg.interface);
     if !net.exists() {
         for file in &cfg.firmware {
             place(file)?;
+            let _ = skyward_sys::kmsg(&format!("WLAN: firmware configuration {} is in place", file.name));
         }
         for path in skyward_modules::load(modules, &cfg.modules)? {
-            skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
+            let _ = skyward_sys::kmsg(&format!("loaded {}", path.display()));
         }
         for w in &cfg.writes {
+            // Stock init waits up to one second for CNSS to publish its node.
+            let until = Instant::now() + Duration::from_secs(1);
+            while !Path::new(&w.path).exists() && Instant::now() < until {
+                thread::sleep(Duration::from_millis(50));
+            }
             fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
+            let _ = skyward_sys::kmsg(&format!("WLAN: wrote {} to {}", w.value, w.path));
         }
         let until = Instant::now() + INTERFACE_WAIT;
         while !net.exists() {
@@ -685,7 +693,9 @@ fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
             thread::sleep(Duration::from_millis(100));
         }
     }
-    iface::set_up(&cfg.interface, true)
+    let mac = iface::ready(&cfg.interface, INTERFACE_WAIT)?;
+    let _ = skyward_sys::kmsg(&format!("WLAN: {} is up", cfg.interface));
+    Ok(mac)
 }
 
 /// Put a file the driver asks for where the firmware loader looks.
@@ -758,6 +768,13 @@ fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
     if let Some(dir) = libraries {
         path.push(dir.to_string_lossy().into_owned());
     }
+    let errors = match fs::OpenOptions::new().append(true).open(skyward_sys::LOG) {
+        Ok(file) => Stdio::from(file),
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("WLAN: cannot retain supplicant stderr: {e}"));
+            Stdio::inherit()
+        }
+    };
     let mut child = Process::new(&cfg.supplicant)
         .args(["-i", &cfg.interface, "-D", "nl80211", "-c"])
         .arg(&settings)
@@ -765,7 +782,9 @@ fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
         .current_dir("/")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // Keep loader/startup errors in recovery.log; do not enable -d/-K
+        // or dump control commands containing network credentials.
+        .stderr(errors)
         .spawn()
         .with_context(|| format!("start {}", cfg.supplicant))?;
     let until = Instant::now() + SOCKET_WAIT;

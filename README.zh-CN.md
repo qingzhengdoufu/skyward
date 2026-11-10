@@ -1,3 +1,26 @@
+# Skyward for REDMI K80 Pro (miro)
+
+[English](README.md) | [构建与状态说明](docs/MIRO.md)
+
+本仓库是 [kirklin/skyward](https://github.com/kirklin/skyward) 的非官方 K80 Pro
+适配分支，基于 [Rinrroy/skyward-for-haotian](https://github.com/Rinrroy/skyward-for-haotian)
+的 `d6e7b7aefcba123bf0ef15252e954e45a6de747f` 提交继续开发。保留原作者提交历史、
+署名及 GPL-3.0 许可证，不代表上游官方支持。
+
+`miro` 为本机适配分支，`main` 保留用于跟踪上游。同步上游不等于本机适配已通过验证。
+
+当前真机候选版为 **test11**：以本机 OS3.0.303 原厂 recovery 为基础，在 OS3.0.305
+（Android 16）测试。已观察到密码解密、常亮黑帧兼容触摸唤醒、USB 充电、震动和
+Wi-Fi 扫描正常。真实 ROM 刷写、自动 AVB 修改和 raw 镜像导出尚待真机验证；真正
+关闭面板后的触摸恢复未修复，快充及本仓库的签名在线更新渠道尚未完成。
+
+请先阅读 [K80 Pro 构建说明与限制](docs/MIRO.md)。仓库不包含原厂固件、手机日志、
+凭据数据或私人签名密钥。
+
+下方是保留的原小米 15 Pro 分支文档，其中的功能描述不代表均已在 K80 Pro 验证。
+
+---
+
 ![Skyward Recovery](assets/hero.jpg)
 
 # Skyward for Xiaomi 15 Pro

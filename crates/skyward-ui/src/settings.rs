@@ -45,6 +45,7 @@ pub struct Settings {
     /// The time zone, by its name in the tz database.
     pub time_zone: String,
     pub vibrate: bool,
+    pub double_tap: bool,
     /// The vibration slider's place, from 0 at its left end to 1.
     pub vibration: f32,
     /// A computer connected over USB is offered internal storage.
@@ -63,6 +64,7 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Install {
+    pub disable_avb: bool,
     /// A zip's install script runs only if the zip was signed with one of
     /// the phone's update keys.
     pub check_signature: bool,
@@ -129,10 +131,11 @@ impl Settings {
             screen_off: SCREEN_OFF[state.screen_off].map_or(0, |ms| ms / 1000),
             time_zone: TIME_ZONES[state.time_zone].2.to_string(),
             vibrate: state.vibrate,
+            double_tap: state.double_tap,
             vibration: state.vibration,
             file_transfer: state.file_transfer,
             always_on: state.always_on,
-            install: Install { check_signature: state.check_signature, keep_recovery: state.keep_recovery },
+            install: Install { check_signature: state.check_signature, keep_recovery: state.keep_recovery, disable_avb: state.disable_avb },
             backup: Backup {
                 parts: names(&state.backup, &PARTS),
                 to: match state.backup_to {
@@ -186,6 +189,7 @@ impl Settings {
             state.time_zone = at;
         }
         state.vibrate = self.vibrate;
+        state.double_tap = self.double_tap;
         if (0.0..=1.0).contains(&self.vibration) {
             state.vibration = self.vibration;
         }
@@ -193,6 +197,7 @@ impl Settings {
         state.always_on = self.always_on;
         state.check_signature = self.install.check_signature;
         state.keep_recovery = self.install.keep_recovery;
+        state.disable_avb = self.install.disable_avb;
         state.backup = picked(&self.backup.parts, &PARTS);
         match self.backup.to.as_str() {
             STORAGE => state.backup_to = Place::Storage,
@@ -313,11 +318,13 @@ mod tests {
             screen_off: 6,
             time_zone: 7,
             vibrate: false,
+            double_tap: false,
             vibration: 0.4,
             file_transfer: false,
             always_on: true,
             check_signature: true,
             keep_recovery: false,
+            disable_avb: true,
             backup: [false, true, true, false],
             backup_to: Place::UsbDrive,
             compress: true,
@@ -332,6 +339,7 @@ mod tests {
         assert_eq!(Settings::of(&back), Settings::of(&state));
         assert_eq!((back.lang, back.screen_off, back.time_zone), (Lang::En, 6, 7));
         assert!(back.always_on, "a face turned on is still on at the next start");
+        assert!(!back.double_tap, "the disabled double-tap setting survives a restart");
         // The value carried is the one a start does not have of itself, so
         // what comes back proves the file rather than the default. The
         // default is the other half of the same question: a phone flashed and
@@ -363,6 +371,7 @@ mod tests {
         assert!(state.dark && state.compress);
         assert_eq!(Settings::of(&state), Settings { dark: true, backup: Backup { compress: true, ..Backup::default() }, ..Settings::default() });
         assert!(!state.language_chosen);
+        assert!(state.double_tap, "old settings retain the previous enabled default");
         assert!(Settings::read("dark = true").is_err(), "not JSON");
     }
 

@@ -7,10 +7,12 @@
 //! and how it ends are what those scripts read.
 
 use super::Io;
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::os::unix::fs::OpenOptionsExt;
 
 /// How avbctl ends, numbered as sysexits.h numbers them.
 const DONE: i32 = 0;
@@ -52,8 +54,8 @@ whose vbmeta image has been changed. Run with --force to change it all the same.
 ";
 
 /// What avbctl turns on and off.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Check {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Check {
     Verity,
     Verification,
 }
@@ -73,6 +75,119 @@ impl Check {
             Check::Verification => 1 << 1,
         }
     }
+}
+
+/// A fresh reading of the current slot, not a saved UI preference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct State {
+    pub suffix: String,
+    pub flags: u32,
+    pub unlocked: bool,
+    pub digest: [u8; 32],
+}
+
+impl State {
+    pub fn disabled(&self, check: Check) -> bool {
+        self.flags & check.off() != 0
+    }
+}
+
+fn current_phone() -> io::Result<(String, bool)> {
+    let suffix = skyward_sys::prop("ro.boot.slot_suffix").unwrap_or_default();
+    if !matches!(suffix.as_str(), "_a" | "_b") {
+        return Err(io::Error::other("the current A/B slot is unknown"));
+    }
+    let unlocked = skyward_sys::prop("ro.boot.vbmeta.device_state").as_deref() == Some("unlocked");
+    Ok((suffix, unlocked))
+}
+
+/// The graphical tool deliberately requires a dedicated vbmeta partition.
+pub fn current() -> io::Result<State> {
+    let (suffix, unlocked) = current_phone()?;
+    read_state(Path::new(skyward_block::BY_NAME), &suffix, unlocked)
+}
+
+/// Post-install operation for the explicitly selected slot, never a boot
+/// partition fallback. Both flags share one backup and one verified write.
+pub fn disable_slot(slot: skyward_vab::Slot) -> io::Result<Option<PathBuf>> {
+    let (_, unlocked) = current_phone()?;
+    let expected = read_state(Path::new(skyward_block::BY_NAME), slot.suffix(), unlocked)?;
+    if !unlocked {
+        return Err(io::Error::other("an explicitly unlocked bootloader is required"));
+    }
+    if expected.flags & 3 == 3 {
+        return Ok(None);
+    }
+    change_flags_at(Path::new(skyward_block::BY_NAME), Path::new("/tmp"), &expected, unlocked, expected.flags | 3).map(|(_, backup)| Some(backup))
+}
+
+fn read_state(by_name: &Path, suffix: &str, unlocked: bool) -> io::Result<State> {
+    if !matches!(suffix, "_a" | "_b") {
+        return Err(io::Error::other("invalid A/B slot"));
+    }
+    let path = by_name.join(format!("vbmeta{suffix}"));
+    let mut file = File::open(&path)?;
+    let bytes = read_vbmeta(&mut file)?;
+    Ok(State { suffix: suffix.into(), flags: flags(bytes[..HEADER_LEN].try_into().expect("validated header")), unlocked, digest: Sha256::digest(&bytes).into() })
+}
+
+fn read_vbmeta(file: &mut File) -> io::Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = Vec::new();
+    Read::by_ref(file).take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() < HEADER_LEN || bytes.len() > 16 * 1024 * 1024 || !bytes.starts_with(MAGIC) {
+        return Err(io::Error::other("invalid or oversized vbmeta partition"));
+    }
+    Ok(bytes)
+}
+
+/// Change one flag only after the displayed state is confirmed again.
+pub fn change(expected: &State, check: Check, disabled: bool) -> io::Result<(State, PathBuf)> {
+    let (suffix, unlocked) = current_phone()?;
+    if suffix != expected.suffix {
+        return Err(io::Error::other("the current slot changed; read it again"));
+    }
+    change_at(Path::new(skyward_block::BY_NAME), Path::new("/tmp"), expected, unlocked, check, disabled)
+}
+
+fn change_at(by_name: &Path, backups: &Path, expected: &State, unlocked: bool, check: Check, disabled: bool) -> io::Result<(State, PathBuf)> {
+    let wanted = if disabled { expected.flags | check.off() } else { expected.flags & !check.off() };
+    change_flags_at(by_name, backups, expected, unlocked, wanted)
+}
+
+fn change_flags_at(by_name: &Path, backups: &Path, expected: &State, unlocked: bool, wanted: u32) -> io::Result<(State, PathBuf)> {
+    let before = read_state(by_name, &expected.suffix, unlocked)?;
+    if !before.unlocked || !expected.unlocked {
+        return Err(io::Error::other("an explicitly unlocked bootloader is required"));
+    }
+    if before != *expected {
+        return Err(io::Error::other("vbmeta changed; read and confirm it again"));
+    }
+    let path = by_name.join(format!("vbmeta{}", before.suffix));
+    let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
+    // Bound the backup even for a corrupt partition mapping. Never back up data.
+    let original = read_vbmeta(&mut file)?;
+    if <[u8; 32]>::from(Sha256::digest(&original)) != before.digest {
+        return Err(io::Error::other("vbmeta cannot be backed up consistently"));
+    }
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(io::Error::other)?.as_nanos();
+    let backup = backups.join(format!("skyward-vbmeta{}-{stamp}.img", before.suffix));
+    let mut saved = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&backup)?;
+    saved.write_all(&original)?;
+    saved.sync_all()?;
+    let mut wanted_bytes = original;
+    wanted_bytes[FLAGS_AT..FLAGS_AT + 4].copy_from_slice(&wanted.to_be_bytes());
+    let write = (|| -> io::Result<()> {
+        file.seek(SeekFrom::Start(FLAGS_AT as u64))?;
+        file.write_all(&wanted.to_be_bytes())?;
+        file.sync_all()?;
+        if read_vbmeta(&mut file)? != wanted_bytes {
+            return Err(io::Error::other("vbmeta read-back did not match"));
+        }
+        Ok(())
+    })();
+    write.map_err(|e| io::Error::other(format!("{e}; pre-change backup: {}", backup.display())))?;
+    Ok((State { flags: wanted, digest: Sha256::digest(&wanted_bytes).into(), ..before }, backup))
 }
 
 /// What avbctl is asked: whether a check is on, or to turn it on or off.
@@ -240,6 +355,63 @@ mod tests {
         let (mut output, mut errors) = (Vec::new(), Vec::new());
         let code = avbctl(&args, &mut Io { input: &mut io::empty(), output: &mut output, errors: &mut errors }, phone);
         (code, String::from_utf8(output).unwrap(), String::from_utf8(errors).unwrap())
+    }
+
+    #[test]
+    fn graphical_change_backs_up_and_changes_only_the_confirmed_flag_in_one_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = vbmeta(0x80);
+        let a = dir.path().join("vbmeta_a");
+        let b = dir.path().join("vbmeta_b");
+        fs::write(&a, &original).unwrap();
+        fs::write(&b, &original).unwrap();
+        let state = read_state(dir.path(), "_a", true).unwrap();
+        let (after, backup) = change_at(dir.path(), dir.path(), &state, true, Check::Verification, true).unwrap();
+        assert_eq!(fs::read(backup).unwrap(), original);
+        assert_eq!(fs::read(&a).unwrap(), vbmeta(0x82));
+        assert_eq!(fs::read(&b).unwrap(), original);
+        assert_eq!(read_state(dir.path(), "_a", true).unwrap(), after);
+        let (enabled, _) = change_at(dir.path(), dir.path(), &after, true, Check::Verification, false).unwrap();
+        assert_eq!(enabled, state);
+        assert_eq!(fs::read(&a).unwrap(), original);
+    }
+
+    #[test]
+    fn post_install_disables_both_checks_preserves_other_flags_and_backs_up_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = vbmeta(0x80);
+        fs::write(dir.path().join("vbmeta_a"), &original).unwrap();
+        fs::write(dir.path().join("vbmeta_b"), &original).unwrap();
+        let state = read_state(dir.path(), "_b", true).unwrap();
+        let (after, backup) = change_flags_at(dir.path(), dir.path(), &state, true, state.flags | 3).unwrap();
+        assert!(after.disabled(Check::Verification));
+        assert!(after.disabled(Check::Verity));
+        assert_eq!(after.flags, 0x83);
+        assert_eq!(fs::read(backup).unwrap(), original);
+        assert_eq!(fs::read(dir.path().join("vbmeta_a")).unwrap(), original);
+        assert_eq!(fs::read(dir.path().join("vbmeta_b")).unwrap(), vbmeta(0x83));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3, "one backup for both flags");
+    }
+
+    #[test]
+    fn graphical_change_refuses_locked_stale_unknown_and_unbacked_up_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("vbmeta_a");
+        fs::write(&a, vbmeta(0)).unwrap();
+        let state = read_state(dir.path(), "_a", true).unwrap();
+        assert!(change_at(dir.path(), dir.path(), &state, false, Check::Verity, true).is_err());
+        assert!(change_at(dir.path(), &dir.path().join("absent"), &state, true, Check::Verity, true).is_err());
+        assert_eq!(fs::read(&a).unwrap(), vbmeta(0));
+        // Same flags, different signed bytes: the old confirmation must not apply.
+        let mut changed = vbmeta(0);
+        changed[256] ^= 1;
+        fs::write(&a, &changed).unwrap();
+        assert!(change_at(dir.path(), dir.path(), &state, true, Check::Verity, true).is_err());
+        assert_eq!(fs::read(&a).unwrap(), changed);
+        assert!(read_state(dir.path(), "", true).is_err());
+        assert!(read_state(dir.path(), "../../vbmeta_a", true).is_err());
+        fs::write(&a, b"not a vbmeta image").unwrap();
+        assert!(read_state(dir.path(), "_a", true).is_err());
     }
 
     #[test]

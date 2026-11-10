@@ -26,8 +26,8 @@ pub mod ramdisk {
     /// stock recovery does not carry, and unzip, whose stock version holds
     /// all that `-p` takes out in memory. Each is a link to the recovery
     /// service binary beside it, which runs the command it is started as.
-    pub const COMMANDS: [&str; 5] =
-        ["system/bin/7za", "system/bin/avbctl", "system/bin/resetprop", "system/bin/unzip", "system/bin/zstd"];
+    pub const COMMANDS: [&str; 6] =
+        ["system/bin/7za", "system/bin/avbctl", "system/bin/resetprop", "system/bin/unzip", "system/bin/zstd", "system/bin/simg2img"];
     /// The first property file init loads in recovery mode.
     pub const PROP_DEFAULT: &str = "prop.default";
     /// The scheduling profiles libprocessgroup reads.
@@ -151,6 +151,17 @@ pub struct Write {
 pub struct FirmwarePartition {
     /// The partition's name, without the slot it is of.
     pub partition: String,
+    /// How an offline ADSP is started after its firmware becomes available.
+    #[serde(default)]
+    pub adsp_boot: AdspBoot,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdspBoot {
+    #[default]
+    Loader,
+    Remoteproc,
 }
 
 /// A file a driver asks the firmware loader for, and where it is.
@@ -211,6 +222,9 @@ const DATA: &str = "/data";
 /// and the ticks of the screen going off by the power key, made too.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Haptics {
+    /// Select the driver's effect ABI; existing devices retain periodic effects.
+    #[serde(default)]
+    pub effect: HapticEffect,
     /// The driver's number for a click waveform it keeps, on phones whose
     /// driver plays the waveforms it keeps.
     #[serde(default)]
@@ -234,6 +248,16 @@ pub struct Haptics {
     #[serde(default)]
     pub firmware: Vec<Firmware>,
     pub strength: Strength,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HapticEffect {
+    #[default]
+    Periodic,
+    Constant,
+    /// Qualcomm HV stored waveform: six-byte ID/seconds/milliseconds packet.
+    QcomWaveform,
 }
 
 /// The panel's own doze: what the display driver is told to keep a little of
@@ -400,6 +424,16 @@ impl Default for Modules {
 /// something before a recovery can read touches from it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Touch {
+    /// Diagnostic compatibility mode: keep scanout active behind a black
+    /// frame instead of resting the panel and its touch controller. This
+    /// also prevents suspend; it is not hardware gesture wake support.
+    #[serde(default)]
+    pub keep_panel_on: bool,
+    /// Experimental Xiaomi touch v2 gesture ABI, verified on miro's stock
+    /// driver. Permit real panel-off only after configuration/readback;
+    /// keep the CPU awake until gesture wake has been tested on hardware.
+    #[serde(default)]
+    pub xiaomi_v2_gesture: bool,
     /// What is written once the touchscreen's input device has appeared,
     /// each value to its file: the driver makes that device as the last
     /// step of starting the controller.
@@ -668,6 +702,9 @@ impl DeviceConfig {
             ensure!(!aod.leave_cmds.is_empty(), "[aod] leave_cmds names no command set that brings the panel back out");
         }
         if let Some(haptics) = &cfg.haptics {
+            if haptics.effect == HapticEffect::QcomWaveform {
+                ensure!(haptics.click.is_some_and(|id| id >= 0), "[haptics] qcom_waveform requires a nonnegative click ID");
+            }
             // A click is either a waveform the driver keeps or one made at
             // the motor's own frequency, and a phone may name the frequency
             // beside a kept waveform too, for the ticks the screen going off
@@ -777,8 +814,71 @@ mod tests {
         assert_eq!(cfg.device.os_version_prop, "ro.build.display.id");
         assert_eq!(cfg.modules.sources, default_module_sources());
         assert!(cfg.modules.load.is_empty());
+        assert!(!cfg.touch.keep_panel_on);
+        assert!(!cfg.touch.xiaomi_v2_gesture);
         assert_eq!((cfg.firmware, cfg.wlan, cfg.update), (None, None, None), "a phone may have none of them");
         assert_eq!(cfg.logd, None, "a recovery's own logd usually has all it needs");
+    }
+
+    #[test]
+    fn miro_names_its_mobile_platform_for_display() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        let soc = cfg.device.soc.expect("miro names its SoC");
+        assert_eq!(soc.hans, "骁龙8至尊版移动平台");
+        assert_eq!(soc.hant, "驍龍8至尊版行動平台");
+        assert_eq!(soc.en, "Snapdragon 8 Elite Mobile Platform");
+    }
+
+    #[test]
+    fn miro_waits_for_the_secure_element_before_omapi_and_weaver() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        assert_eq!(cfg.device.codename, "miro");
+        assert!(cfg.touch.keep_panel_on);
+        assert!(!cfg.touch.xiaomi_v2_gesture, "failed hardware wake experiment stays disabled");
+        assert!(cfg.touch.double_tap);
+        let position = |suffix: &str| cfg.services.iter().position(|s| s.path.ends_with(suffix)).unwrap();
+        let ese = position("android.hardware.secure_element-service.qti");
+        let omapi = position("se_omapi");
+        let weaver = position("android.hardware.weaver-service.nxp-qti");
+        assert!(position("ssgtzd") < ese && ese < omapi && omapi < weaver);
+        assert_eq!(cfg.services[ese].ready_service.as_deref(), Some("android.hardware.secure_element.ISecureElement/eSE1"));
+        assert_eq!(cfg.services[weaver].user.as_deref(), Some("vendor_nxp_weaver"));
+    }
+
+    #[test]
+    fn miro_uses_its_stock_cnss_node_and_peach_v2_configuration() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        let wlan = cfg.wlan.expect("miro offers WLAN");
+        assert_eq!(wlan.modules, ["rfkill", "qca_cld3_peach_v2"]);
+        assert_eq!(wlan.writes, [Write { path: "/sys/kernel/cnss/fs_ready".into(), value: "1".into() }]);
+        assert_eq!(wlan.firmware.len(), 1);
+        assert_eq!(wlan.firmware[0].name, "wlan/qca_cld/peach_v2/WCNSS_qcom_cfg.ini");
+        assert_eq!(wlan.firmware[0].path, "/vendor/etc/wifi/peach_v2/WCNSS_qcom_cfg.ini");
+        assert_eq!(wlan.firmware[0].partition, None, "do not invent a persist calibration file");
+        assert_eq!(wlan.interface, "wlan0");
+        assert_eq!(wlan.supplicant, "/vendor/bin/hw/wpa_supplicant");
+        assert_eq!(wlan.libraries, ["/system/lib64", "/vendor/lib64"]);
+    }
+
+    #[test]
+    fn miro_starts_only_an_offline_adsp_through_remoteproc() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        assert_eq!(cfg.firmware.unwrap().adsp_boot, AdspBoot::Remoteproc);
+        let cfg = DeviceConfig::parse("[device]\ncodename = 'x'\n[firmware]\npartition = 'modem'\n").unwrap();
+        assert_eq!(cfg.firmware.unwrap().adsp_boot, AdspBoot::Loader);
+        assert!(DeviceConfig::parse("[device]\ncodename = 'x'\n[firmware]\npartition = 'modem'\nadsp_boot = 'restart'\n").is_err());
+    }
+
+    #[test]
+    fn miro_uses_its_stock_waveform_and_the_explicit_stock_weaver_manifest() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        let h = cfg.haptics.unwrap();
+        assert_eq!(h.effect, HapticEffect::QcomWaveform);
+        assert_eq!(h.strength, Strength { lightest: 0.1, strongest: 0.4 });
+        assert_eq!(h.click, Some(0));
+        assert!(h.firmware.is_empty() && h.modules.is_empty());
+        let weaver = cfg.services.iter().find(|s| s.path.ends_with("android.hardware.weaver-service.nxp-qti")).unwrap();
+        assert_eq!(weaver.description.as_deref(), Some("/odm/etc/vintf/manifest/android.hardware.weaver-service.nxp.xml"));
     }
 
     #[test]
@@ -816,6 +916,16 @@ mod tests {
             let s = format!("{resonance}\nstrength = {{ lightest = {lightest:?}, strongest = {strongest:?} }}");
             assert!(with(&s).is_err(), "{lightest} to {strongest} is refused");
         }
+    }
+
+    #[test]
+    fn qcom_waveforms_require_an_explicit_nonnegative_id() {
+        let with = |body: &str| DeviceConfig::parse(&format!("[device]\ncodename = 'x'\n[haptics]\neffect = 'qcom_waveform'\nstrength = {{ lightest = 0.1, strongest = 0.4 }}\n{body}\n"));
+        assert!(with("click = 0").is_ok());
+        assert!(with("").is_err());
+        assert!(with("click = -1").is_err());
+        let legacy = DeviceConfig::parse("[device]\ncodename = 'x'\n[haptics]\nstrength = { lightest = 0.1, strongest = 0.4 }\n").unwrap();
+        assert_eq!(legacy.haptics.unwrap().effect, HapticEffect::Periodic);
     }
 
     #[test]
@@ -890,7 +1000,7 @@ mod tests {
             "its controller reports positions itself"
         );
         assert!(cfg.touch.double_tap, "two taps light its dark panel, as the phone's own system's do");
-        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into() }));
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), adsp_boot: AdspBoot::Loader }));
         assert_eq!(cfg.partitions.mounted, ["persist"], "the secure world keeps its own files there");
         // The programs the credential chain runs, in the order they start:
         // the TEE's listener, its mink daemon, the loader, then the key,
@@ -1089,7 +1199,7 @@ mod tests {
             touch_owners.paths.iter().any(|p| p == "/dev/xiaomi-touch"),
             "the touch layer's node, which the panel reports positions through"
         );
-        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into() }), "the modem partition holds the firmware");
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), adsp_boot: AdspBoot::Loader }), "the modem partition holds the firmware");
         // The programs the recovery starts, in the order it starts them: the
         // phone's own settings made once, then the TEE's listener, its mink
         // daemon, the loader, the key and credential services, the secure

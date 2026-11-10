@@ -15,3 +15,12 @@ NOTES.md
 TODO.md
 *.draft.md
 notes/
+out/
+stock/
+audit/
+preserved/
+toolchains/
+*.log
+*.img
+*.tar.gz
+*.sha256

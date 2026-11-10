@@ -4,6 +4,26 @@
 
 use std::time::Duration;
 
+/// Traditional recovery scripts also invoke tools by absolute /sbin paths.
+/// Keep any existing vendor tool, and add aliases only where none exists.
+pub fn tool_links(sbin: &std::path::Path, system_bin: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::io::ErrorKind;
+    std::fs::create_dir_all(sbin).context("create the script tools directory")?;
+    for tool in skyward_config::ramdisk::COMMANDS {
+        let name = std::path::Path::new(tool).file_name().expect("a command has a name");
+        let link = sbin.join(name);
+        match std::fs::symlink_metadata(&link) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("inspect {}", link.display())),
+        }
+        std::os::unix::fs::symlink(system_bin.join(name), &link)
+            .with_context(|| format!("link the script tool {}", link.display()))?;
+    }
+    Ok(())
+}
+
 /// What a line the script wrote asks for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -103,6 +123,21 @@ impl Bar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_sbin_tools_are_linked_idempotently_without_replacing_vendor_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sbin = dir.path().join("sbin");
+        let system = dir.path().join("system/bin");
+        std::fs::create_dir_all(&sbin).unwrap();
+        std::fs::write(sbin.join("avbctl"), b"vendor tool").unwrap();
+        tool_links(&sbin, &system).unwrap();
+        tool_links(&sbin, &system).unwrap();
+        assert_eq!(std::fs::read(sbin.join("avbctl")).unwrap(), b"vendor tool");
+        for tool in ["7za", "unzip", "zstd", "simg2img", "resetprop"] {
+            assert_eq!(std::fs::read_link(sbin.join(tool)).unwrap(), system.join(tool));
+        }
+    }
 
     #[test]
     fn requests_read_as_android_s_recovery_reads_them() {

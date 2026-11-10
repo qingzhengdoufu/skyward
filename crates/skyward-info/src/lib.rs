@@ -15,7 +15,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Who made this build, shown beside its version on the About page's list of
 /// everything the recovery can read.
-pub const BUILT_BY: &str = "澪洛依";
+pub const BUILT_BY: &str = "澪洛依 & 红烧豆腐";
 
 const CPU: &str = "/sys/devices/system/cpu";
 const POWER_SUPPLY: &str = "/sys/class/power_supply";

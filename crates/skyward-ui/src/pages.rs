@@ -76,10 +76,12 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::ScreenOff => screen_off(cx),
         Screen::Search => search(cx),
         Screen::Backup => backup(cx),
+        Screen::ImageBackup => image_backup(cx),
         Screen::Restore => restore(cx),
         Screen::RestoreBackup => restore_backup(cx),
         Screen::BackupJob => backup_job(cx),
         Screen::Advanced => advanced(cx),
+        Screen::Avb => avb(cx),
         Screen::Files => files(cx),
         Screen::FileInfo => file_info(cx),
         Screen::Permissions => permissions(cx),
@@ -117,6 +119,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
 pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
     const INSTALL: Text = ["滑动以安装", "滑動以安裝", "Slide to install"];
     let (label, danger) = match which {
+        Confirm::Avb => (["滑动以修改 vbmeta", "滑動以修改 vbmeta", "Slide to change vbmeta"], true),
         Confirm::Filesystem => match s.fs_action {
             FsAction::Repair => (["滑动以修复", "滑動以修復", "Slide to repair"], true),
             FsAction::Remake(_) => (["滑动以更换", "滑動以更換", "Slide to change"], true),
@@ -125,6 +128,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::Wipe => (["滑动以清除", "滑動以清除", "Slide to wipe"], true),
         Confirm::Flash => (["滑动以刷入", "滑動以刷入", "Slide to flash"], true),
         Confirm::Backup => (["滑动以备份", "滑動以備份", "Slide to back up"], false),
+        Confirm::ImageBackup => (["滑动以导出镜像", "滑動以匯出映像檔", "Slide to export image"], false),
         Confirm::Restore => (["滑动以恢复", "滑動以還原", "Slide to restore"], true),
         Confirm::Slot => (["滑动以切换", "滑動以切換", "Slide to switch"], true),
         Confirm::FactoryReset => (["滑动以恢复出厂设置", "滑動以恢復原廠設定", "Slide to factory reset"], true),
@@ -387,7 +391,15 @@ pub fn settings(cx: &Ctx) -> Frame {
     if let Some(r) = slider.below {
         out.push(Hit { rect: r, action: Action::Open(Screen::ScreenOff) });
     }
-    y = widgets::section(&mut c, t, f, slider.bottom, l.pick(["振动", "震動", "Vibration"]));
+    let mut after_brightness = slider.bottom;
+    if s.double_tap_supported {
+        let wake = widgets::list(&mut c, t, f, after_brightness, &[
+            Row::new(l.pick(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"])).trail(Trail::Switch(s.double_tap)),
+        ]);
+        out.extend(hits(&wake.rows, &[Action::Toggle(Switch::DoubleTap)]));
+        after_brightness = wake.bottom;
+    }
+    y = widgets::section(&mut c, t, f, after_brightness, l.pick(["振动", "震動", "Vibration"]));
     let below = Row::new(l.pick(["触摸振动", "觸控震動", "Touch vibration"])).trail(Trail::Switch(s.vibrate));
     let vibration = widgets::slider_card(&mut c, t, f, y, Caption::Vibrate, l.pick(["振动强度", "震動強度", "Vibration intensity"]), s.vibration, Some(below));
     out.push(Hit { rect: vibration.track, action: Action::Slider(Slider::Vibration) });
@@ -556,7 +568,7 @@ pub fn mount(cx: &Ctx) -> Frame {
 }
 
 /// Who made the recovery, as the About page names them under its version.
-const AUTHOR: &str = "© 2026 Kirk Lin & 澪洛依";
+const AUTHOR: &str = "© 2026 Kirk Lin & 澪洛依 & 红烧豆腐";
 
 /// About this device, modelled on the stock「我的设备」: the wordmark, the
 /// version and its author over a moving colour field, and the summary,
@@ -1029,12 +1041,23 @@ pub fn install(cx: &Ctx) -> Frame {
         ],
     });
     let y = widgets::footnote(&mut c, t, f, methods.bottom, what);
+    let y = widgets::section(&mut c, t, f, y, l.pick(["镜像", "映像檔", "Images"]));
+    let image = Row::new(l.pick(["刷入分区镜像", "刷入分割區映像檔", "Flash partition image"]))
+        .icon(ORANGE, Icon::Install)
+        .subtitle(l.pick(["super、system、vendor、boot、recovery", "super、system、vendor、boot、recovery", "super, system, vendor, boot, recovery"]));
+    let images = widgets::list(&mut c, t, f, y, &[image]);
+    out.extend(hits(&images.rows, &[from_storage]));
+    let y = images.bottom;
     let y = widgets::section(&mut c, t, f, y, l.pick(["选项", "選項", "Options"]));
     let check = Row::new(l.pick(["验证刷机包签名", "驗證刷機包簽章", "Verify zip signatures"])).trail(Trail::Switch(cx.state.check_signature));
     let signature = widgets::list(&mut c, t, f, y, &[check]);
     out.extend(hits(&signature.rows, &[Action::Toggle(Switch::Signature)]));
     let note = l.pick(["开启后，仅安装带有本机官方签名的刷机包。", "開啟後，僅安裝帶有本機官方簽章的刷機包。", "When on, only zips signed with this phone's official keys install."]);
     let mut y = widgets::footnote(&mut c, t, f, signature.bottom, note);
+    let row = Row::new(l.pick(["刷入 ROM 后自动禁用 AVB", "刷入 ROM 後自動停用 AVB", "Disable AVB automatically after installing a ROM"])).trail(Trail::Switch(cx.state.disable_avb));
+    let avb = widgets::list(&mut c, t, f, y + t.m.card_gap, &[row]);
+    out.extend(hits(&avb.rows, &[Action::Toggle(Switch::DisableAvb)]));
+    y = widgets::footnote(&mut c, t, f, avb.bottom, l.pick(["成功后由 Skyward 主动关闭目标槽位的启动验证与 dm-verity，无需刷机包声明。需要已解锁的引导程序。", "成功後由 Skyward 主動關閉目標槽位的啟動驗證與 dm-verity，無需刷機包宣告。需要已解鎖的引導程式。", "After success, Skyward disables verification and dm-verity in the target slot, even when the ROM does not request it. Requires an unlocked bootloader."]));
     if cx.state.recovery_partitions {
         let row = Row::new(l.pick(["自动重新刷入 Skyward", "自動重新刷入 Skyward", "Flash Skyward again"])).trail(Trail::Switch(cx.state.keep_recovery));
         let options = widgets::list(&mut c, t, f, y + t.m.card_gap, &[row]);
@@ -1333,10 +1356,15 @@ pub fn installing(cx: &Ctx) -> Frame {
             let titles = Pick::ALL.map(|p| pick_title(l, p, i.slot));
             let rows: Vec<Row> =
                 Pick::ALL.iter().zip(&titles).map(|(p, title)| Row::new(title).trail(Trail::Check(*p == choice.pick))).collect();
-            let picks = widgets::list(&mut c, t, f, y, &rows);
-            out.extend(hits(&picks.rows, &Pick::ALL.map(Action::FlashSlots)));
+            let bottom = if choice.kind == skyward_install::ImageKind::Super {
+                widgets::footnote(&mut c, t, f, y, l.pick(["super 是共享物理分区，包含所有槽位的逻辑分区布局与内容。", "super 是共用實體分割區，包含所有槽位的邏輯分割區配置與內容。", "Super is shared physical storage and includes both slots' logical layout and contents."]))
+            } else {
+                let picks = widgets::list(&mut c, t, f, y, &rows);
+                out.extend(hits(&picks.rows, &Pick::ALL.map(Action::FlashSlots)));
+                picks.bottom
+            };
             let (label, danger) = confirm_label(Confirm::Flash, cx.state);
-            let track = widgets::confirm(&mut c, t, f, picks.bottom + t.m.dp(28.0), label, danger, s.confirm);
+            let track = widgets::confirm(&mut c, t, f, bottom + t.m.dp(28.0), label, danger, s.confirm);
             out.push(Hit { rect: track, action: Action::Confirm(Confirm::Flash) });
             let note = l.pick(match s.source {
                 Source::Computer => [
@@ -1917,7 +1945,9 @@ pub fn backup(cx: &Ctx) -> Frame {
     let mut c = long_page(cx);
     let mut out = Vec::new();
     let top = t.m.content_top;
-    let y = widgets::section_first(&mut c, t, f, top, l.pick(["备份内容", "備份內容", "Contents"]));
+    let images = widgets::list(&mut c, t, f, top, &[Row::new(l.pick(["分区镜像备份", "分割區映像檔備份", "Partition image backup"])).icon(BLUE, Icon::Backup).subtitle(l.pick(["单个分区或整个 super，raw .img", "單個分割區或整個 super，raw .img", "One partition or whole super, raw .img"]))]);
+    out.extend(hits(&images.rows, &[Action::Open(Screen::ImageBackup)]));
+    let y = widgets::section(&mut c, t, f, images.bottom, l.pick(["备份内容", "備份內容", "Contents"]));
     let system = fmt::snapshot_backup_note(l, &i.snapshot).unwrap_or(l.pick(["当前槽位在 super 中的分区", "目前槽位在 super 中的分割區", "The current slot's partitions in super"]));
     let data = l.pick(match s.data == Data::Open {
         true => ["应用、账户和设置，不包括内部存储、锁屏密码和指纹", "應用程式、帳戶和設定，不包括內部儲存空間、螢幕鎖定密碼和指紋", "Apps, accounts and settings, without internal storage, the screen lock or fingerprints"],
@@ -1971,6 +2001,39 @@ pub fn backup(cx: &Ctx) -> Frame {
     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
     out.push(Hit { rect: track, action: Action::Confirm(Confirm::Backup) });
     Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(["备份", "備份", "Backup"]), top)
+}
+
+pub fn image_backup(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let y = widgets::section_first(&mut c, t, f, top, l.pick(["分区", "分割區", "Partition"]));
+    let y = match &s.image_partitions {
+        None => widgets::footnote(&mut c, t, f, y, l.pick(["正在读取分区", "正在讀取分割區", "Reading partitions"])),
+        Some(Err(error)) => widgets::footnote(&mut c, t, f, y, error),
+        Some(Ok(parts)) => {
+            let details: Vec<_> = parts.iter().map(|(name, size)| {
+                if name == "super" { format!("{} · {}", fmt::bytes(*size), l.pick(["共享分区，包含全部逻辑分区", "共用分割區，包含全部邏輯分割區", "Shared, all logical partitions"])) }
+                else { fmt::bytes(*size) }
+            }).collect();
+            let rows: Vec<_> = parts.iter().zip(&details).enumerate().map(|(index, ((name, _), detail))| Row::new(name).subtitle(detail).trail(Trail::Check(s.image_partition == Some(index)))).collect();
+            let list = widgets::list(&mut c, t, f, y, &rows);
+            out.extend(hits(&list.rows, &(0..parts.len()).map(Action::ImagePartition).collect::<Vec<_>>()));
+            list.bottom
+        }
+    };
+    let y = widgets::section(&mut c, t, f, y, l.pick(["存放位置", "存放位置", "Save to"]));
+    let places = widgets::list(&mut c, t, f, y, &[
+        Row::new(place_name(l, Place::Storage)).trail(Trail::Check(s.backup_to == Place::Storage)),
+        Row::new(place_name(l, Place::UsbDrive)).trail(Trail::Check(s.backup_to == Place::UsbDrive)),
+    ]);
+    out.extend(hits(&places.rows, &[Action::BackupTo(Place::Storage), Action::BackupTo(Place::UsbDrive)]));
+    let y = widgets::footnote(&mut c, t, f, places.bottom, l.pick(["保存到 Skyward/images，raw .img 与 SHA-256；不压缩、不分卷，完成后读回校验。", "儲存到 Skyward/images，raw .img 與 SHA-256；不壓縮、不分卷，完成後讀回驗證。", "Skyward/images: raw .img and SHA-256, uncompressed and unsplit, verified after saving."]));
+    let (label, danger) = confirm_label(Confirm::ImageBackup, s);
+    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+    out.push(Hit { rect: track, action: Action::Confirm(Confirm::ImageBackup) });
+    Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(["分区镜像备份", "分割區映像檔備份", "Partition image backup"]), top)
 }
 
 /// The backups found, newest first, to restore one; those that cannot be
@@ -2143,7 +2206,7 @@ fn part_state(l: Lang, job: &BackupJob, k: usize) -> String {
     let (did, doing) = job_words(job.restore);
     let ended = job.outcome.is_some();
     let a = match (&job.outcome, job.at) {
-        (Some(BackupEnd::Saved(_)), _) => return l.pick(if job.checks { VERIFIED } else { did }).to_string(),
+        (Some(BackupEnd::Saved(_) | BackupEnd::ImageSaved(_)), _) => return l.pick(if job.checks { VERIFIED } else { did }).to_string(),
         (Some(BackupEnd::Restored { .. }), _) => return l.pick(did).to_string(),
         (_, None) => return l.pick(if ended { ["未开始", "未開始", "Not started"] } else { WAITING_TURN }).to_string(),
         (_, Some(a)) => a,
@@ -2202,6 +2265,7 @@ pub fn backup_job(cx: &Ctx) -> Frame {
             let gone = l.pick(if job.restore { ["未写入任何内容。", "未寫入任何內容。", "Nothing was written."] } else { ["未保存任何备份。", "未儲存任何備份。", "No backup was saved."] });
             let failed = l.pick(if job.restore { RESTORE_FAILED } else { ["备份失败", "備份失敗", "Backup failed"] });
             let (title, color, detail) = match end {
+                BackupEnd::ImageSaved(path) => (l.pick(BACKUP_COMPLETE), GREEN, path.clone()),
                 BackupEnd::Saved(name) => {
                     let saved = match job.place {
                         Place::Storage => tr!(l, "已保存到内部存储的 Skyward/backups/{name}", "已儲存到內部儲存空間的 Skyward/backups/{name}", "Saved to Skyward/backups/{name} in internal storage"),
@@ -2290,7 +2354,7 @@ pub fn backup_job(cx: &Ctx) -> Frame {
     }
     let title = l.pick(match (&job.outcome, job.restore) {
         (None, restore) => job_words(restore).1,
-        (Some(BackupEnd::Saved(_)), _) => BACKUP_COMPLETE,
+        (Some(BackupEnd::Saved(_) | BackupEnd::ImageSaved(_)), _) => BACKUP_COMPLETE,
         (Some(BackupEnd::Restored { .. }), _) => RESTORE_COMPLETE,
         (Some(_), false) => ["备份未完成", "備份未完成", "Backup incomplete"],
         (Some(_), true) => ["恢复未完成", "還原未完成", "Restore incomplete"],
@@ -2315,6 +2379,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
         Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
         Row::new(l.pick(UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
+        Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
@@ -2323,11 +2388,77 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Filesystems),
         Action::Open(Screen::Logs),
         Action::Open(Screen::Update),
+        Action::Open(Screen::Avb),
     ]);
     Frame::new(t, c, out, l.pick(ADVANCED), top)
 }
 
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];
+const AVB: Text = ["AVB 校验", "AVB 驗證", "AVB verification"];
+
+pub fn avb(cx: &Ctx) -> Frame {
+    use skyward_install::commands::avbctl::Check;
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let mut out = Vec::new();
+    let mut y = top;
+    let state = match &s.avb {
+        Some(Ok(state)) => Some(state),
+        Some(Err(error)) => {
+            y = widgets::footnote(&mut c, t, f, y, error);
+            None
+        }
+        None => {
+            y = widgets::footnote(&mut c, t, f, y, l.pick(["正在读取 vbmeta", "正在讀取 vbmeta", "Reading vbmeta"]));
+            None
+        }
+    };
+    if let Some(state) = state {
+        y = widgets::info_card(&mut c, t, f, y, &[(l.pick(["目标分区", "目標分割區", "Target partition"]), format!("vbmeta{}", state.suffix))]);
+        let checks = [
+            (Check::Verification, l.pick(["禁用启动验证", "停用啟動驗證", "Disable boot verification"])),
+            (Check::Verity, l.pick(["禁用 dm-verity", "停用 dm-verity", "Disable dm-verity"])),
+        ];
+        let rows: Vec<_> = checks.iter().map(|(check, label)| {
+            let on = s.avb_pending.filter(|(pending, _)| pending == check).map_or(state.disabled(*check), |(_, disabled)| disabled);
+            Row::new(label).trail(Trail::Switch(on))
+        }).collect();
+        let list = widgets::list(&mut c, t, f, y + t.m.card_gap, &rows);
+        if state.unlocked {
+            out.extend(hits(&list.rows, &checks.map(|(check, _)| Action::AvbToggle(check))));
+        }
+        y = list.bottom;
+        if !state.unlocked {
+            y = widgets::footnote(&mut c, t, f, y, l.pick(["未确认 Bootloader 已解锁，禁止修改。", "未確認 Bootloader 已解鎖，禁止修改。", "Bootloader unlock is not confirmed. Changes are blocked."]));
+        }
+    }
+    y = widgets::footnote(&mut c, t, f, y, l.pick([
+        "只修改当前槽位的 vbmeta 标志，重启后生效，不会解锁 Bootloader。备份保存在 /tmp，重启前请导出。",
+        "只修改目前槽位的 vbmeta 旗標，重新啟動後生效，不會解鎖 Bootloader。備份存於 /tmp，重新啟動前請匯出。",
+        "Changes only the current slot's vbmeta flags, effective after reboot. Does not unlock the bootloader. Export the backup from /tmp before rebooting.",
+    ]));
+    if let Some((_, disabled)) = s.avb_pending {
+        y = widgets::footnote(&mut c, t, f, y, l.pick(if disabled {
+            ["将降低系统完整性保护。滑动确认后才会写入。", "將降低系統完整性保護。滑動確認後才會寫入。", "Reduces system integrity protection. Nothing is written until confirmed."]
+        } else {
+            ["重新启用可能导致修改过的系统无法启动。改回标志不会修复签名，请先恢复匹配的原厂启动链。",
+             "重新啟用可能導致修改過的系統無法啟動。改回旗標不會修復簽章，請先還原相符的原廠啟動鏈。",
+             "Re-enabling can prevent a modified system from booting. Flags do not repair signatures; restore a matching stock boot chain first."]
+        }));
+        let (label, danger) = confirm_label(Confirm::Avb, s);
+        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+        out.push(Hit { rect: track, action: Action::Confirm(Confirm::Avb) });
+        y = track.y + track.h;
+        let cancel = widgets::list(&mut c, t, f, y + t.m.card_gap, &[Row::new(l.pick(["取消修改", "取消修改", "Cancel change"]))]);
+        out.extend(hits(&cancel.rows, &[Action::CancelAvb]));
+        y = cancel.bottom;
+    }
+    if let Some(notice) = &s.avb_notice {
+        y = widgets::footnote(&mut c, t, f, y, notice);
+    }
+    Frame::new(t, fit(c, t, y), out, l.pick(AVB), top)
+}
 const FILESYSTEMS: Text = ["文件系统", "檔案系統", "Filesystems"];
 const STOPPED: Text = ["已停止", "已停止", "Stopped"];
 const STOPPING: Text = ["正在停止", "正在停止", "Stopping"];

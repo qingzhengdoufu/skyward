@@ -13,9 +13,10 @@
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
 
-mod avbctl;
+pub mod avbctl;
 mod resetprop;
 mod sevenzip;
+mod simg2img;
 mod unzip;
 mod zstandard;
 
@@ -37,6 +38,7 @@ type Command = fn(&[OsString], &mut Io) -> i32;
 fn command(name: &OsStr) -> Option<Command> {
     match name.to_str()? {
         "7za" => Some(sevenzip::run),
+        "simg2img" => Some(simg2img::run),
         "avbctl" => Some(avbctl::run),
         "resetprop" => Some(resetprop::run),
         "unzip" => Some(unzip::run),

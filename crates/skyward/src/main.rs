@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
 mod aod;
-mod art;
 #[cfg(target_os = "android")]
 mod backup;
 #[cfg(target_os = "android")]
@@ -516,20 +515,12 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<()> {
     for path in load_modules(cfg, &cfg.modules.load)? {
         skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
     }
-    // The secure element's HAL asks the element for a vendor id over the
-    // ADSP before it can open the TA: started any earlier it logs
-    // "eseGetVendorId: Unknown eSE HW" and exits (YARP's init says so), and
-    // with it the weaver that guards a lock-screen secret. The kernel's own
-    // remoteproc probe loads the DSP's firmware and boots it while init is
-    // still running, so wait for it to say it is running before any service
-    // starts, and where it could not start it, ask the loader again - the
-    // firmware it could not reach is on the modem partition, which is shown
-    // at /firmware by the mount above and is the last folder the loader
-    // looks in. Never write the SSR switch beside it: that takes the DSP
-    // down through rproc_shutdown, which hangs the writer in the ADSP
-    // driver's shutdown path until the DSP is gone.
-    if let Err(e) = wait_for_adsp() {
-        skyward_sys::kmsg(&format!("the ADSP is not running: {e:#}"))?;
+    // The ADSP carries charging communication and, on some phones, the eSE
+    // transport. Firmware is now mounted; retry startup through the configured
+    // interface. Never request SSR or shut down a processor that is running.
+    let adsp_boot = cfg.firmware.as_ref().map_or(skyward_config::AdspBoot::Loader, |f| f.adsp_boot);
+    if let Err(e) = wait_for_adsp(adsp_boot) {
+        let _ = skyward_sys::kmsg(&format!("the ADSP is not running: {e:#}"));
     }
     // The motor driver is loaded by init before the recovery can mount its
     // partitions. Put its firmware where the firmware loader looks before
@@ -689,42 +680,34 @@ const ADSP_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 #[cfg(target_os = "android")]
 const ADSP_BOOT: &str = "/sys/kernel/boot_adsp/boot";
 
-/// Have the DSP started, or say why it is not.
-///
-/// The kernel reads the DSP's firmware while the modules are loading, and its
-/// search ends with `/firmware/image` - a folder the recovery makes by
-/// showing the modem partition there. On a phone whose `/vendor/firmware`
-/// carries only the first part of that firmware, the kernel takes what it
-/// finds there and stops at the first segment that is not: its own log reads
-/// "could not find firmware for adsp.b28 ... attempted /firmware/image/
-/// adsp.b28, open failed", and the DSP stays offline for the whole start.
-/// The rest of the firmware is on the modem partition. Nothing has to be
-/// copied for it: `/firmware` is in place by now, so asking the loader for
-/// another try is enough, and this is the switch its own init writes.
-///
-/// The switch is only written while the DSP is not running: written to one
-/// that is, it asks for a restart instead, and the SSR switch beside it takes
-/// the DSP down through rproc_shutdown, which blocks the writer in the ADSP
-/// driver's shutdown path until the DSP is gone. A phone whose DSP will not
-/// come up at all still shows its pages.
+/// Retry DSP startup once firmware is mounted. miro uses remoteproc because
+/// its audio loader aborts on a missing qcom,adsp-state property before it
+/// reaches rproc_boot. Other phones retain their existing loader interface.
+/// Failure is reported without preventing the recovery UI from starting.
 #[cfg(target_os = "android")]
-fn wait_for_adsp() -> Result<()> {
+fn wait_for_adsp(method: skyward_config::AdspBoot) -> Result<()> {
     if let Some(adsp) = adsp()? {
         if waiting_for_running(&adsp, ADSP_READY)? {
-            return skyward_sys::kmsg(&format!("{} runs, so the secure element's HAL can reach it", adsp.display()));
+            let _ = skyward_sys::kmsg(&format!("{} runs, so the secure element's HAL can reach it", adsp.display()));
+            return Ok(());
         }
-        // Offline: the kernel's own attempt did not have `/firmware` to look
-        // in. Ask now that it does. A phone without that switch is left as it
-        // is, and so is one whose firmware is missing outright - the loader
-        // says so in the kernel log and the moment below runs out.
-        match std::fs::write(ADSP_BOOT, "1") {
-            Ok(()) => skyward_sys::kmsg("the ADSP is offline; asked the loader again now that /firmware is in place")?,
-            Err(e) => skyward_sys::kmsg(&format!("the ADSP is offline and cannot be asked again: {e}"))?,
+        // The direct path validates the processor, firmware and offline state;
+        // it does not change firmware selection or invoke the shutdown path.
+        match method {
+            skyward_config::AdspBoot::Remoteproc => {
+                let result = skyward_sys::remoteproc::start_adsp(&adsp, Path::new("/firmware/image"))?;
+                let _ = skyward_sys::kmsg(&format!("ADSP remoteproc startup: {result:?}"));
+            }
+            skyward_config::AdspBoot::Loader => match std::fs::write(ADSP_BOOT, "1") {
+                Ok(()) => { let _ = skyward_sys::kmsg("the ADSP is offline; asked the loader again now that /firmware is in place"); }
+                Err(e) => { let _ = skyward_sys::kmsg(&format!("the ADSP is offline and cannot be asked again: {e}")); }
+            },
         }
         if waiting_for_running(&adsp, ADSP_RETRY)? {
-            return skyward_sys::kmsg(&format!("{} runs, so the secure element's HAL can reach it", adsp.display()));
+            let _ = skyward_sys::kmsg(&format!("{} runs, so the secure element's HAL can reach it", adsp.display()));
+            return Ok(());
         }
-        return Err(anyhow!("it is not running, even after the loader was asked again"));
+        return Err(anyhow!("it is not running after the startup request"));
     }
     Err(anyhow!("the kernel shows no processor that is the DSP"))
 }
@@ -900,14 +883,6 @@ fn recovery() -> Result<()> {
             // shared blocks, which writes to the slot's own.
             if !matches!(request.work, bcb::Work::Fastboot | bcb::Work::WipeAb { .. } | bcb::Work::UnshareBlocks) {
                 prepare(&cfg, booted_slot()?)?;
-                // A recovery flashed over the system leaves behind what ART
-                // compiled for the system that was there. Clearing it once per
-                // image makes the system compile its own again, which is what the
-                // phone then runs: on the older code it re-verifies and recompiles
-                // as it goes, and is slower and hotter for as long as that lasts.
-                // The key service the data partition opens with is up by now,
-                // since prepare brought it up.
-                art::clear_once(open_data_for_art);
             }
             let root = Path::new("/");
             ui::run(&cfg, &root.join(ramdisk::FONT), &root.join(ramdisk::MONO), request, Screen::Home, None)
@@ -920,19 +895,6 @@ fn recovery() -> Result<()> {
     run().inspect_err(|e| {
         let _ = skyward_sys::kmsg(&format!("recovery failed: {e:#}"));
     })
-}
-
-/// Open the data partition as far as it opens with nothing a user knows,
-/// which is what clearing what ART compiled needs: none of it is a user's
-/// own file. The key service has to answer, which `prepare` has by now
-/// started; where it does not, the reason is what the caller says.
-#[cfg(target_os = "android")]
-fn open_data_for_art() -> Result<()> {
-    use skyward_crypto::data;
-    let binder = skyward_binder::driver::Binder::open()?;
-    let service = skyward_crypto::keymint::KeyMint::open(&binder)?;
-    data::open_without_credential(&service)?;
-    Ok(())
 }
 
 /// Map and mount the slot's partitions from super, then bring up what runs
