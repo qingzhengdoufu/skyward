@@ -4,13 +4,61 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 
-/// The repository this fork's releases are published in. Upstream's own
-/// `Rinrroy/skyward-for-haotian` builds for many phones; this fork is the Xiaomi 15 Pro
-/// alone, so it looks at its own releases and nowhere else.
-pub const REPOSITORY: &str = "Rinrroy/skyward-for-haotian";
+/// This adaptation's release repository, separate from all upstream builds.
+pub const REPOSITORY: &str = "wmin85099-cmd/skyward";
 
 /// Where GitHub answers which release of this fork is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/Rinrroy/skyward-for-haotian/releases/latest";
+pub const LATEST: &str = "https://api.github.com/repos/wmin85099-cmd/skyward/releases/latest";
+
+const PUBLIC_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIWY+omXY/ezywhrM+qUAMlCipW9iNuqT1pmYp/m2DE7kdsb5Y7fXk2XVuIRg9jzR551y1rcvXcdNtQyM65w7GA==";
+
+#[derive(Deserialize)]
+struct SignedManifest {
+    payload: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    schema: u32,
+    tag: String,
+    device: String,
+    name: String,
+    size: u64,
+    sha256: String,
+}
+
+/// Authenticate the release's exact device image using the pinned release key.
+/// No unsigned fallback, even when GitHub provides its own asset digest.
+pub fn trusted_newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
+    use base64::Engine;
+    use p256::{ecdsa::{signature::Verifier, Signature, VerifyingKey}, pkcs8::DecodePublicKey};
+    let raw: serde_json::Value = serde_json::from_str(answer)?;
+    ensure!(raw.get("draft").and_then(|v| v.as_bool()) == Some(false), "draft release");
+    ensure!(raw.get("prerelease").and_then(|v| v.as_bool()) == Some(false), "prerelease channel not enabled");
+    let body = raw.get("body").and_then(|v| v.as_str()).context("release has no signed manifest")?;
+    let block = body.split_once("```skyward-manifest\n").context("release has no signed manifest")?.1;
+    let block = block.split_once("\n```").context("unterminated signed manifest")?.0;
+    let signed: SignedManifest = serde_json::from_str(block)?;
+    let decode = base64::engine::general_purpose::STANDARD;
+    let payload = decode.decode(&signed.payload)?;
+    ensure!(payload.len() <= 16384, "manifest too large");
+    let key = VerifyingKey::from_public_key_der(&decode.decode(PUBLIC_KEY)?)?;
+    let signature = Signature::from_der(&decode.decode(&signed.signature)?)?;
+    key.verify(&payload, &signature).context("release signature did not verify")?;
+    let manifest: Manifest = serde_json::from_slice(&payload)?;
+    let newest = newest(answer, codename, running)?;
+    let build = newest.build.as_ref().context("signed release has no image for this device")?;
+    ensure!(manifest.schema == 1 && manifest.device == codename, "signed manifest device/schema mismatch");
+    ensure!(raw.get("tag_name").and_then(|v| v.as_str()) == Some(manifest.tag.as_str()), "signed tag mismatch");
+    ensure!(manifest.name == build.name && manifest.size == build.size && manifest.sha256 == build.sha256, "signed asset metadata mismatch");
+    ensure!(build.size > 4096 && build.size <= 256 << 20, "recovery image size out of bounds");
+    let api = format!("https://api.github.com/repos/{REPOSITORY}/releases/assets/");
+    let link = format!("https://github.com/{REPOSITORY}/releases/download/{}/{}", manifest.tag, manifest.name);
+    ensure!(build.url.starts_with(&api) && build.link == link, "asset is outside this repository");
+    ensure!(!build.name.contains(['/', '\\']) && !build.name.contains(".."), "unsafe image filename");
+    Ok(newest)
+}
 
 /// The version of GitHub's API the answer is read as.
 const API_VERSION: &str = "2022-11-28";
@@ -113,7 +161,7 @@ pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest>
     if !status.is_success() {
         bail!(refusal(status, &body));
     }
-    newest(&body, codename, running)
+    trusted_newest(&body, codename, running)
 }
 
 /// Where the file a build's `url` hands out is now, as GitHub's API sends
@@ -243,5 +291,30 @@ mod tests {
         let untagged = ANSWERED_013.replace("\"tag_name\":\"v0.1.3\"", "\"tag_name\":\"nightly\"");
         assert!(newest(&untagged, "ishtar", "0.1.2").is_err());
         assert!(newest("{}", "ishtar", "0.1.2").is_err());
+    }
+
+    #[test]
+    fn unsigned_and_wrongly_signed_release_manifests_are_refused() {
+        assert!(trusted_newest(ANSWERED_013, "ishtar", "0.1.2").is_err());
+        let mut release: serde_json::Value = serde_json::from_str(ANSWERED_013).unwrap();
+        release["body"] = serde_json::json!("```skyward-manifest\n{\"payload\":\"e30=\",\"signature\":\"AA==\"}\n```");
+        assert!(trusted_newest(&release.to_string(), "ishtar", "0.1.2").is_err());
+    }
+
+    #[test]
+    fn signed_miro_release_pins_the_device_digest_size_tag_and_repository() {
+        let fixture = include_str!("../tests/signed-release.json");
+        let newest = trusted_newest(fixture, "miro", "0.2.3").unwrap();
+        assert!(newest.newer);
+        assert_eq!(newest.build.unwrap().size, 104857600);
+        assert!(!trusted_newest(fixture, "miro", "0.2.4").unwrap().newer);
+        assert!(trusted_newest(fixture, "haotian", "0.2.3").is_err());
+        for (key, value) in [("size", serde_json::json!(100)), ("digest", serde_json::json!(format!("sha256:{}", "ab".repeat(32)))), ("url", serde_json::json!("https://evil.invalid/image"))] {
+            let mut changed: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            changed["assets"][0][key] = value;
+            assert!(trusted_newest(&changed.to_string(), "miro", "0.2.3").is_err(), "{key}");
+        }
+        let changed = fixture.replace("\"draft\": false", "\"draft\": true");
+        assert!(trusted_newest(&changed, "miro", "0.2.3").is_err());
     }
 }

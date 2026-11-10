@@ -217,6 +217,7 @@ pub enum SkywardStage {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkywardEnd {
+    Ready(Slot),
     /// The build is in the recovery partitions of these slots.
     Updated(Vec<Slot>),
     /// The download was stopped; what it downloaded is kept to go on from.
@@ -853,6 +854,7 @@ impl Data {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
+    SkywardUpdate,
     Avb,
     Reboot,
     Wipe,
@@ -2211,6 +2213,7 @@ pub enum Effect {
     /// how it goes with [`App::skyward_progress`] and
     /// [`App::skyward_ended`].
     UpdateSkyward(Build),
+    WriteSkyward { build: Build, slot: Slot },
     StopSkywardUpdate,
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
@@ -3840,6 +3843,7 @@ impl App {
     /// Updating Skyward has ended: its page says how, lit for the user to
     /// read.
     pub fn skyward_ended(&mut self, end: SkywardEnd, now: u64) {
+        self.state.confirm = 0.0;
         let job = self.state.skyward_job.as_mut().expect("only an update under way ends");
         job.stopping = false;
         job.outcome = Some(end);
@@ -6652,6 +6656,14 @@ impl App {
     fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::SkywardUpdate => {
+                let slot = self.state.skyward_job.as_ref().and_then(|job| match job.outcome { Some(SkywardEnd::Ready(slot)) => Some(slot), _ => None });
+                if let (Some(slot), Some(build)) = (slot, self.state.skyward_newest().and_then(|newest| newest.build.clone())) {
+                    self.state.skyward_job = Some(SkywardJob { stage: Some(SkywardStage::Write { done: 0, total: build.size * 2 }), rate: 0, outcome: None, stopping: false });
+                    self.refresh();
+                    fx.push(Effect::WriteSkyward { build, slot });
+                }
+            }
             Confirm::Avb => {
                 if let (Some(Ok(state)), Some((check, disabled))) = (&self.state.avb, self.state.avb_pending) {
                     if state.unlocked && state.disabled(check) != disabled {
@@ -11372,6 +11384,25 @@ mod tests {
         assert_eq!(tap_at(&mut app, &f, &i, Action::RebootTo(Target::Recovery), 5000), vec![Effect::Reboot(Target::Recovery)]);
         app.key(Key::Back, 5100);
         assert_eq!(app.screen(), Screen::Settings);
+    }
+
+    #[test]
+    fn downloaded_recovery_requires_a_new_slide_before_any_write_effect() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::SkywardUpdate, W, H, PPD);
+        app.state.wlan = Some(connected("Skyward"));
+        app.skyward_checked(Ok(skyward_newest(true)));
+        let build = skyward_newest(true).build.unwrap();
+        assert_eq!(tap(&mut app, &f, &i, Action::UpdateSkyward), vec![Effect::UpdateSkyward(build.clone())]);
+        app.skyward_ended(SkywardEnd::Ready(Slot::A), 0);
+        assert!(matches!(app.state.skyward_job.as_ref().unwrap().outcome, Some(SkywardEnd::Ready(Slot::A))));
+        assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::Confirm(Confirm::SkywardUpdate)));
+        let track = app.frame(&f, &i).hits.iter().find(|hit| hit.action == Action::Confirm(Confirm::SkywardUpdate)).unwrap().rect;
+        let y = track.centre().1 - app.top().1;
+        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 1000);
+        app.touch(Touch::Move(track.x + track.w, y), &f, 1000);
+        assert_eq!(app.touch(Touch::Up, &f, 1000), vec![Effect::WriteSkyward { build, slot: Slot::A }]);
+        assert!(matches!(app.state.skyward_job.as_ref().unwrap().stage, Some(SkywardStage::Write { .. })));
     }
 
     #[test]

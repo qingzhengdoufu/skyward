@@ -65,9 +65,30 @@ the same as authorization to redistribute every stock binary in the ramdisk.
   resetprop uses init and does not replace Magisk's full implementation.
 - Arbitrary update-binary scripts run as root and can erase any partition.
   Snapshot guardrails are not a sandbox. Inspect each ROM before using it.
-- No fast-charge fix. No signed custom GitHub self-update channel yet.
-  Existing updater still points at the inherited Rinrroy release endpoint;
-  do not use it to replace this adaptation with a different build.
+- No fast-charge fix. Version 0.2.4 enables this repository's signed self-update
+  channel. Install it manually once from test11, whose old endpoint is unchanged.
+  Read releases/v0.2.4.md for bootstrap and online-update limitations.
+
+## Signed self-update from 0.2.4
+
+Only published, non-prerelease GitHub releases in wmin85099-cmd/skyward are
+accepted. The release body embeds a skyward-manifest block signed with P-256
+ECDSA/SHA-256. The public key is pinned in skyward-net/src/github.rs; the private
+key is kept outside this repository and is never embedded in an image.
+
+The signature covers tag, device, asset name, size and SHA-256. API metadata and
+asset repository URLs must match. Downloads use HTTPS and SHA-256, are rechecked
+before writing, and must carry miro's embedded device configuration. After the
+download, a separate slide confirms the exact current recovery slot. Only that
+slot is updated. Bootloader unlocked state is read from kernel boot parameters;
+low/unknown battery, pending/unknown OTA state, concurrent partition workers or
+an image not exactly filling the target recovery partition refuse the write.
+No AVB flag changes, slot switching or automatic reboot accompany self-update.
+
+This protects authenticity/integrity, not bug-freedom or vendor verified boot.
+GitHub APIs may be rate limited or unreachable on some networks. A download
+lost on reboot restarts because temporary recovery storage is volatile. Signature
+key loss requires a deliberate manual channel/key migration; do not publish it.
 
 Existing recovery starts root adb and may mount data read-write or persist
 settings. Do not interpret these notes as a zero-write guarantee.

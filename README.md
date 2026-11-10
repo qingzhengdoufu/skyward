@@ -13,9 +13,11 @@ tracking branch; syncing main does not validate or update this phone's build.
 Current device-tested candidate: **test11**, stock OS3.0.303 recovery base,
 tested on OS3.0.305 (Android 16). Password decryption, panel-on touch wake
 compatibility, USB charging, haptics and WLAN scanning have been observed.
+Version **0.2.4** adds this repository's signed online-update channel; it needs
+one manual installation from test11 before later releases can update online.
 ROM flashing, automatic AVB mutation and raw image export still need device
 validation. Hardware panel-off touch resume is not fixed. Fast charging and
-this repository's authenticated self-update channel are not implemented.
+the new online-write path still requires on-device validation.
 
 **Read [the K80 Pro build notes and limitations](docs/MIRO.md) first.** No stock
 firmware, phone logs, credential data or private signing keys are published.

@@ -2250,7 +2250,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                             updates::End::Downloaded => DownloadEnd::Downloaded,
                             updates::End::Stopped => DownloadEnd::Stopped,
                             updates::End::Failed(why) => DownloadEnd::Failed(why),
-                            updates::End::Updated(_) | updates::End::NotWritten(_) | updates::End::WriteFailed(..) => {
+                            updates::End::Ready(_) | updates::End::Updated(_) | updates::End::NotWritten(_) | updates::End::WriteFailed(..) => {
                                 unreachable!("a system's full package is only downloaded")
                             }
                         };
@@ -2287,12 +2287,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     updates::Event::Writing { done, total } => app.skyward_progress(SkywardStage::Write { done, total }, 0),
                     updates::Event::Ended(end) => {
                         let end = match end {
+                            updates::End::Ready(slot) => SkywardEnd::Ready(slot),
                             updates::End::Updated(slots) => SkywardEnd::Updated(slots),
                             updates::End::Stopped => SkywardEnd::Stopped,
                             updates::End::Failed(why) => SkywardEnd::Download(why),
                             updates::End::NotWritten(why) => SkywardEnd::NotWritten(why),
                             updates::End::WriteFailed(slots, why) => SkywardEnd::WriteFailed(slots, why),
-                            updates::End::Downloaded => unreachable!("Skyward's build is written once it is downloaded"),
+                            updates::End::Downloaded => unreachable!("Skyward's build is checked once downloaded"),
                         };
                         skyward_sys::kmsg(&format!("updating Skyward ended: {end:?}"))?;
                         app.skyward_ended(end, now);
@@ -2845,10 +2846,22 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     // partitions.
                     Effect::UpdateSkyward(build) => {
                         ensure!(skyward_updater.is_none(), "Skyward is being updated already");
-                        ensure!(installer.is_none(), "an installer is running already");
+                        if installer.is_some() || backuper.is_some() || part_worker.is_some() || merger.is_some() || systems_worker.is_some() {
+                            app.skyward_ended(SkywardEnd::NotWritten("Another partition operation is active".into()), now);
+                            continue;
+                        }
                         skyward_sys::kmsg(&format!("updating Skyward to {}", build.name))?;
                         let path = Path::new(skyward_sys::RUN).join(&build.name);
                         let task = updates::Task::UpdateSkyward { build, codename: cfg.device.codename.clone(), path };
+                        skyward_updater = Some(updates::Worker::start(task, servers.clone())?);
+                    }
+                    Effect::WriteSkyward { build, slot } => {
+                        if skyward_updater.is_some() || installer.is_some() || backuper.is_some() || part_worker.is_some() || merger.is_some() || systems_worker.is_some() {
+                            app.skyward_ended(SkywardEnd::NotWritten("Another partition operation is active".into()), now);
+                            continue;
+                        }
+                        let path = Path::new(skyward_sys::RUN).join(&build.name);
+                        let task = updates::Task::WriteSkyward { build, codename: cfg.device.codename.clone(), path, slot };
                         skyward_updater = Some(updates::Worker::start(task, servers.clone())?);
                     }
                     Effect::StopSkywardUpdate => skyward_updater.as_ref().context("Skyward is not being updated")?.stop(),

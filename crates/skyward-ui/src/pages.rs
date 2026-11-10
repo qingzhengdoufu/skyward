@@ -128,6 +128,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::Wipe => (["滑动以清除", "滑動以清除", "Slide to wipe"], true),
         Confirm::Flash => (["滑动以刷入", "滑動以刷入", "Slide to flash"], true),
         Confirm::Backup => (["滑动以备份", "滑動以備份", "Slide to back up"], false),
+        Confirm::SkywardUpdate => (["滑动以更新 Recovery", "滑動以更新 Recovery", "Slide to update recovery"], true),
         Confirm::ImageBackup => (["滑动以导出镜像", "滑動以匯出映像檔", "Slide to export image"], false),
         Confirm::Restore => (["滑动以恢复", "滑動以還原", "Slide to restore"], true),
         Confirm::Slot => (["滑动以切换", "滑動以切換", "Slide to switch"], true),
@@ -2981,9 +2982,9 @@ pub fn skyward_update(cx: &Ctx) -> Frame {
             "The new version is downloaded from GitHub and goes into the recovery partitions once its SHA-256 checks out. The system and user data are left as they are.",
         ]),
         l.pick([
-            "新版本将写入下次启动所用槽位的 recovery 分区；另一个槽位装有 Skyward 时，也会一并更新。",
-            "新版本將寫入下次啟動所用槽位的 recovery 分割區；另一個槽位裝有 Skyward 時，也會一併更新。",
-            "The new version goes into the recovery partition of the slot that starts next, and into the other slot's where it holds Skyward.",
+            "验证发布签名与镜像后，滑动确认仅更新当前槽位的 recovery，不修改 AVB。",
+            "驗證發佈簽章與映像檔後，滑動確認僅更新目前槽位的 recovery，不修改 AVB。",
+            "After signature and image verification, slide to update only the current slot's recovery. AVB is unchanged.",
         ]),
         l.pick(["更新完成后，重启到恢复模式即可使用新版本。", "更新完成後，重新啟動到復原模式即可使用新版本。", "Once updated, reboot to recovery to use the new version."]),
     ];
@@ -3033,6 +3034,15 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         return y;
     }
     match &s.skyward_job {
+        Some(SkywardJob { outcome: Some(SkywardEnd::Ready(slot)), .. }) => {
+            let target = format!("recovery{}", slot.suffix());
+            let detail = tr!(l, "签名与 SHA-256 验证通过，目标：{target}", "簽章與 SHA-256 驗證通過，目標：{target}", "Signature and SHA-256 verified. Target: {target}");
+            let y = widgets::footnote(c, t, f, y + gap, &detail);
+            let (label, danger) = confirm_label(Confirm::SkywardUpdate, s);
+            let track = widgets::confirm(c, t, f, y + gap, label, danger, s.confirm);
+            out.push(Hit { rect: track, action: Action::Confirm(Confirm::SkywardUpdate) });
+            track.y + track.h
+        }
         Some(job) if job.outcome.is_none() => {
             let (heading, detail, share) = match job.stage {
                 None => (l.pick(GETTING_READY), String::new(), None),
@@ -3095,7 +3105,7 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                     y = widgets::footnote(c, t, f, y, &warning);
                     y = widgets::footnote(c, t, f, y, why);
                 }
-                Some(SkywardEnd::Updated(_)) => unreachable!("an update that went in shows how it did"),
+                Some(SkywardEnd::Updated(_) | SkywardEnd::Ready(_)) => unreachable!("a ready or completed update has its own controls"),
                 None => {}
             }
             let mut row = Row::new(l.pick(["下载并更新", "下載並更新", "Download and update"]));

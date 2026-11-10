@@ -4,7 +4,7 @@
 //! recovery partitions: on a thread of their own that tells the screen how
 //! far they have come.
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use skyward_install::upgrade;
 use skyward_net::download::{self, Damaged, Failure, NoRoom, Progress, Refused, Sum};
 use skyward_net::github::{self, Build, Newest};
@@ -48,6 +48,7 @@ pub enum Task {
     /// partitions of the slot that starts next and of any other slot that
     /// holds Skyward.
     UpdateSkyward { build: Build, codename: String, path: PathBuf },
+    WriteSkyward { build: Build, codename: String, path: PathBuf, slot: Slot },
 }
 
 pub enum Event {
@@ -64,6 +65,7 @@ pub enum Event {
 }
 
 pub enum End {
+    Ready(Slot),
     Downloaded,
     /// Skyward's build is in the recovery partitions of these slots.
     Updated(Vec<Slot>),
@@ -185,17 +187,24 @@ impl Worker {
                             // Stopping asked for as the last of it came is
                             // stopping still: nothing is written.
                             End::Downloaded if stopping.load(Ordering::Relaxed) => End::Stopped,
-                            End::Downloaded => write(&path, &codename, &tell),
+                            End::Downloaded => match prepare(&path, &codename, &build) {
+                                Ok((_, slot)) => End::Ready(slot),
+                                Err(error) => End::NotWritten(format!("{error:#}")),
+                            },
                             other => other,
                         };
                         // The zip is held in memory, and is done with once
                         // whole; a part stays, to go on from.
-                        match std::fs::remove_file(&path) {
+                        if !matches!(end, End::Ready(_) | End::Stopped) { match std::fs::remove_file(&path) {
                             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                                 let _ = skyward_sys::kmsg(&format!("delete {}: {e}", path.display()));
                             }
                             _ => {}
-                        }
+                        } }
+                        tell(Event::Ended(end));
+                    }
+                    Task::WriteSkyward { build, codename, path, slot } => {
+                        let end = write(&path, &codename, &build, slot, &tell);
                         tell(Event::Ended(end));
                     }
                 }
@@ -355,13 +364,34 @@ fn fetch(
 /// `codename` names, into the recovery partitions of the slot that starts
 /// next and of any other slot that holds Skyward, telling how far that has
 /// come.
-fn write(path: &Path, codename: &str, tell: &dyn Fn(Event)) -> End {
+fn prepare(path: &Path, codename: &str, build: &Build) -> Result<(Vec<u8>, Slot)> {
+    use sha2::{Digest, Sha256};
+    ensure!(codename == "miro", "this release channel supports miro only");
+    ensure!(skyward_vab::snapshot_state()? == skyward_vab::SnapshotState::None, "an update is pending or unknown");
+    ensure!(skyward_block::boot_param("androidboot.flash.locked")?.as_deref() == Some("0"), "an explicitly unlocked bootloader is required");
+    let battery = skyward_info::battery_now()?.context("cannot read battery")?;
+    ensure!(skyward_install::battery_refusal(&battery).is_none(), "battery too low to update recovery");
+    let slot = skyward_vab::current_slot()?.context("unknown current slot")?;
+    let bytes = std::fs::metadata(path)?.len();
+    ensure!(bytes == build.size && bytes <= 256 << 20, "downloaded image length mismatch");
+    let image = std::fs::read(path)?;
+    ensure!(format!("{:x}", Sha256::digest(&image)) == build.sha256, "downloaded image checksum mismatch");
+    upgrade::check(&image, codename)?;
+    let target = crate::updates::recovery_target(slot);
+    ensure!(skyward_block::size_bytes(target)? == bytes, "image must fill the current recovery partition exactly");
+    Ok((image, slot))
+}
+
+fn recovery_target(slot: Slot) -> PathBuf {
+    Path::new(skyward_block::BY_NAME).join(format!("recovery{}", slot.suffix()))
+}
+
+fn write(path: &Path, codename: &str, build: &Build, expected: Slot, tell: &dyn Fn(Event)) -> End {
     let dir = Path::new(skyward_block::BY_NAME);
     let ready = || -> Result<(Vec<u8>, Vec<Slot>)> {
-        let image = upgrade::unzip(path)?;
-        upgrade::check(&image, codename)?;
-        let next = skyward_vab::boot::next_slot().context("ask which slot starts next")?;
-        Ok((image, upgrade::slots(dir, next)?))
+        let (image, slot) = prepare(path, codename, build)?;
+        ensure!(slot == expected, "current slot changed after confirmation");
+        Ok((image, vec![slot]))
     };
     let (image, slots) = match ready() {
         Ok(ready) => ready,
