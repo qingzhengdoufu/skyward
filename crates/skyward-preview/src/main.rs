@@ -218,8 +218,8 @@ fn main() -> Result<()> {
                     app.state.wlan = Some(joined(Joining::Connected(router_link())));
                     app.skyward_checked(Ok(Newest { version: "0.2.5".into(), newer: true, build: Some(Build {
                         name: "skyward-v0.2.5-miro-OS3.0.303.0.WOMCNXM.img".into(),
-                        url: "https://api.github.com/repos/wmin85099-cmd/skyward/releases/assets/1".into(),
-                        link: "https://github.com/wmin85099-cmd/skyward/releases/download/v0.2.5/skyward-v0.2.5-miro-OS3.0.303.0.WOMCNXM.img".into(),
+                        url: "https://api.github.com/repos/qingzhengdoufu/skyward/releases/assets/1".into(),
+                        link: "https://github.com/qingzhengdoufu/skyward/releases/download/v0.2.5/skyward-v0.2.5-miro-OS3.0.303.0.WOMCNXM.img".into(),
                         size: 104857600, sha256: "12".repeat(32),
                     }) }));
                     app.state.skyward_job = Some(SkywardJob { stage: None, rate: 0, outcome: Some(SkywardEnd::Ready(Slot::A)), stopping: false });

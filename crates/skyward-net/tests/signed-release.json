@@ -5,11 +5,11 @@
   "body": "```skyward-manifest\n{\"payload\": \"eyJzY2hlbWEiOjEsInRhZyI6InYwLjIuNCIsImRldmljZSI6Im1pcm8iLCJuYW1lIjoic2t5d2FyZC12MC4yLjQtbWlyby1PUzMuMC4zMDMuMC5XT01DTlhNLmltZyIsInNpemUiOjEwNDg1NzYwMCwic2hhMjU2IjoiMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMiJ9\", \"signature\": \"MEUCIDnag7ldDFpbsdmLxPGOTOvUX9kdGrY0dq4cNj5uJd13AiEAr8YgqwUPnjvCh6c1baIf8V82Kb0EDmy4fe1Jx0rKoaY=\"}\n```",
   "assets": [
     {
-      "url": "https://api.github.com/repos/wmin85099-cmd/skyward/releases/assets/1",
+      "url": "https://api.github.com/repos/qingzhengdoufu/skyward/releases/assets/1",
       "name": "skyward-v0.2.4-miro-OS3.0.303.0.WOMCNXM.img",
       "size": 104857600,
       "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
-      "browser_download_url": "https://github.com/wmin85099-cmd/skyward/releases/download/v0.2.4/skyward-v0.2.4-miro-OS3.0.303.0.WOMCNXM.img"
+      "browser_download_url": "https://github.com/qingzhengdoufu/skyward/releases/download/v0.2.4/skyward-v0.2.4-miro-OS3.0.303.0.WOMCNXM.img"
     }
   ]
 }

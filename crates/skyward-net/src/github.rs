@@ -5,10 +5,10 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 
 /// This adaptation's release repository, separate from all upstream builds.
-pub const REPOSITORY: &str = "wmin85099-cmd/skyward";
+pub const REPOSITORY: &str = "qingzhengdoufu/skyward";
 
 /// Where GitHub answers which release of this fork is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/wmin85099-cmd/skyward/releases/latest";
+pub const LATEST: &str = "https://api.github.com/repos/qingzhengdoufu/skyward/releases/latest";
 
 const PUBLIC_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIWY+omXY/ezywhrM+qUAMlCipW9iNuqT1pmYp/m2DE7kdsb5Y7fXk2XVuIRg9jzR551y1rcvXcdNtQyM65w7GA==";
 
@@ -248,10 +248,10 @@ mod tests {
 
     #[test]
     fn github_encoded_build_metadata_keeps_the_exact_signed_repository_path() {
-        let link = "https://github.com/wmin85099-cmd/skyward/releases/download/v0.2.0+miro.16/skyward-v0.2.0+miro.16-miro-stock.img";
+        let link = "https://github.com/qingzhengdoufu/skyward/releases/download/v0.2.0+miro.16/skyward-v0.2.0+miro.16-miro-stock.img";
         assert!(matches_asset_link(&link.replace('+', "%2B"), link));
         assert!(matches_asset_link(link, link));
-        assert!(!matches_asset_link(&link.replace("wmin85099-cmd", "another-owner"), link));
+        assert!(!matches_asset_link(&link.replace("qingzhengdoufu", "another-owner"), link));
     }
 
     /// What GitHub answered of the newest release on 2026-11-07, with the
@@ -369,5 +369,16 @@ mod tests {
         }
         let changed = fixture.replace("\"draft\": false", "\"draft\": true");
         assert!(trusted_newest(&changed, "miro", "0.2.3").is_err());
+    }
+
+    #[test]
+    fn renamed_repository_rejects_old_owner_asset_urls() {
+        let fixture = include_str!("../tests/signed-release.json");
+        for field in ["url", "browser_download_url"] {
+            let mut changed: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            let old = changed["assets"][0][field].as_str().unwrap().replace("qingzhengdoufu", "wmin85099-cmd");
+            changed["assets"][0][field] = serde_json::json!(old);
+            assert!(trusted_newest(&changed.to_string(), "miro", "0.2.3").is_err(), "{field}");
+        }
     }
 }

@@ -71,7 +71,7 @@ the same as authorization to redistribute every stock binary in the ramdisk.
 
 ## Signed self-update from 0.2.4
 
-Only published, non-prerelease GitHub releases in wmin85099-cmd/skyward are
+Only published, non-prerelease GitHub releases in qingzhengdoufu/skyward are
 accepted. The release body embeds a skyward-manifest block signed with P-256
 ECDSA/SHA-256. The public key is pinned in skyward-net/src/github.rs; the private
 key is kept outside this repository and is never embedded in an image.
@@ -89,6 +89,13 @@ This protects authenticity/integrity, not bug-freedom or vendor verified boot.
 GitHub APIs may be rate limited or unreachable on some networks. A download
 lost on reboot restarts because temporary recovery storage is volatile. Signature
 key loss requires a deliberate manual channel/key migration; do not publish it.
+
+The GitHub account was renamed from wmin85099-cmd to qingzhengdoufu after r17.
+Images up to r17 pin the old repository paths and can reject the canonical
+asset URLs returned after the rename, even if the API request redirects.
+Install a newly built image with the updated repository paths manually once;
+keep the same release signing key. This source change does not modify existing
+images or published releases.
 
 Existing recovery starts root adb and may mount data read-write or persist
 settings. Do not interpret these notes as a zero-write guarantee.
