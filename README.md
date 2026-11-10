@@ -1,5 +1,9 @@
 # Skyward for REDMI K80 Pro (miro)
 
+Current release naming: **0.2.0+miro.13** (upstream 0.2.0, adaptation 13).
+This corrects our earlier independent 0.2.4 numbering; it is not a new upstream
+merge. See [version migration](docs/releases/v0.2.0+miro.13.md).
+
 [简体中文](README.zh-CN.md) | [Build and Status](docs/MIRO.md)
 
 Unofficial K80 Pro adaptation of [kirklin/skyward](https://github.com/kirklin/skyward),

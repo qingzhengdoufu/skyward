@@ -1,5 +1,9 @@
 # Skyward for REDMI K80 Pro (miro)
 
+当前版本命名：**0.2.0+miro.13**（原始上游 0.2.0，适配修订 13）。
+纠正此前独立递增的 0.2.4 编号，不代表合并了新上游功能。
+详见[版本迁移说明](docs/releases/v0.2.0+miro.13.md)。
+
 [English](README.md) | [构建与状态说明](docs/MIRO.md)
 
 本仓库是 [kirklin/skyward](https://github.com/kirklin/skyward) 的非官方 K80 Pro

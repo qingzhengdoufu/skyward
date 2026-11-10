@@ -17,7 +17,8 @@ cargo ndk -t arm64-v8a --platform 30 build --locked --release -p skyward
 RUSTFLAGS='-C target-feature=+crt-static' cargo ndk -t arm64-v8a --platform 30 build --locked --release -p skyward-system-init --target-dir target/system-init
 cargo build --locked --release -p skyward-pack
 
-name=skyward-v0.2.4-miro-OS3.0.303.0.WOMCNXM
+version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' Cargo.toml | tr -d '\r')
+name=skyward-v${version}-miro-OS3.0.303.0.WOMCNXM
 target/release/skyward-pack recovery \
     --stock "$stock" \
     --binary target/aarch64-linux-android/release/skyward \

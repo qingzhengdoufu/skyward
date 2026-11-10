@@ -143,7 +143,33 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
             Some(Build { sha256: sha256.to_lowercase(), name: a.name, url: a.url, link: a.browser_download_url, size: a.size })
         }
     };
-    Ok(Newest { version: version.to_string(), newer: newest > this, build })
+    let newer = if codename == "miro" { miro_newer(&newest, &this)? } else { newest > this };
+    Ok(Newest { version: version.to_string(), newer, build })
+}
+
+fn miro_revision(version: &semver::Version) -> Result<Option<u64>> {
+    if version.build.is_empty() { return Ok(None); }
+    let revision = version.build.as_str().strip_prefix("miro.").context("unknown miro version metadata")?;
+    ensure!(!revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()), "invalid miro revision");
+    Ok(Some(revision.parse().context("miro revision overflow")?))
+}
+
+/// Upstream version and adaptation revision have independent meanings. SemVer
+/// ignores build metadata, so compare the signed miro revision explicitly.
+fn miro_newer(release: &semver::Version, running: &semver::Version) -> Result<bool> {
+    match (miro_revision(release)?, miro_revision(running)?) {
+        (Some(new), Some(old)) => Ok(new > old),
+        (Some(new), None) => {
+            let legacy = match (running.major, running.minor, running.patch) {
+                (0, 2, 4) => 12,
+                (0, 2, 3) => 11,
+                _ => anyhow::bail!("unknown legacy miro version; manual installation required"),
+            };
+            Ok(new > legacy)
+        }
+        (None, Some(_)) => Ok(false),
+        (None, None) => Ok(release > running),
+    }
 }
 
 /// Ask GitHub for Skyward's newest release, and its build for the phone
@@ -200,6 +226,20 @@ fn refusal(status: ureq::http::StatusCode, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn miro_revision_orders_updates_independently_of_upstream_version() {
+        let parse = |v: &str| semver::Version::parse(v).unwrap();
+        let current = parse("0.2.0+miro.13");
+        assert!(!miro_newer(&current, &current).unwrap());
+        assert!(miro_newer(&parse("0.2.0+miro.14"), &current).unwrap());
+        assert!(!miro_newer(&parse("0.3.0+miro.12"), &current).unwrap());
+        assert!(!miro_newer(&parse("0.2.4"), &current).unwrap());
+        assert!(miro_newer(&current, &parse("0.2.4")).unwrap());
+        assert!(miro_newer(&current, &parse("0.2.3")).unwrap());
+        assert!(miro_newer(&parse("0.2.0+miro.bad"), &current).is_err());
+        assert!(miro_newer(&current, &parse("0.1.0")).is_err());
+    }
 
     /// What GitHub answered of the newest release on 2026-11-07, with the
     /// parts that do not matter here left out.
