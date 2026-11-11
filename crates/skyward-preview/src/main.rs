@@ -162,6 +162,23 @@ fn main() -> Result<()> {
     }
 
     let info = haotian(&cfg);
+    if args.iter().any(|arg| arg == "--usb-manager") {
+        for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
+            for lang in [Lang::Hans, Lang::Hant, Lang::En] {
+                for dark in [false, true] {
+                    for (name, screen) in [("home", Screen::Home), ("advanced", Screen::Advanced), ("about", Screen::About)] {
+                        let mut app = App::new(screen, w, h, dpi as f32 / 160.0);
+                        app.state.lang = lang;
+                        app.state.dark = dark;
+                        app.state.data = Data::Open;
+                        app.state.usb_drive = Some(UsbDrive::Shown);
+                        write_png(&out.join(format!("usb-{name}-{w}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
     if args.iter().any(|arg| arg == "--system-update") {
         for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
             for lang in [Lang::Hans, Lang::Hant, Lang::En] {

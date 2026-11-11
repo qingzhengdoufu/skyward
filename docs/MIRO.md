@@ -6,7 +6,7 @@
 - Adaptation base: https://github.com/Rinrroy/skyward-for-haotian
 - Base commit: d6e7b7aefcba123bf0ef15252e954e45a6de747f (0.2.3).
 - Local adaptations and testing: this repository's miro branch; build credits
-  retain 澪洛依 and 红烧豆腐. Original authors and GPL-3.0 remain unchanged.
+  retain 红烧豆腐. Original authors and GPL-3.0 remain unchanged.
 - OMAPI prebuilt provenance: resources/omapi/README.md. This inherited vendor
   binary is not claimed to have been compiled from Rust source here. Stock
   kernel, init, HALs and libraries are supplied locally by the builder.

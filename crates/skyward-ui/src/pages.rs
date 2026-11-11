@@ -322,6 +322,7 @@ pub fn home(cx: &Ctx) -> Frame {
         Row::new(l.pick(["恢复", "還原", "Restore"])).icon(PURPLE, Icon::Restore),
         Row::new(l.pick(["挂载", "掛載", "Mount"])).icon(SLATE, Icon::Mount),
         Row::new(l.pick(DECRYPT)).icon(BLUE, Icon::Lock).trail(Trail::Value(fmt::data(l, &cx.state.data))),
+        Row::new(l.pick(USB_MANAGER)).icon(PURPLE, Icon::UsbDrive),
     ]);
     out.extend(hits(&tools.rows, &[
         Action::Open(Screen::Install),
@@ -329,6 +330,7 @@ pub fn home(cx: &Ctx) -> Frame {
         Action::Open(Screen::Restore),
         Action::Open(Screen::Mount),
         Action::Open(Screen::Decrypt),
+        Action::OpenUsbManager,
     ]));
     y = tools.bottom + t.m.card_gap;
     let target = l.pick(REBOOT_TARGETS[cx.state.reboot].0);
@@ -571,7 +573,7 @@ pub fn mount(cx: &Ctx) -> Frame {
 }
 
 /// Who made the recovery, as the About page names them under its version.
-const AUTHOR: &str = "© 2026 Kirk Lin & 澪洛依 & 红烧豆腐";
+const AUTHOR: &str = "© 2026 Kirk Lin & 红烧豆腐";
 
 /// About this device, modelled on the stock「我的设备」: the wordmark, the
 /// version and its author over a moving colour field, and the summary,
@@ -2417,10 +2419,11 @@ const STOP: Text = ["停止", "停止", "Stop"];
 /// Tools for the experienced.
 pub fn advanced(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
-    let mut c = page(cx);
+    let mut c = long_page(cx);
     let top = t.m.content_top;
     let tools = widgets::list(&mut c, t, f, top, &[
         Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
+        Row::new(l.pick(USB_MANAGER)).icon(PURPLE, Icon::UsbDrive),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
@@ -2430,6 +2433,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
+        Action::OpenUsbManager,
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
@@ -2437,10 +2441,11 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Update),
         Action::Open(Screen::Avb),
     ]);
-    Frame::new(t, c, out, l.pick(ADVANCED), top)
+    Frame::new(t, fit(c, t, tools.bottom), out, l.pick(ADVANCED), top)
 }
 
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];
+const USB_MANAGER: Text = ["U 盘管理", "USB 隨身碟管理", "USB drive manager"];
 const AVB: Text = ["AVB 校验", "AVB 驗證", "AVB verification"];
 
 pub fn avb(cx: &Ctx) -> Frame {

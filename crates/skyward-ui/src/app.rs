@@ -1184,6 +1184,8 @@ pub enum Action {
     AvbToggle(avbctl::Check),
     CancelAvb,
     Open(Screen),
+    /// Open the mounted USB drive in the full file manager, not the installer.
+    OpenUsbManager,
     /// Leave the decrypt page for the page it was opened from; the page
     /// the recovery started on, for the home page without keeping it
     /// behind.
@@ -4211,6 +4213,15 @@ impl App {
         self.state.usb_drive = drive;
         self.state.drive = Folder::new("");
         self.refresh();
+        if self.screen() == Screen::Files && std::path::Path::new(&self.state.files.path).starts_with(USB_DRIVE) {
+            self.state.file = None;
+            self.state.clip = None;
+            if self.state.usb_drive == Some(UsbDrive::Shown) {
+                return vec![Effect::ReadDir(USB_DRIVE.into())];
+            }
+            self.state.files = Folder::new("/");
+            return vec![Effect::ReadDir("/".into())];
+        }
         let gone = !self.state.place_open(Place::UsbDrive) && self.state.restore.as_ref().is_some_and(|(e, _)| e.place == Place::UsbDrive);
         match self.screen() {
             Screen::RestoreBackup if gone => {
@@ -5336,6 +5347,17 @@ impl App {
     fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
+            Action::OpenUsbManager => {
+                match &self.state.usb_drive {
+                    Some(UsbDrive::Shown) => {
+                        self.state.files = Folder::new(USB_DRIVE);
+                        self.open(Screen::Files);
+                        return vec![Effect::ReadDir(USB_DRIVE.into())];
+                    }
+                    Some(UsbDrive::Unreadable(_)) => self.say(l.pick(USB_DRIVE_UNREADABLE), now),
+                    None => self.say(l.pick(USB_DRIVE_WANTED), now),
+                }
+            }
             Action::QueueAdd => {
                 if self.state.zip_queue.len() >= skyward_install::queue::LIMIT {
                     self.say(l.pick(["队列最多 10 个 ZIP", "佇列最多 10 個 ZIP", "Queue holds at most 10 ZIPs"]), now);
@@ -10672,6 +10694,41 @@ mod tests {
         app.set_place(Place::Storage, String::new(), Ok(Vec::new()), LISTED);
         assert!(app.key(Key::Back, 1000).is_empty());
         assert_eq!(app.screen(), Screen::Install, "from the top, back leaves");
+    }
+
+    #[test]
+    fn usb_manager_is_available_on_home_and_advanced_without_starting_an_installer() {
+        let (f, i) = (fonts(), info());
+        for screen in [Screen::Home, Screen::Advanced] {
+            let mut app = App::new(screen, W, H, PPD);
+            assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::OpenUsbManager));
+            assert!(app.act(Action::OpenUsbManager, 0).is_empty());
+            assert_eq!(app.screen(), screen);
+            app.set_usb_drive(Some(UsbDrive::Unreadable("unsupported filesystem".into())));
+            assert!(app.act(Action::OpenUsbManager, 0).is_empty());
+            assert_eq!(app.screen(), screen);
+            app.set_usb_drive(Some(UsbDrive::Shown));
+            assert_eq!(app.act(Action::OpenUsbManager, 0), vec![Effect::ReadDir(USB_DRIVE.into())]);
+            assert_eq!(app.screen(), Screen::Files);
+            assert_eq!(app.state.files.path, USB_DRIVE);
+            assert_eq!(app.state.install, Install::Idle);
+            app.set_files(USB_DRIVE.into(), Ok(vec![entry("notes.txt", FileKind::File)]), LISTED);
+            assert_eq!(app.act(Action::OpenEntry(0), 0), vec![Effect::OpenText(format!("{USB_DRIVE}/notes.txt"))]);
+        }
+    }
+
+    #[test]
+    fn removing_a_usb_drive_leaves_no_stale_file_manager_entries_or_clipboard() {
+        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        app.set_usb_drive(Some(UsbDrive::Shown));
+        app.act(Action::OpenUsbManager, 0);
+        app.set_files(format!("{USB_DRIVE}/ROMs"), Ok(vec![entry("rom.zip", FileKind::File)]), LISTED);
+        app.state.clip = Some(Clip { op: FileOp::Copy, path: format!("{USB_DRIVE}/ROMs/rom.zip") });
+        assert_eq!(app.set_usb_drive(None), vec![Effect::ReadDir("/".into())]);
+        assert_eq!(app.state.files.path, "/");
+        assert!(app.state.clip.is_none());
+        assert!(app.state.file.is_none());
+        assert_eq!(app.state.install, Install::Idle);
     }
 
     #[test]
