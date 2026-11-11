@@ -1339,6 +1339,12 @@ mod tests {
         assert!(DeviceConfig::parse(&relative).is_err());
     }
 
+    #[test]
+    fn miro_enables_the_official_ota_service() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        assert_eq!(cfg.update.unwrap().server, "https://update.miui.com/updates/miotaV3.php");
+    }
+
     /// haotian's panel lights on two taps, as the phone's own system's does;
     /// no other phone is given that, since a phone whose controller stops
     /// reporting fingers with its panel off has nothing for it to work with.

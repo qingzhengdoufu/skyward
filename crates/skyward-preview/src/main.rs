@@ -162,6 +162,39 @@ fn main() -> Result<()> {
     }
 
     let info = haotian(&cfg);
+    if args.iter().any(|arg| arg == "--system-update") {
+        for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
+            for lang in [Lang::Hans, Lang::Hant, Lang::En] {
+                for dark in [false, true] {
+                    for mode in ["download", "ready", "erase-confirm"] {
+                        let mut app = App::new(if mode == "erase-confirm" { Screen::Installing } else { Screen::Update }, w, h, dpi as f32 / 160.0);
+                        app.state.lang = lang;
+                        app.state.dark = dark;
+                        app.state.data = Data::Open;
+                        app.state.update_server = true;
+                        app.state.check = skyward_ui::app::Check::Answered(Some(Release {
+                            version: "OS3.0.305.0.WOMCNXM".into(),
+                            name: "miro-ota_full-OS3.0.305.0.WOMCNXM-user-16.0-bc8ed08af5.zip".into(),
+                            urls: vec![], md5: "bc8ed08af5c004654b8fe1d48f01be41".into(), size: "8.3G".into(), length: Some(8_928_033_512),
+                        }));
+                        app.state.wlan = Some(joined(Joining::Connected(router_link())));
+                        app.state.format_after_update = mode != "download";
+                        if mode == "download" {
+                            app.state.download = Some(DownloadJob { progress: Some(Progress::Downloading { done: 3_500_000_000, total: 8_928_033_512 }), rate: 12_000_000, outcome: None, stopping: false });
+                        } else {
+                            app.state.have = Have::Whole(8_928_033_512);
+                        }
+                        if mode == "erase-confirm" {
+                            app.state.install = Install::Confirming { version: Some("OS3.0.305.0.WOMCNXM".into()), wipe: true };
+                        }
+                        let info = DeviceInfo { os_version: Some("OS3.0.304.0.WOMCNXM".into()), ..info.clone() };
+                        write_png(&out.join(format!("system-{mode}-{w}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
     if args.iter().any(|arg| arg == "--zip-queue") {
         for (w, h, dpi) in [(1440, 3200, 600), (1080, 2400, 440)] {
             for lang in [Lang::Hans, Lang::Hant, Lang::En] {

@@ -165,3 +165,6 @@ supplicant = "/vendor/bin/hw/wpa_supplicant"
 libraries = ["/system/lib64", "/vendor/lib64"]
 service = "android.hardware.wifi.supplicant.ISupplicant/default"
 probe = "http://connect.rom.miui.com/generate_204"
+
+[update]
+server = "https://update.miui.com/updates/miotaV3.php"

@@ -519,6 +519,8 @@ fn conclude(done: Done, served: Result<Option<Fault>>, origin: Origin) -> Outcom
 fn install<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done> {
     let file = File::open(mount.path()).context("open the package")?;
     let package = package::identify(BufReader::with_capacity(1 << 16, file))?;
+    ensure!(!ctx.options.format_data || (ctx.origin == Origin::File && matches!(&package, Package::Update(_))),
+        "post-update data formatting is only available for an explicitly selected A/B OTA file");
     ensure!(ctx.origin != Origin::Queue || matches!(&package, Package::Script), "queued file is no longer a script ZIP");
     let _ = kmsg(&format!("install: {}", describe(&package)));
     match package {
@@ -663,7 +665,7 @@ fn update_system<S>(ctx: &mut Context, mount: &Mount<S>, update: &Update) -> Res
         return Ok(Done::Decided(Outcome::Cancelled));
     }
     let version = update.version().map(str::to_string);
-    let wipe = update.wipes();
+    let wipe = update.wipes() || ctx.options.format_data;
     if waits(ctx.origin, wipe) {
         ctx.send(Event::Ready { version: version.clone(), wipe });
         match ctx.commands.recv() {
@@ -692,6 +694,8 @@ fn update_system<S>(ctx: &mut Context, mount: &Mount<S>, update: &Update) -> Res
             if let Some(kept) = &kept {
                 reflash(ctx, kept, Ok(slot.other()));
             }
+            ensure!(!ctx.options.format_data || !ctx.reflash_failed.get(),
+                "recovery preservation failed; data will not be formatted");
             post_avb(ctx, &[slot.other()])?;
             Done::Decided(Outcome::Installed { slot: slot.other(), wipe })
         }

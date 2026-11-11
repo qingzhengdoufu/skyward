@@ -548,6 +548,7 @@ pub enum Slider {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
+    FormatAfterUpdate,
     Vibrate,
     DoubleTap,
     /// Offer internal storage to a computer over USB.
@@ -1667,6 +1668,10 @@ pub struct State {
     /// over.
     pub keep_recovery: bool,
     pub disable_avb: bool,
+    /// One-session preference, only captured by InstallDownloaded.
+    pub format_after_update: bool,
+    /// Per-install snapshot; reset before every new install.
+    pub format_downloaded_install: bool,
     /// How Skyward went back into the recovery partitions the install
     /// wrote over, where it did.
     pub reflash: Option<Reflash>,
@@ -1847,6 +1852,8 @@ impl Default for State {
             recovery_partitions: false,
             keep_recovery: true,
             disable_avb: false,
+            format_after_update: false,
+            format_downloaded_install: false,
             reflash: None,
             mounts: Ok(Vec::new()),
             mount_failure: None,
@@ -3981,6 +3988,7 @@ impl App {
         let s = &mut self.state;
         if !s.queue_running { s.queue_results.clear(); }
         (s.install, s.source, s.package_name) = (install, source, name);
+        s.format_downloaded_install = false;
         s.script_output.clear();
         s.reflash = None;
     }
@@ -5406,6 +5414,7 @@ impl App {
                     Switch::Compress => &mut self.state.compress,
                     Switch::Verify => &mut self.state.verify,
                     Switch::Signature => &mut self.state.check_signature,
+                    Switch::FormatAfterUpdate => &mut self.state.format_after_update,
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
                     Switch::DisableAvb => &mut self.state.disable_avb,
                     Switch::ShowPassword => &mut self.state.show_password,
@@ -5885,6 +5894,7 @@ impl App {
             }
             // Asking takes a network, which the WLAN page joins.
             Action::CheckUpdate => {
+                if self.state.downloading() { return Vec::new(); }
                 if !self.state.online() {
                     self.open(Screen::Wlan);
                     return self.arrive_at(Screen::Wlan);
@@ -5922,9 +5932,18 @@ impl App {
                 }
             }
             Action::InstallDownloaded => {
+                if !self.state.data.storage_open() {
+                    self.open(Screen::Decrypt);
+                    return self.arrive_at(Screen::Decrypt);
+                }
                 let name = self.state.newest().expect("the package installed is the newest system's").name.clone();
                 let Have::Whole(size) = self.state.have else { unreachable!("only a whole package is offered to install") };
-                return self.install_file(Place::Storage, format!("{DOWNLOADS}/{name}"), size, now);
+                let fx = self.install_file(Place::Storage, format!("{DOWNLOADS}/{name}"), size, now);
+                if fx.iter().any(|effect| matches!(effect, Effect::InstallFile(..))) {
+                    self.state.format_downloaded_install = self.state.format_after_update;
+                    self.state.format_after_update = false;
+                }
+                return fx;
             }
             // Asking takes a network, which the WLAN page joins.
             Action::CheckSkyward => {
@@ -6777,7 +6796,10 @@ impl App {
                 }
             }
             Confirm::Install | Confirm::InstallWipe => {
-                if let Install::Confirming { version, .. } = &self.state.install {
+                if let Install::Confirming { version, wipe } = &self.state.install {
+                    if (*wipe && which != Confirm::InstallWipe) || (!*wipe && which != Confirm::Install) {
+                        return fx;
+                    }
                     self.state.install = Install::Updating { version: version.clone(), stage: None, overwriting: false };
                     fx.push(Effect::Install);
                     self.refresh();
@@ -11461,6 +11483,43 @@ mod tests {
         assert!(row.contains(round.x + round.w / 2.0, round.y + round.h / 2.0));
         assert_eq!(fr.hit(round.x + round.w / 2.0, round.y + round.h / 2.0).map(|h| h.action), Some(Action::NetworkDetails(1)));
         assert_eq!(fr.hit(row.x + row.w / 3.0, row.y + row.h / 2.0).map(|h| h.action), Some(Action::JoinNetwork(1)));
+    }
+
+    #[test]
+    fn downloaded_ota_formatting_is_opt_in_one_shot_and_not_saved() {
+        let mut app = App::new(Screen::Update, W, H, PPD);
+        assert!(!app.state.format_after_update && !app.state.format_downloaded_install);
+        app.state.data = Data::Open;
+        app.state.check = Check::Answered(Some(newest()));
+        app.state.have = Have::Whole(100);
+        app.act(Action::Toggle(Switch::FormatAfterUpdate), 0);
+        let mut restored = State::default();
+        crate::settings::Settings::of(&app.state).apply(&mut restored);
+        assert!(!restored.format_after_update && !restored.format_downloaded_install);
+        let fx = app.act(Action::InstallDownloaded, 0);
+        assert!(matches!(&fx[..], [Effect::InstallFile(Place::Storage, _)]));
+        assert!(app.state.format_downloaded_install);
+        assert!(!app.state.format_after_update, "consumed, not silently reused next time");
+        app.install(Event::Ready { version: None, wipe: true }, 0);
+        assert!(app.confirmed(Confirm::Install, 0).is_empty(), "a non-destructive slide cannot authorize a wipe");
+        assert_eq!(app.confirmed(Confirm::InstallWipe, 0), [Effect::Install]);
+        app.install(Event::Finished(Outcome::Failed(skyward_install::Failure::Error("install failed".into()))), 0);
+        assert!(!matches!(app.state.data, Data::Erased));
+        app.install_file(Place::Storage, "ordinary.zip".into(), 100, 0);
+        assert!(!app.state.format_downloaded_install, "ordinary ZIP does not inherit the OTA option");
+    }
+
+    #[test]
+    fn format_option_cannot_affect_an_install_already_running() {
+        let mut app = App::new(Screen::Update, W, H, PPD);
+        app.state.data = Data::Open;
+        app.state.check = Check::Answered(Some(newest()));
+        app.state.have = Have::Whole(100);
+        app.state.format_after_update = true;
+        app.state.install = Install::Waiting;
+        assert!(app.act(Action::InstallDownloaded, 0).is_empty());
+        assert!(!app.state.format_downloaded_install);
+        assert!(app.state.format_after_update, "blocked action did not consume the choice");
     }
 
     fn newest() -> Release {

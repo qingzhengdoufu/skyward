@@ -2934,7 +2934,8 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                 None => (l.pick(GETTING_READY), String::new(), None),
                 Some(p) => downloaded(l, p, job.rate),
             };
-            y = widgets::progress_card(c, t, f, y + t.m.card_gap, heading, &detail, share);
+            let download_theme = Theme { pal: crate::theme::Palette { accent: GREEN, ..t.pal }, ..*t };
+            y = widgets::progress_card(c, &download_theme, f, y + t.m.card_gap, heading, &detail, share);
             let label = l.pick(if job.stopping { ["正在暂停", "正在暫停", "Pausing"] } else { ["暂停", "暫停", "Pause"] });
             let stop = widgets::list(c, t, f, y + t.m.card_gap, &[Row::new(label).trail(Trail::None)]);
             if !job.stopping {
@@ -2962,7 +2963,9 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                 }
                 _ => None,
             };
-            let sub = if !s.data.storage_open() {
+            let sub = if s.data == Data::Erased {
+                Some(l.pick(DATA_ERASED))
+            } else if !s.data.storage_open() {
                 Some(l.pick(DECRYPT_NEEDED))
             } else if !s.online() {
                 Some(l.pick(WLAN_FIRST))
@@ -2975,23 +2978,30 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
             y = download.bottom;
         }
     }
+    let option = Row::new(l.pick(["刷入后格式化 data", "刷入後格式化 data", "Format data after installation"]))
+        .trail(Trail::Switch(s.format_after_update));
+    if !s.downloading() {
+        let options = widgets::list(c, t, f, y + t.m.card_gap, &[option]);
+        out.extend(hits(&options.rows, &[Action::Toggle(Switch::FormatAfterUpdate)]));
+        y = options.bottom;
+        let check = widgets::list(c, t, f, y + t.m.card_gap, &[Row::new(l.pick(CHECK_FOR_UPDATES)).icon(BLUE, Icon::Globe)]);
+        out.extend(hits(&check.rows, &[Action::CheckUpdate]));
+        y = check.bottom;
+    }
     let saved = tr!(
         l,
-        "完整更新包将保存到\"/sdcard/{DOWNLOADS}\"中，安装后不会自动删除。",
-        "完整更新檔將儲存到「/sdcard/{DOWNLOADS}」中，安裝後不會自動刪除。",
-        "The full OTA package is saved in “/sdcard/{DOWNLOADS}”, and stays there after it's installed."
+        "保存位置：/sdcard/{DOWNLOADS}",
+        "儲存位置：/sdcard/{DOWNLOADS}",
+        "Saved to /sdcard/{DOWNLOADS}"
     );
-    let points = [
-        l.pick(["安装系统更新不会删除用户数据，建议在安装前进行备份。", "安裝系統更新不會刪除使用者資料，建議在安裝前進行備份。", "Installing a system update deletes no user data. Backing up first is still wise."]),
-        saved.as_str(),
-        l.pick(["下载中断后可继续下载，已下载的部分会保留。", "下載中斷後可繼續下載，已下載的部分會保留。", "A download cut short can be resumed, keeping what was downloaded."]),
-        l.pick([
-            "更新后，系统会在后台进行一系列优化，期间可能出现发热、耗电增加等情况，1 ~ 3 天内将自行恢复。",
-            "更新後，系統會在背景進行一系列最佳化，期間可能出現發熱、耗電增加等情況，1 ~ 3 天內將自行恢復。",
-            "After the update the system optimizes itself in the background, and the phone may run warm or use more battery for 1 to 3 days.",
-        ]),
-    ];
-    widgets::notes(c, t, f, y + t.m.card_gap, l.pick(NOTES), &points)
+    let y = widgets::footnote(c, t, f, y, &saved);
+    if s.format_after_update {
+        widgets::footnote(c, t, f, y, l.pick([
+            "成功刷入后清空应用、账户和内部存储，包括下载的刷机包。",
+            "成功刷入後清空應用程式、帳戶和內部儲存，包括下載的刷機包。",
+            "After installation succeeds, erases apps, accounts and internal storage, including the downloaded ROM.",
+        ]))
+    } else { y }
 }
 
 const NOTES: Text = ["注意事项", "注意事項", "Notes"];
@@ -3004,7 +3014,7 @@ fn downloaded(l: Lang, progress: Progress, rate: u64) -> (&'static str, String, 
         Progress::Checking { done, total } => (l.pick(CHECKING_PART), format!("{} / {}", fmt::file_size(done), fmt::file_size(total)), Some(share(done, total))),
         Progress::Downloading { done, total } => (
             l.pick(DOWNLOADING),
-            format!("{} / {} · {}/s", fmt::file_size(done), fmt::file_size(total), fmt::file_size(rate)),
+            format!("{}% · {} / {} · {}/s", percent(share(done, total)), fmt::file_size(done), fmt::file_size(total), fmt::file_size(rate)),
             Some(share(done, total)),
         ),
     }

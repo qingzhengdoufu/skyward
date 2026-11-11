@@ -1073,7 +1073,12 @@ fn detach(services: Vec<Service>) -> Detach {
 /// on a phone that has them, and checks a zip's signature before its
 /// install script runs.
 fn install_options(app: &App) -> Options {
-    Options { keep: app.state.keep_recovery && app.state.recovery_partitions, signed: app.state.check_signature, disable_avb: app.state.disable_avb }
+    Options {
+        keep: app.state.keep_recovery && app.state.recovery_partitions,
+        signed: app.state.check_signature,
+        disable_avb: app.state.disable_avb,
+        format_data: app.state.format_downloaded_install,
+    }
 }
 
 /// How often the WLAN page scans while it shows.
@@ -1088,9 +1093,13 @@ fn installed(cfg: &DeviceConfig, info: &skyward_info::DeviceInfo) -> Result<Inst
     let slot = info.slot.context("only an A/B phone is updated")?;
     let props = skyward_info::installed_props(slot)?;
     let prop = |name: &str| props.get(name).cloned().with_context(|| format!("the installed system says no {name}"));
+    let version = prop(&cfg.device.os_version_prop)?;
+    if cfg.device.codename == "miro" {
+        ensure!(version.ends_with("CNXM"), "miro system updates support China Mainland Stable only");
+    }
     Ok(Installed {
-        device: prop("ro.product.mod_device")?,
-        version: prop(&cfg.device.os_version_prop)?,
+        device: if cfg.device.codename == "miro" { "miro".into() } else { prop("ro.product.mod_device")? },
+        version,
         android: prop("ro.build.version.release")?,
         unlocked: skyward_block::boot_param("androidboot.flash.locked")?.as_deref() == Some("0"),
     })
@@ -2869,6 +2878,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     Effect::Download(release) => {
                         ensure!(downloader.is_none(), "the full package is being downloaded already");
+                        if !app.state.data.storage_open() {
+                            app.download_ended(DownloadEnd::Failed(Failure::Other("internal storage is not open".into())), Have::Nothing, now);
+                            continue;
+                        }
                         let server = cfg.update.as_ref().context("the phone's update server is not known")?.server.clone();
                         let path = downloaded(&release);
                         match installed(cfg, &info) {
