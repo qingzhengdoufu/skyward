@@ -9780,6 +9780,24 @@ mod tests {
     }
 
     #[test]
+    fn system_update_offers_the_same_saved_recovery_preservation_switch() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Update, W, H, PPD);
+        app.state.update_server = true;
+        app.state.recovery_partitions = true;
+        assert!(app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::KeepRecovery)));
+        assert!(app.state.keep_recovery);
+        assert!(app.act(Action::Toggle(Switch::KeepRecovery), 0).is_empty(), "the switch never writes a partition");
+        assert!(!app.state.keep_recovery);
+        let mut restored = State::default();
+        crate::settings::Settings::of(&app.state).apply(&mut restored);
+        assert!(!restored.keep_recovery);
+        app.state.recovery_partitions = false;
+        app.refresh();
+        assert!(!app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::KeepRecovery)));
+    }
+
+    #[test]
     fn automatic_avb_is_an_explicit_saved_install_option_not_a_startup_write() {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Install, &f, &i);

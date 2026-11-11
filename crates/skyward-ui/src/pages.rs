@@ -2857,6 +2857,13 @@ pub fn update(cx: &Ctx) -> Frame {
         let online_update = l.pick(["在线更新", "線上更新", "Online update"]);
         y = if y == top { widgets::section_first(&mut c, t, f, y, online_update) } else { widgets::section(&mut c, t, f, y, online_update) };
         y = online(&mut c, cx, y, &mut out);
+        if s.recovery_partitions {
+            let row = Row::new(l.pick(["刷入后保留当前 Recovery", "刷入後保留目前 Recovery", "Keep current Recovery after installation"]))
+                .trail(Trail::Switch(s.keep_recovery));
+            let options = widgets::list(&mut c, t, f, y + t.m.card_gap, &[row]);
+            out.extend(hits(&options.rows, &[Action::Toggle(Switch::KeepRecovery)]));
+            y = options.bottom;
+        }
     }
     let next = match &s.boot_slots {
         Some(Ok(slots)) => Some(slots.active),

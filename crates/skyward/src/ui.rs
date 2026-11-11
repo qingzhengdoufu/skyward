@@ -300,12 +300,11 @@ fn plug(app: &mut App, was: &Option<skyward_info::Battery>, is: &Option<skyward_
 
 /// How far a computer has the USB port, as the port's controller tells.
 fn usb_link() -> Result<UsbLink> {
-    let controller = skyward_sys::prop("sys.usb.controller").context("init names no USB controller")?;
-    let path = Path::new("/sys/class/udc").join(controller).join("state");
-    let state = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    Ok(match state.trim() {
-        "configured" => UsbLink::Connected,
-        "not attached" => UsbLink::Unplugged,
+    let controller = skyward_sys::prop("sys.usb.controller");
+    let state = skyward_sys::usb::gadget_state(Path::new("/sys/class/udc"), controller.as_deref())?;
+    Ok(match state.as_deref() {
+        Some("configured") => UsbLink::Connected,
+        None | Some("not attached") => UsbLink::Unplugged,
         _ => UsbLink::Connecting,
     })
 }
