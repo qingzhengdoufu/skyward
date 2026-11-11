@@ -4206,6 +4206,21 @@ impl App {
     /// and one shown while its page is up is read at once. The backups
     /// listed are looked for again, and a backup on a drive gone leaves its
     /// page.
+    pub fn usb_drive_changed(&mut self, drive: Option<UsbDrive>, now: u64) -> Vec<Effect> {
+        if drive == self.state.usb_drive {
+            return Vec::new();
+        }
+        let message = match &drive {
+            Some(UsbDrive::Shown) => ["U 盘已连接", "USB 隨身碟已連接", "USB drive connected"],
+            Some(UsbDrive::Unreadable(_)) => ["U 盘已插入，无法读取", "USB 隨身碟已插入，無法讀取", "USB drive inserted, but unreadable"],
+            None => ["U 盘已拔出", "USB 隨身碟已拔出", "USB drive removed"],
+        };
+        let effects = self.set_usb_drive(drive);
+        self.wake(now);
+        self.say(self.state.lang.pick(message), now);
+        effects
+    }
+
     pub fn set_usb_drive(&mut self, drive: Option<UsbDrive>) -> Vec<Effect> {
         if drive == self.state.usb_drive {
             return Vec::new();
@@ -10694,6 +10709,32 @@ mod tests {
         app.set_place(Place::Storage, String::new(), Ok(Vec::new()), LISTED);
         assert!(app.key(Key::Back, 1000).is_empty());
         assert_eq!(app.screen(), Screen::Install, "from the top, back leaves");
+    }
+
+    #[test]
+    fn usb_hotplug_notifications_only_show_on_changes_and_keep_navigation_effects() {
+        for (lang, connected, removed, unreadable) in [
+            (Lang::Hans, "U 盘已连接", "U 盘已拔出", "U 盘已插入，无法读取"),
+            (Lang::Hant, "USB 隨身碟已連接", "USB 隨身碟已拔出", "USB 隨身碟已插入，無法讀取"),
+            (Lang::En, "USB drive connected", "USB drive removed", "USB drive inserted, but unreadable"),
+        ] {
+            let mut app = App::new(Screen::Home, W, H, PPD);
+            app.state.lang = lang;
+            assert!(app.usb_drive_changed(None, 0).is_empty());
+            assert!(app.toast.is_none());
+            app.sleep(0);
+            assert!(app.usb_drive_changed(Some(UsbDrive::Shown), 100).is_empty());
+            assert!(app.display_on());
+            assert_eq!(app.toast.as_ref().unwrap(), &(connected.to_string(), 100 + TOAST_MS));
+            app.usb_drive_changed(Some(UsbDrive::Shown), 500);
+            assert_eq!(app.toast.as_ref().unwrap().1, 100 + TOAST_MS, "polling cannot extend the toast");
+            app.act(Action::OpenUsbManager, 1000);
+            assert_eq!(app.usb_drive_changed(None, 2000), vec![Effect::ReadDir("/".into())]);
+            assert_eq!(app.toast.as_ref().unwrap().0, removed);
+            app.usb_drive_changed(Some(UsbDrive::Unreadable("I/O error".into())), 3000);
+            assert_eq!(app.toast.as_ref().unwrap().0, unreadable);
+            assert_eq!(app.state.install, Install::Idle);
+        }
     }
 
     #[test]

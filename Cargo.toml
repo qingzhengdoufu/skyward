@@ -25,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0+miro.22"
+version = "0.2.0+miro.23"
 edition = "2021"
 license = "GPL-3.0-or-later"
 

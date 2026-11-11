@@ -2435,7 +2435,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             }
             let effects = match came {
                 Incoming::Arrived => app.arrive(),
-                Incoming::Drive(drive) => app.set_usb_drive(drive),
+                Incoming::Drive(drive) => app.usb_drive_changed(drive, now),
                 Incoming::Asked(asked) => {
                     skyward_sys::kmsg(&format!("asked on the recovery socket: {asked:?}"))?;
                     answer(asked, fastboot)
