@@ -818,6 +818,7 @@ enum Line {
 /// Run update_engine on the package, telling the screen how far it is,
 /// and give its exit code.
 fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
+    mount.watch_payload(update.payload_offset, update.payload_size);
     let (status_read, status_write) = pipe()?;
     let status_fd = status_write.as_raw_fd();
     let mut command = std::process::Command::new(ota::PROGRAM);
@@ -867,15 +868,11 @@ fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
     let mut stage = Stage::Writing { done: 0, total };
     ctx.send(Event::Progress(stage.clone()));
     let mut told = Instant::now();
-    let (mut partitions, mut verifying, mut finishing, mut error, mut progress) = (0, None, false, None, None);
+    let (mut partitions, mut verifying, mut finishing, mut error) = (0, None, false, None);
     let mut receive = |line| {
         match line {
             Line::Status(Status::Step(step)) => finishing = step == 2,
-            Line::Status(Status::Progress(value)) | Line::Log(Log::Progress(value)) => {
-                if !finishing && verifying.is_none() {
-                    progress = Some(progress.unwrap_or(0).max(value));
-                }
-            }
+            Line::Status(Status::Progress(_)) | Line::Log(Log::Progress(_)) => {}
             Line::Status(Status::Error(code)) => error = Some(code),
             Line::Log(Log::Partition(_)) => partitions += 1,
             Line::Log(Log::Overwriting) => ctx.send(Event::Overwriting),
@@ -886,7 +883,7 @@ fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
         } else if let Some((index, partition)) = &verifying {
             Stage::Verifying { index: *index, count: partitions.max(index + 1), partition: partition.clone() }
         } else {
-            Stage::Writing { done: total.saturating_mul(u64::from(progress.unwrap_or(0))) / 1000, total }
+            Stage::Writing { done: mount.payload_read().min(total), total }
         };
         let moved_on = std::mem::discriminant(&now) != std::mem::discriminant(&stage);
         if now != stage && (moved_on || told.elapsed() >= PROGRESS_EVERY) {
