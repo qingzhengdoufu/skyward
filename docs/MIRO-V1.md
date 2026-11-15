@@ -29,7 +29,10 @@ the installation path that this release deliberately preserves.
 The proven black-frame touch compatibility mode and offline-only ADSP start
 remain. Hardware gesture wake is not enabled. Settings and remembered
 credentials retain the successful baseline's skyward-minimal namespace.
-EFS backup stays unavailable on miro until its partition list is verified.
+Image export lists only the running slot, plus explicitly shared super.
+The unavailable EFS option is hidden on miro until its list is verified.
+Selected original-upstream 0.3.1 fixes are documented in UPSTREAM-031-AUDIT.md;
+this build does not claim a full 0.3.1 merge or a version change.
 
 ## Verification
 

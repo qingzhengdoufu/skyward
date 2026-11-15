@@ -298,6 +298,26 @@ fn plug(app: &mut App, was: &Option<skyward_info::Battery>, is: &Option<skyward_
     Ok(())
 }
 
+/// Failures of periodic readings must not end the recovery's event loop.
+#[derive(Default)]
+struct Untaken {
+    battery: skyward_sys::ToldOnce,
+    details: skyward_sys::ToldOnce,
+}
+
+fn untaken(told: &mut skyward_sys::ToldOnce, what: &str, why: Option<&anyhow::Error>) {
+    let why = why.map(|e| format!("{e:#}"));
+    if told.untold(why.as_deref()) {
+        let _ = skyward_sys::kmsg(&format!("{what} could not be read; retaining the previous reading: {}", why.unwrap_or_default()));
+    }
+}
+
+fn read_details(cfg: &DeviceConfig, info: &mut skyward_info::DeviceInfo, told: &mut skyward_sys::ToldOnce) {
+    let read = skyward_info::collect(cfg);
+    untaken(told, "the phone's details", read.as_ref().err());
+    if let Ok(read) = read { *info = read; }
+}
+
 /// How far a computer has the USB port, as the port's controller tells.
 fn usb_link() -> Result<UsbLink> {
     let controller = skyward_sys::prop("sys.usb.controller");
@@ -1181,7 +1201,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     if cfg.display.density == 0 {
         return Err(anyhow!("{}: [display] density is required to lay out the UI", cfg.device.codename));
     }
-    let mut info = skyward_info::collect(cfg)?;
+    let mut unread = Untaken::default();
+    let battery = skyward_info::battery_now();
+    untaken(&mut unread.battery, "the battery", battery.as_ref().err());
+    let mut info = skyward_info::collect_with(cfg, battery.unwrap_or_default())?;
     let fonts = Fonts::load(font, 0, mono)?;
     let mut surface = KmsSurface::open("/dev/dri/card0", cfg.display.fastest_refresh)?;
     // What the display was told is worth having in the kernel log even when
@@ -1295,7 +1318,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // doze, so a phone with no doze of its own has no way to offer them.
     app.state.panel_taps = cfg.touch.double_tap && (app.state.panel_dozes || cfg.touch.keep_panel_on);
     app.state.double_tap_supported = app.state.panel_taps;
-    app.state.efs_backup_available = cfg.device.codename != "miro";
+    app.state.efs_backup_available = !cfg.backup.efs.is_empty();
     if !app.state.efs_backup_available { app.state.backup[3] = false; }
     // The credential an earlier start kept, where remembering is on: offered
     // on the decrypt page, and tried by the page's own open where it can be.
@@ -1650,25 +1673,29 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         for reading in readings.taken() {
             match reading {
                 Reading::Battery(battery, at) => {
-                    let battery = battery?;
                     if asked.is_some_and(|asked| at >= asked) {
                         asked = None;
                     }
-                    if battery != info.battery {
-                        plug(&mut app, &info.battery, &battery, now)?;
-                        info.battery = battery;
-                        app.refresh();
+                    untaken(&mut unread.battery, "the battery", battery.as_ref().err());
+                    if let Ok(battery) = battery {
+                        if battery != info.battery {
+                            plug(&mut app, &info.battery, &battery, now)?;
+                            info.battery = battery;
+                            app.refresh();
+                        }
                     }
                 }
                 Reading::All(all, at) => {
-                    let all = (*all)?;
                     if asked.is_some_and(|asked| at >= asked) {
                         asked = None;
                     }
-                    if at >= read_at && all != info {
-                        plug(&mut app, &info.battery, &all.battery, now)?;
-                        info = all;
-                        app.refresh();
+                    untaken(&mut unread.details, "the phone's details", all.as_ref().as_ref().err());
+                    if let Ok(all) = *all {
+                        if at >= read_at && all != info {
+                            plug(&mut app, &info.battery, &all.battery, now)?;
+                            info = all;
+                            app.refresh();
+                        }
                     }
                 }
             }
@@ -2225,7 +2252,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             if m.ended() {
                 merger = None;
                 read_at = Instant::now();
-                info = skyward_info::collect(cfg)?;
+                read_details(cfg, &mut info, &mut unread.details);
                 app.refresh();
             }
         }
@@ -3223,7 +3250,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
                         crate::prepare(cfg, slot)?;
                         read_at = Instant::now();
-                        info = skyward_info::collect(cfg)?;
+                        read_details(cfg, &mut info, &mut unread.details);
                         fastboot = false;
                         app.enter_recovery();
                         if let Some(w) = systems_worker.as_mut() {

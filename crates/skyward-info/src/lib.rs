@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use skyward_config::DeviceConfig;
-use skyward_sys::prop;
+use skyward_sys::{prop, ToldOnce};
 use skyward_vab::{Slot, SnapshotState};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -9,6 +9,7 @@ use std::io::ErrorKind;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Mutex;
 
 /// Version of this build, shown on the About page.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -139,6 +140,11 @@ pub struct Boot {
 }
 
 pub fn collect(cfg: &DeviceConfig) -> Result<DeviceInfo> {
+    collect_with(cfg, battery_now()?)
+}
+
+/// Readings can keep an earlier battery value when its driver is unavailable.
+pub fn collect_with(cfg: &DeviceConfig, battery: Option<Battery>) -> Result<DeviceInfo> {
     let d = &cfg.display;
     let unlocked = match skyward_block::boot_param("androidboot.vbmeta.device_state")?.as_deref() {
         None => None,
@@ -163,7 +169,7 @@ pub fn collect(cfg: &DeviceConfig) -> Result<DeviceInfo> {
         security_patch: system.get("ro.build.version.security_patch").map(|s| s.parse()).transpose()?,
         kernel: kernel_release()?,
         storage: storage()?,
-        battery: battery(Path::new(POWER_SUPPLY))?,
+        battery,
         slot: skyward_vab::current_slot()?,
         snapshot: skyward_vab::snapshot_state()?,
         boot: Boot { unlocked, verified: skyward_block::boot_param("androidboot.verifiedbootstate")? },
@@ -179,16 +185,22 @@ enum SystemProps {
     Installed(HashMap<String, String>),
 }
 
+static PROPS_UNREAD: Mutex<ToldOnce> = Mutex::new(ToldOnce::new());
+
 impl SystemProps {
     fn current() -> Result<SystemProps> {
         if !skyward_config::ramdisk::in_recovery() {
             return Ok(SystemProps::Running);
         }
-        let props = match skyward_vab::current_slot()? {
-            Some(slot) => installed_props(slot)?,
-            None => HashMap::new(),
+        let read = match skyward_vab::current_slot()? {
+            Some(slot) => installed_props(slot),
+            None => Ok(HashMap::new()),
         };
-        Ok(SystemProps::Installed(props))
+        let why = read.as_ref().err().map(|e| format!("{e:#}"));
+        if PROPS_UNREAD.lock().expect("nothing panics while it is held").untold(why.as_deref()) {
+            let _ = skyward_sys::kmsg(&format!("the installed system's properties could not be read; continuing without them: {}", why.unwrap_or_default()));
+        }
+        Ok(SystemProps::Installed(read.unwrap_or_default()))
     }
 
     fn get(&self, name: &str) -> Option<String> {

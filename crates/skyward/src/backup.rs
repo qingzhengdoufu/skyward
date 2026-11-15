@@ -273,16 +273,14 @@ enum Source {
     Data,
 }
 
-/// Enumerate only independent boot block devices and shared super. No dynamic
-/// mapping, credential partitions or writes to the source are involved.
+/// Enumerate only the running slot's boot devices and the shared super.
 pub fn image_partitions() -> Result<Vec<(String, u64)>> {
+    let slot = skyward_vab::current_slot()?.context("the running slot is unknown")?;
     let mut names = Vec::new();
     for base in skyward_backup::image::BOOT {
-        for slot in [Slot::A, Slot::B] {
-            let name = format!("{base}{}", slot.suffix());
-            let path = partition(&name);
-            if path.try_exists()? { names.push((name, skyward_block::size_bytes(path)?)); }
-        }
+        let name = format!("{base}{}", slot.suffix());
+        let path = partition(&name);
+        if path.try_exists()? { names.push((name, skyward_block::size_bytes(path)?)); }
     }
     let path = partition("super");
     if path.try_exists()? { names.push(("super".into(), skyward_block::size_bytes(path)?)); }
@@ -291,7 +289,8 @@ pub fn image_partitions() -> Result<Vec<(String, u64)>> {
 
 #[allow(clippy::too_many_arguments)]
 fn export_image(name: &str, into: &Path, stamp: &str, ownership: Ownership, remount: Option<&Path>, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
-    ensure!(skyward_backup::image::allowed(name), "partition is not allowed for image export");
+    let slot = skyward_vab::current_slot()?.context("the running slot is unknown")?;
+    ensure!(skyward_backup::image::in_slot(name, slot.suffix()), "image export is limited to the running slot and shared super");
     // Refuse all raw export while an OTA is in flight, even if only boot was
     // selected. A byte-consistent image is not an OTA snapshot of the system.
     no_update()?;

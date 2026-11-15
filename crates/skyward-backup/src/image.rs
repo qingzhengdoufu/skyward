@@ -15,6 +15,11 @@ pub fn allowed(name: &str) -> bool {
     name == "super" || ["_a", "_b"].iter().any(|suffix| name.strip_suffix(suffix).is_some_and(|base| BOOT.contains(&base)))
 }
 
+/// Shared super is explicit; every independent image belongs to this slot.
+pub fn in_slot(name: &str, suffix: &str) -> bool {
+    matches!(suffix, "_a" | "_b") && allowed(name) && (name == "super" || name.ends_with(suffix))
+}
+
 fn cancelled(stop: &AtomicBool) -> Result<()> {
     if stop.load(Ordering::Relaxed) { return Err(Cancelled.into()); }
     Ok(())
@@ -128,6 +133,25 @@ mod tests {
     fn only_physical_boot_partitions_and_shared_super_are_allowed() {
         for name in ["boot_a", "recovery_b", "vbmeta_system_a", "super"] { assert!(allowed(name)); }
         for name in ["system_a", "vendor_b", "userdata", "data", "metadata", "persist", "modemst1", "../super", "boot", "super_a"] { assert!(!allowed(name)); }
+    }
+
+    #[test]
+    fn image_selection_is_limited_to_the_running_slot_and_shared_super() {
+        for suffix in ["_a", "_b"] {
+            for base in BOOT {
+                assert!(in_slot(&format!("{base}{suffix}"), suffix));
+                let other = if suffix == "_a" { "_b" } else { "_a" };
+                assert!(!in_slot(&format!("{base}{other}"), suffix));
+            }
+            assert!(in_slot("super", suffix));
+            for forbidden in ["userdata", "metadata", "system_a", "persist", "modem_a", "boot", "super_a"] {
+                assert!(!in_slot(forbidden, suffix));
+            }
+        }
+        for unknown in ["", "a", "_c"] {
+            assert!(!in_slot("boot_a", unknown));
+            assert!(!in_slot("super", unknown));
+        }
     }
 
     #[test]

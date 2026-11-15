@@ -10805,7 +10805,8 @@ mod tests {
         app.state.efs_backup_available = false;
         app.state.data = Data::Open;
         app.state.backup = [false; 4];
-        tap(&mut app, &f, &i, Action::BackupPart(3));
+        assert!(app.frame(&f, &i).hits.iter().all(|hit| hit.action != Action::BackupPart(3)), "an unconfigured EFS option is not shown");
+        app.act(Action::BackupPart(3), 0);
         assert!(!app.state.backup[3]);
         app.state.backup[3] = true;
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty());

@@ -2069,20 +2069,18 @@ pub fn backup(cx: &Ctx) -> Frame {
         ],
     });
     let boot = l.pick(["boot、init_boot、vendor_boot、dtbo、vbmeta 和 recovery", "boot、init_boot、vendor_boot、dtbo、vbmeta 和 recovery", "boot, init_boot, vendor_boot, dtbo, vbmeta and recovery"]);
-    let modem = l.pick(if s.efs_backup_available {
-        ["IMEI、基带设置和传感器校准数据", "IMEI、基頻設定和感應器校正資料", "IMEI, modem settings and sensor calibration"]
-    } else {
-        ["本机分区清单尚未验证，不可用", "本機分割區清單尚未驗證，無法使用", "Device partition list not verified; unavailable"]
-    });
+    let modem = l.pick(["IMEI、基带设置和传感器校准数据", "IMEI、基頻設定和感應器校正資料", "IMEI, modem settings and sensor calibration"]);
     let subs = [boot, system, data, modem];
+    let available: Vec<_> = (0..BACKUP_PARTS.len()).filter(|&k| k != 3 || s.efs_backup_available).collect();
     let rows: Vec<Row> = BACKUP_PARTS
         .iter()
         .zip(subs)
         .enumerate()
+        .filter(|(k, _)| available.contains(k))
         .map(|(k, (name, sub))| Row::new(l.pick(*name)).subtitle(sub).trail(Trail::Check(s.backup[k])))
         .collect();
     let parts = widgets::list(&mut c, t, f, y, &rows);
-    out.extend(hits(&parts.rows, &[0, 1, 2, 3].map(Action::BackupPart)));
+    out.extend(hits(&parts.rows, &available.into_iter().map(Action::BackupPart).collect::<Vec<_>>()));
     let y = widgets::section(&mut c, t, f, parts.bottom, l.pick(["存放位置", "存放位置", "Save to"]));
     let storage = match (s.data.storage_open(), i.storage.free.map(fmt::gb)) {
         (true, Some(free)) => tr!(l, "剩余 {free}", "剩餘 {free}", "{free} free"),
@@ -2129,7 +2127,7 @@ pub fn image_backup(cx: &Ctx) -> Frame {
         Some(Err(error)) => widgets::footnote(&mut c, t, f, y, error),
         Some(Ok(parts)) => {
             let details: Vec<_> = parts.iter().map(|(name, size)| {
-                if name == "super" { format!("{} · {}", fmt::bytes(*size), l.pick(["共享分区，包含全部逻辑分区", "共用分割區，包含全部邏輯分割區", "Shared, all logical partitions"])) }
+                if name == "super" { format!("{} · {}", fmt::bytes(*size), l.pick(["共享分区，包含双槽逻辑分区", "共用分割區，包含雙槽邏輯分割區", "Shared, includes both slots' logical partitions"])) }
                 else { fmt::bytes(*size) }
             }).collect();
             let rows: Vec<_> = parts.iter().zip(&details).enumerate().map(|(index, ((name, _), detail))| Row::new(name).subtitle(detail).trail(Trail::Check(s.image_partition == Some(index)))).collect();
@@ -2144,7 +2142,7 @@ pub fn image_backup(cx: &Ctx) -> Frame {
         Row::new(place_name(l, Place::UsbDrive)).trail(Trail::Check(s.backup_to == Place::UsbDrive)),
     ]);
     out.extend(hits(&places.rows, &[Action::BackupTo(Place::Storage), Action::BackupTo(Place::UsbDrive)]));
-    let y = widgets::footnote(&mut c, t, f, places.bottom, l.pick(["保存到 Skyward/images，raw .img 与 SHA-256；不压缩、不分卷，完成后读回校验。", "儲存到 Skyward/images，raw .img 與 SHA-256；不壓縮、不分卷，完成後讀回驗證。", "Skyward/images: raw .img and SHA-256, uncompressed and unsplit, verified after saving."]));
+    let y = widgets::footnote(&mut c, t, f, places.bottom, l.pick(["仅列当前槽位；super 为双槽共享。保存到 Skyward/images，完成后读回校验。", "僅列目前槽位；super 為雙槽共用。儲存到 Skyward/images，完成後讀回驗證。", "Current slot only; super is shared by both slots. Saved to Skyward/images and verified after saving."]));
     let (label, danger) = confirm_label(Confirm::ImageBackup, s);
     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
     out.push(Hit { rect: track, action: Action::Confirm(Confirm::ImageBackup) });

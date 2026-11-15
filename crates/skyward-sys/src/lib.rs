@@ -186,14 +186,57 @@ pub fn keep_log(path: &Path) -> Result<()> {
 /// Append a line to the kernel log, where it survives until the next boot
 /// and shows in `dmesg`, and to the file [`keep_log`] opened, stamped with
 /// the seconds since the phone started as the kernel log stamps it.
-pub fn kmsg(line: &str) -> Result<()> {
+pub fn kmsg(text: &str) -> Result<()> {
+    let kept = match KEPT.get() {
+        Some(kept) => {
+            let mut kept = kept.lock().expect("nothing panics while writing the log");
+            since_boot().and_then(|at| writeln!(kept, "[{:>12.6}] {text}", at.as_secs_f64()).with_context(|| format!("write {LOG}")))
+        }
+        None => Ok(()),
+    };
     let mut f = OpenOptions::new().write(true).open("/dev/kmsg")?;
-    f.write_all(format!("<6>skyward: {line}\n").as_bytes())?;
-    if let Some(kept) = KEPT.get() {
-        let mut kept = kept.lock().expect("nothing panics while writing the log");
-        writeln!(kept, "[{:>12.6}] {line}", since_boot()?.as_secs_f64()).with_context(|| format!("write {LOG}"))?;
+    for record in written(text) {
+        f.write_all(record.as_bytes())?;
     }
-    Ok(())
+    kept
+}
+
+const RECORD_OPENS: &str = "<6>skyward: ";
+// Leave room for the kernel's caller prefix on kernels with 1024-byte records.
+const RECORD_MOST: usize = 1024 - 48;
+
+fn written(text: &str) -> Vec<String> {
+    records(text, RECORD_MOST - RECORD_OPENS.len() - 1).into_iter().map(|record| format!("{RECORD_OPENS}{record}\n")).collect()
+}
+
+fn records(text: &str, most: usize) -> Vec<&str> {
+    let mut records = Vec::new();
+    for mut line in text.lines() {
+        while line.len() > most {
+            let mut end = most;
+            while !line.is_char_boundary(end) { end -= 1; }
+            let (record, rest) = line.split_at(end);
+            records.push(record);
+            line = rest;
+        }
+        records.push(line);
+    }
+    if records.is_empty() { records.push(""); }
+    records
+}
+
+/// Repeated reading failures are logged only when their reason changes.
+#[derive(Debug, Default)]
+pub struct ToldOnce(Option<String>);
+
+impl ToldOnce {
+    pub const fn new() -> ToldOnce { ToldOnce(None) }
+
+    pub fn untold(&mut self, why: Option<&str>) -> bool {
+        let untold = why.is_some() && self.0.as_deref() != why;
+        self.0 = why.map(str::to_string);
+        untold
+    }
 }
 
 /// How long the phone has been running, on the clock the kernel stamps its
@@ -242,6 +285,32 @@ fn without_levels(log: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_and_multiline_logs_fit_the_kernel_without_losing_utf8() {
+        let text = format!("{}\n{}", "line ".repeat(400), "错误：设备正忙。".repeat(200));
+        let writes = written(&text);
+        assert!(writes.len() > 2);
+        for write in &writes {
+            assert!(write.len() <= RECORD_MOST);
+            assert!(write.starts_with(RECORD_OPENS) && write.ends_with('\n'));
+        }
+        let kept: String = writes.iter().map(|write| &write[RECORD_OPENS.len()..write.len() - 1]).collect();
+        assert_eq!(kept, text.replace('\n', ""));
+        assert_eq!(records("a\n\nb\n", 963), ["a", "", "b"]);
+        assert_eq!(records("", 963), [""]);
+    }
+
+    #[test]
+    fn a_repeated_reading_failure_is_reported_once_until_it_recovers() {
+        let mut told = ToldOnce::new();
+        assert!(!told.untold(None));
+        assert!(told.untold(Some("I/O error")));
+        assert!(!told.untold(Some("I/O error")));
+        assert!(told.untold(Some("no data")));
+        assert!(!told.untold(None));
+        assert!(told.untold(Some("no data")));
+    }
 
     #[test]
     fn kernel_log_lines_lose_their_levels() {

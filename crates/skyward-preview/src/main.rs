@@ -170,7 +170,7 @@ fn main() -> Result<()> {
         for lang in [Lang::Hans, Lang::En] {
             for dark in [false, true] {
                 for (name, screen) in [("home", Screen::Home), ("settings", Screen::Settings), ("advanced", Screen::Advanced),
-                    ("wlan", Screen::Wlan), ("backup", Screen::ImageBackup), ("online", Screen::SkywardUpdate)] {
+                    ("wlan", Screen::Wlan), ("backup", Screen::ImageBackup), ("contents", Screen::Backup), ("online", Screen::SkywardUpdate)] {
                     let mut app = App::new(screen, w, h, ppd);
                     app.state.lang = lang;
                     app.state.dark = dark;
@@ -179,7 +179,9 @@ fn main() -> Result<()> {
                     app.state.wlan = Some(joined(Joining::Connected(router_link())));
                     app.state.panel_taps = true;
                     app.state.double_tap_supported = true;
-                    app.image_partitions_read(Ok(vec![("recovery_a".into(), 100 << 20), ("recovery_b".into(), 100 << 20), ("super".into(), 11 << 30)]));
+                    app.state.efs_backup_available = false;
+                    app.state.backup[3] = false;
+                    app.image_partitions_read(Ok(vec![("recovery_a".into(), 100 << 20), ("super".into(), 11 << 30)]));
                     app.state.image_partition = Some(0);
                     app.skyward_checked(Ok(Newest { version: "1.0.1".into(), newer: true, via: None, build: Some(Build {
                         name: "skyward-v1.0.1-miro-stock303.img".into(), url: String::new(), link: String::new(), size: 100 << 20, sha256: "12".repeat(32),
