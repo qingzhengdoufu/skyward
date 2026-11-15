@@ -5,13 +5,66 @@ use crate::mirror;
 use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 
-/// The repository this fork's releases are published in. Upstream's own
-/// `Rinrroy/skyward-for-haotian` builds for many phones; this fork is the Xiaomi 15 Pro
-/// alone, so it looks at its own releases and nowhere else.
-pub const REPOSITORY: &str = "Rinrroy/skyward-for-haotian";
+/// This adaptation's release repository, separate from all upstream builds.
+pub const REPOSITORY: &str = "qingzhengdoufu/skyward";
 
 /// Where GitHub answers which release of this fork is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/Rinrroy/skyward-for-haotian/releases/latest";
+pub const LATEST: &str = "https://api.github.com/repos/qingzhengdoufu/skyward/releases/latest";
+
+const PUBLIC_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIWY+omXY/ezywhrM+qUAMlCipW9iNuqT1pmYp/m2DE7kdsb5Y7fXk2XVuIRg9jzR551y1rcvXcdNtQyM65w7GA==";
+
+#[derive(Deserialize)]
+struct SignedManifest {
+    payload: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    schema: u32,
+    tag: String,
+    device: String,
+    name: String,
+    size: u64,
+    sha256: String,
+}
+
+/// Authenticate the release's exact device image using the pinned release key.
+/// No unsigned fallback, even when GitHub provides its own asset digest.
+pub fn trusted_newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
+    use base64::Engine;
+    use p256::{ecdsa::{signature::Verifier, Signature, VerifyingKey}, pkcs8::DecodePublicKey};
+    let raw: serde_json::Value = serde_json::from_str(answer)?;
+    ensure!(raw.get("draft").and_then(|v| v.as_bool()) == Some(false), "draft release");
+    ensure!(raw.get("prerelease").and_then(|v| v.as_bool()) == Some(false), "prerelease channel not enabled");
+    let body = raw.get("body").and_then(|v| v.as_str()).context("release has no signed manifest")?;
+    let block = body.split_once("```skyward-manifest\n").context("release has no signed manifest")?.1;
+    let block = block.split_once("\n```").context("unterminated signed manifest")?.0;
+    let signed: SignedManifest = serde_json::from_str(block)?;
+    let decode = base64::engine::general_purpose::STANDARD;
+    let payload = decode.decode(&signed.payload)?;
+    ensure!(payload.len() <= 16384, "manifest too large");
+    let key = VerifyingKey::from_public_key_der(&decode.decode(PUBLIC_KEY)?)?;
+    let signature = Signature::from_der(&decode.decode(&signed.signature)?)?;
+    key.verify(&payload, &signature).context("release signature did not verify")?;
+    let manifest: Manifest = serde_json::from_slice(&payload)?;
+    let newest = newest(answer, codename, running)?;
+    let build = newest.build.as_ref().context("signed release has no image for this device")?;
+    ensure!(manifest.schema == 1 && manifest.device == codename, "signed manifest device/schema mismatch");
+    ensure!(raw.get("tag_name").and_then(|v| v.as_str()) == Some(manifest.tag.as_str()), "signed tag mismatch");
+    ensure!(manifest.name == build.name && manifest.size == build.size && manifest.sha256 == build.sha256, "signed asset metadata mismatch");
+    ensure!(build.size > 4096 && build.size <= 256 << 20, "recovery image size out of bounds");
+    let api = format!("https://api.github.com/repos/{REPOSITORY}/releases/assets/");
+    let link = format!("https://github.com/{REPOSITORY}/releases/download/{}/{}", manifest.tag, manifest.name);
+    ensure!(build.url.starts_with(&api) && matches_asset_link(&build.link, &link), "asset is outside this repository");
+    ensure!(!build.name.contains(['/', '\\']) && !build.name.contains(".."), "unsafe image filename");
+    Ok(newest)
+}
+
+fn matches_asset_link(actual: &str, expected: &str) -> bool {
+    // GitHub escapes '+' in semver build metadata on asset download URLs.
+    actual == expected || actual == expected.replace('+', "%2B")
+}
 
 /// The version of GitHub's API the answer is read as.
 const API_VERSION: &str = "2022-11-28";
@@ -113,7 +166,39 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
             Some(Build { sha256: sha256.to_lowercase(), name: a.name, url: a.url, link: a.browser_download_url, size: a.size })
         }
     };
-    Ok(Newest { version: version.to_string(), newer: newest > this, build, via: None })
+    let newer = if codename == "miro" { miro_newer(&newest, &this)? } else { newest > this };
+    Ok(Newest { version: version.to_string(), newer, build, via: None })
+}
+
+fn miro_revision(version: &semver::Version) -> Result<Option<u64>> {
+    if version.build.is_empty() { return Ok(None); }
+    let revision = version.build.as_str().strip_prefix("miro.").context("unknown miro version metadata")?;
+    ensure!(!revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()), "invalid miro revision");
+    Ok(Some(revision.parse().context("miro revision overflow")?))
+}
+
+/// Upstream version and adaptation revision have independent meanings. SemVer
+/// ignores build metadata, so compare the signed miro revision explicitly.
+fn miro_newer(release: &semver::Version, running: &semver::Version) -> Result<bool> {
+    // 1.x switches to ordinary SemVer, and must not offer a 0.x rollback.
+    if release.major >= 1 || running.major >= 1 {
+        ensure!((release.major == 0 || release.build.is_empty()) && (running.major == 0 || running.build.is_empty()),
+            "1.x miro releases use plain semantic versions");
+        return Ok(release.cmp_precedence(running).is_gt());
+    }
+    match (miro_revision(release)?, miro_revision(running)?) {
+        (Some(new), Some(old)) => Ok(new > old),
+        (Some(new), None) => {
+            let legacy = match (running.major, running.minor, running.patch) {
+                (0, 2, 4) => 12,
+                (0, 2, 3) => 11,
+                _ => anyhow::bail!("unknown legacy miro version; manual installation required"),
+            };
+            Ok(new > legacy)
+        }
+        (None, Some(_)) => Ok(false),
+        (None, None) => Ok(release > running),
+    }
 }
 
 /// Ask GitHub for Skyward's newest release, and its build for the phone
@@ -165,7 +250,7 @@ fn ask_at(agent: &ureq::Agent, url: &str, codename: &str, running: &str) -> Resu
     if !status.is_success() {
         bail!(refusal(status, &body));
     }
-    newest(&body, codename, running)
+    trusted_newest(&body, codename, running)
 }
 
 /// Where the file a build's `url` hands out is now, as GitHub's API sends the
@@ -247,6 +332,41 @@ fn refusal(status: ureq::http::StatusCode, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn miro_revision_orders_updates_independently_of_upstream_version() {
+        let parse = |v: &str| semver::Version::parse(v).unwrap();
+        let current = parse("0.2.0+miro.13");
+        assert!(!miro_newer(&current, &current).unwrap());
+        assert!(miro_newer(&parse("0.2.0+miro.14"), &current).unwrap());
+        assert!(!miro_newer(&parse("0.3.0+miro.12"), &current).unwrap());
+        assert!(!miro_newer(&parse("0.2.4"), &current).unwrap());
+        assert!(miro_newer(&current, &parse("0.2.4")).unwrap());
+        assert!(miro_newer(&current, &parse("0.2.3")).unwrap());
+        assert!(miro_newer(&parse("0.2.0+miro.bad"), &current).is_err());
+        assert!(miro_newer(&current, &parse("0.1.0")).is_err());
+    }
+
+    #[test]
+    fn miro_v1_migrates_from_adaptation_revisions_without_offering_rollbacks() {
+        let parse = |v: &str| semver::Version::parse(v).unwrap();
+        let current = parse("1.0.0");
+        for old in ["0.3.0+miro.24", "0.3.0+miro.minimal.1", "0.2.4"] {
+            assert!(miro_newer(&current, &parse(old)).unwrap());
+            assert!(!miro_newer(&parse(old), &current).unwrap());
+        }
+        assert!(!miro_newer(&current, &current).unwrap());
+        assert!(miro_newer(&parse("1.0.1"), &current).unwrap());
+        assert!(!miro_newer(&parse("1.0.0-rc.1"), &current).unwrap());
+    }
+
+    #[test]
+    fn github_encoded_build_metadata_keeps_the_exact_signed_repository_path() {
+        let link = "https://github.com/qingzhengdoufu/skyward/releases/download/v0.2.0+miro.16/skyward-v0.2.0+miro.16-miro-stock.img";
+        assert!(matches_asset_link(&link.replace('+', "%2B"), link));
+        assert!(matches_asset_link(link, link));
+        assert!(!matches_asset_link(&link.replace("qingzhengdoufu", "another-owner"), link));
+    }
 
     /// What GitHub answered of the newest release on 2026-11-07, with the
     /// parts that do not matter here left out.
@@ -339,9 +459,10 @@ mod tests {
         let why = r#"{"message":"API rate limit exceeded for 203.0.113.7"}"#;
         let refused = || format!("HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{why}", why.len());
         let (direct, _) = server(refused());
-        let (mirror, held) = server(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{ANSWERED_013}", ANSWERED_013.len()));
-        let answered = ask_candidates(&agent, [direct, mirror.clone()], "ishtar", "0.1.2").unwrap();
-        assert_eq!(answered.version, "0.1.3", "the mirror's answer, after GitHub's own was turned down");
+        let signed = include_str!("../tests/signed-release.json");
+        let (mirror, held) = server(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{signed}", signed.len()));
+        let answered = ask_candidates(&agent, [direct, mirror.clone()], "miro", "0.2.3").unwrap();
+        assert_eq!(answered.version, "0.2.4", "the signed mirror answer, after GitHub's own was turned down");
         assert!(answered.newer);
         assert_eq!(answered.via.as_deref(), mirror.split('/').nth(2), "the mirror that answered is named by its host");
         let request = held.join().unwrap().to_lowercase();
@@ -387,5 +508,41 @@ mod tests {
         let untagged = ANSWERED_013.replace("\"tag_name\":\"v0.1.3\"", "\"tag_name\":\"nightly\"");
         assert!(newest(&untagged, "ishtar", "0.1.2").is_err());
         assert!(newest("{}", "ishtar", "0.1.2").is_err());
+    }
+
+    #[test]
+    fn unsigned_and_wrongly_signed_release_manifests_are_refused() {
+        assert!(trusted_newest(ANSWERED_013, "ishtar", "0.1.2").is_err());
+        let mut release: serde_json::Value = serde_json::from_str(ANSWERED_013).unwrap();
+        release["body"] = serde_json::json!("```skyward-manifest\n{\"payload\":\"e30=\",\"signature\":\"AA==\"}\n```");
+        assert!(trusted_newest(&release.to_string(), "ishtar", "0.1.2").is_err());
+    }
+
+    #[test]
+    fn signed_miro_release_pins_the_device_digest_size_tag_and_repository() {
+        let fixture = include_str!("../tests/signed-release.json");
+        let newest = trusted_newest(fixture, "miro", "0.2.3").unwrap();
+        assert!(newest.newer);
+        assert_eq!(newest.build.unwrap().size, 104857600);
+        assert!(!trusted_newest(fixture, "miro", "0.2.4").unwrap().newer);
+        assert!(trusted_newest(fixture, "haotian", "0.2.3").is_err());
+        for (key, value) in [("size", serde_json::json!(100)), ("digest", serde_json::json!(format!("sha256:{}", "ab".repeat(32)))), ("url", serde_json::json!("https://evil.invalid/image"))] {
+            let mut changed: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            changed["assets"][0][key] = value;
+            assert!(trusted_newest(&changed.to_string(), "miro", "0.2.3").is_err(), "{key}");
+        }
+        let changed = fixture.replace("\"draft\": false", "\"draft\": true");
+        assert!(trusted_newest(&changed, "miro", "0.2.3").is_err());
+    }
+
+    #[test]
+    fn renamed_repository_rejects_old_owner_asset_urls() {
+        let fixture = include_str!("../tests/signed-release.json");
+        for field in ["url", "browser_download_url"] {
+            let mut changed: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            let old = changed["assets"][0][field].as_str().unwrap().replace("qingzhengdoufu", "wmin85099-cmd");
+            changed["assets"][0][field] = serde_json::json!(old);
+            assert!(trusted_newest(&changed.to_string(), "miro", "0.2.3").is_err(), "{field}");
+        }
     }
 }

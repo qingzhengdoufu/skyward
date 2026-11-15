@@ -1,6 +1,6 @@
 use anyhow::{anyhow, ensure, Context, Result};
 use evdev::raw_stream::RawDevice;
-use skyward_config::Strength;
+use skyward_config::{HapticEffect, Strength};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
@@ -8,9 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod qcom;
+
 // linux/input-event-codes.h
 const EV_FF: u16 = 0x15;
 const FF_PERIODIC: u16 = 0x51;
+const FF_CONSTANT: u16 = 0x52;
 const FF_CUSTOM: u16 = 0x5d;
 const FF_SINE: u16 = 0x5a;
 
@@ -19,9 +22,8 @@ const FF_SINE: u16 = 0x5a;
 /// these phones carry.
 const NOMINAL_HZ: f32 = 172.4;
 
-/// How long a click runs. The driver plays a sine for the effect's replay
-/// length, and a waveform it keeps for as long as that one is; either way
-/// the click is taken away once this has passed.
+/// Replay length for the original periodic and direct-constant backends.
+/// Qualcomm stored waveforms instead return their own duration on upload.
 const NOMINAL_CLICK: Duration = Duration::from_millis(30);
 
 /// How strongly the phone's own system plays the two ticks of the screen
@@ -53,6 +55,10 @@ pub struct Haptics {
 /// What a click is.
 #[derive(Clone, Copy)]
 enum Click {
+    /// The HV driver's direct-play effect, with its own resonant drive.
+    Constant,
+    /// A stored Qualcomm waveform, using its ID/duration packet ABI.
+    Qcom(i16),
     /// A waveform the driver keeps, by its number: a bank and a number are
     /// handed over, and the driver plays that waveform.
     Kept(i16),
@@ -66,7 +72,7 @@ impl Haptics {
     /// fills the driver's queue with what it plays, so the click is loaded
     /// only as it is played.
     pub fn open(cfg: &skyward_config::Haptics) -> Result<Haptics> {
-        let (path, dev) = motor()?;
+        let (path, dev) = motor(cfg.effect)?;
         // A driver that says its motor's frequency nowhere, as Cirrus Logic's
         // CS40L26 does not, still takes a click made for the frequency these
         // motors swing at; the reason goes to the log and the motor is not
@@ -81,17 +87,30 @@ impl Haptics {
             },
             None => NOMINAL_HZ,
         };
-        let click = match cfg.click {
-            Some(id) => {
+        let click = match (cfg.effect, cfg.click) {
+            (HapticEffect::QcomWaveform, Some(id)) if id >= 0 => {
+                let _ = skyward_sys::kmsg(&format!("haptics {}: Qualcomm stored waveform {id}", path.display()));
+                Click::Qcom(id)
+            }
+            (HapticEffect::QcomWaveform, _) => return Err(anyhow!("Qualcomm waveform requires a nonnegative click ID")),
+            (HapticEffect::Constant, _) => {
+                let _ = skyward_sys::kmsg(&format!("haptics {}: direct constant effects", path.display()));
+                Click::Constant
+            }
+            (_, Some(id)) => {
                 eprintln!("haptics {}: clicks with waveform {id}, ticks made for a motor swinging at {hz} Hz", path.display());
                 Click::Kept(id)
             }
-            None => {
+            (_, None) => {
                 eprintln!("haptics {}: clicks and ticks made for a motor swinging at {hz} Hz", path.display());
                 Click::Made(hz)
             }
         };
-        Ok(Haptics { dev, click, ticks: Click::Made(hz), strength: cfg.strength, playing: Arc::new(Mutex::new(None)), clicks: 0 })
+        let ticks = match click {
+            Click::Constant | Click::Qcom(_) => click,
+            _ => Click::Made(hz),
+        };
+        Ok(Haptics { dev, click, ticks, strength: cfg.strength, playing: Arc::new(Mutex::new(None)), clicks: 0 })
     }
 
     /// One short click at the strength the slider's `position` gives, after
@@ -104,10 +123,19 @@ impl Haptics {
     /// system plays them whatever the slider says, the second lighter. Gives
     /// how long they take.
     pub fn ticks(&mut self) -> Result<Duration> {
-        let first = self.start(self.ticks, TICKS_STRENGTH)?;
+        let strength = self.tick_strength();
+        let first = self.start(self.ticks, strength)?;
         std::thread::sleep(TICK_GAP);
-        let second = self.start(self.ticks, TICKS_STRENGTH * TICK_SECOND)?;
+        let second = self.start(self.ticks, strength * TICK_SECOND)?;
         Ok(first + TICK_GAP + second)
+    }
+
+    fn tick_strength(&self) -> f32 {
+        match self.ticks {
+            Click::Constant => TICKS_STRENGTH.min(self.strength.strongest),
+            Click::Qcom(_) => qcom::TICKS_STRENGTH.min(self.strength.strongest),
+            _ => TICKS_STRENGTH,
+        }
     }
 
     /// Play `click` at `share` of its full strength, after taking away what
@@ -147,7 +175,7 @@ impl Haptics {
 pub fn probe(cfg: &skyward_config::Haptics, position: f32, ticks: bool) -> Result<()> {
     let mut haptics = Haptics::open(cfg)?;
     let (what, strength, length) = if ticks {
-        ("ticks", TICKS_STRENGTH, haptics.ticks()?)
+        ("ticks", haptics.tick_strength(), haptics.ticks()?)
     } else {
         ("click", share(&cfg.strength, position), haptics.click(position)?)
     };
@@ -230,9 +258,15 @@ const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The first input device under /dev/input that takes periodic
 /// force-feedback effects, opened for writing.
-fn motor() -> Result<(PathBuf, File)> {
+fn motor(effect: HapticEffect) -> Result<(PathBuf, File)> {
     for (path, dev) in evdev::raw_stream::enumerate() {
-        if takes_periodic(&dev) {
+        let capable = dev.supported_ff().is_some_and(|ff| ff.contains(match effect {
+            HapticEffect::Periodic | HapticEffect::QcomWaveform => evdev::FFEffectCode::FF_PERIODIC,
+            HapticEffect::Constant => evdev::FFEffectCode::FF_CONSTANT,
+        }));
+        let qcom_capable = effect != HapticEffect::QcomWaveform
+            || (dev.name() == Some("qcom-hv-haptics") && dev.supported_ff().is_some_and(|ff| ff.contains(evdev::FFEffectCode::FF_CUSTOM)));
+        if capable && qcom_capable {
             let file = OpenOptions::new().read(true).write(true).open(&path).with_context(|| format!("open {}", path.display()))?;
             return Ok((path, file));
         }
@@ -299,17 +333,14 @@ struct Loaded {
     length: Duration,
 }
 
-/// Load `click` at `share` of its full strength as a periodic effect in a
-/// slot of its own.
-///
-/// The driver tells what it is given by the effect's waveform: a waveform it
-/// keeps comes as two values, a bank and a number, and a sine comes from the
-/// period and the strength. Samples handed over as FIFO data are read as a
-/// wavetable the driver makes up itself, which this motor's firmware refuses
-/// ("Invalid OWT index: -1" in the kernel log), so none are handed over.
+/// Load an effect into its own slot. The original stored-waveform backend
+/// uses bank/ID; Qualcomm HV instead uses an ID/seconds/milliseconds packet.
 fn upload(dev: &File, click: &Click, share: f32) -> Result<Loaded> {
     let mut kept: [i16; 2] = [0; 2];
+    let mut native = match click { Click::Qcom(id) => qcom::packet(*id), _ => [0; 3] };
     let (waveform, period, len, data) = match click {
+        Click::Constant => (0, 0, 0, std::ptr::null_mut()),
+        Click::Qcom(_) => (FF_CUSTOM, 0, std::mem::size_of_val(&native), native.as_mut_ptr()),
         Click::Kept(id) => {
             // The RAM waveforms are the bank before the number: 0 is the one
             // the phone's own HAL plays when it starts.
@@ -330,23 +361,43 @@ fn upload(dev: &File, click: &Click, share: f32) -> Result<Loaded> {
         custom_data: data,
     };
     let mut effect = libc::ff_effect {
-        type_: FF_PERIODIC,
+        type_: if matches!(click, Click::Constant) { FF_CONSTANT } else { FF_PERIODIC },
         id: -1,
         direction: 0,
         trigger: libc::ff_trigger { button: 0, interval: 0 },
-        replay: libc::ff_replay { length: NOMINAL_CLICK.as_millis() as u16, delay: 0 },
+        replay: libc::ff_replay { length: if matches!(click, Click::Qcom(_)) { 0 } else { NOMINAL_CLICK.as_millis() as u16 }, delay: 0 },
         u: [0; 4],
     };
     // The union holds the periodic effect; it is exactly as large.
     const _: () = assert!(std::mem::size_of::<libc::ff_periodic_effect>() == std::mem::size_of::<[u64; 4]>());
-    effect.u = unsafe { std::mem::transmute::<libc::ff_periodic_effect, [u64; 4]>(periodic) };
+    if matches!(click, Click::Constant) {
+        let constant = libc::ff_constant_effect {
+            level: periodic.magnitude,
+            envelope: periodic.envelope,
+        };
+        // The union is zeroed; copy only the constant member's actual size.
+        unsafe { std::ptr::copy_nonoverlapping((&constant as *const libc::ff_constant_effect).cast::<u8>(), effect.u.as_mut_ptr().cast::<u8>(), std::mem::size_of_val(&constant)) };
+    } else {
+        effect.u = unsafe { std::mem::transmute::<libc::ff_periodic_effect, [u64; 4]>(periodic) };
+    }
     // EVIOCSFF: _IOW('E', 0x80, struct ff_effect)
     let size = std::mem::size_of::<libc::ff_effect>() as u32;
     let request = (1u32 << 30) | (size << 16) | (u32::from(b'E') << 8) | 0x80;
     if unsafe { libc::ioctl(dev.as_raw_fd(), request as _, &mut effect) } < 0 {
         return Err(io::Error::last_os_error().into());
     }
-    Ok(Loaded { slot: effect.id, length: NOMINAL_CLICK })
+    let length = if matches!(click, Click::Qcom(_)) {
+        match qcom::length(native) {
+            Ok(length) => length,
+            Err(error) => {
+                let _ = erase(dev, effect.id);
+                return Err(anyhow!(error));
+            }
+        }
+    } else {
+        NOMINAL_CLICK
+    };
+    Ok(Loaded { slot: effect.id, length })
 }
 
 /// Start the loaded effect in slot `id`.
@@ -385,5 +436,11 @@ mod tests {
         assert!((share(&s, 0.5) - 0.5).abs() < 1e-6);
         assert!((share(&s, 0.25) / share(&s, 0.0) - share(&s, 1.0) / share(&s, 0.75)).abs() < 1e-6, "each step the same factor");
         assert_eq!((share(&s, -1.0), share(&s, 2.0)), (0.25, 1.0), "no further than its ends");
+    }
+
+    #[test]
+    fn miros_midpoint_is_the_preferred_tested_strength() {
+        let s = Strength { lightest: 0.1, strongest: 0.4 };
+        assert!((share(&s, 0.5) - 0.2).abs() < 1e-6);
     }
 }

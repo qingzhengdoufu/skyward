@@ -44,6 +44,7 @@ pub const ENTRIES: &[Entry] = &[
     entry(MOUNT, HOME, Screen::Mount, &["guazai", "gz", "mount", "umount"]),
     entry(["清除数据", "清除資料", "Wipe data"], HOME, Screen::Wipe, &["qingchushuju", "qcsj", "wipe", "format", "geshihua", "gsh"]),
     entry(ADVANCED, HOME, Screen::Advanced, &["gaoji", "gj", "advanced"]),
+    entry(["AVB 校验", "AVB 驗證", "AVB verification"], ADVANCED, Screen::Avb, &["avb", "verity", "vbmeta", "jiaoyan", "verification"]),
     entry(["文件管理", "檔案管理", "File manager"], ADVANCED, Screen::Files, &["wenjianguanli", "wjgl", "files", "file"]),
     entry(["终端", "終端機", "Terminal"], ADVANCED, Screen::Terminal, &["zhongduan", "zd", "terminal", "shell"]),
     entry(
@@ -69,6 +70,7 @@ pub const ENTRIES: &[Entry] = &[
     entry(["深色模式", "深色模式", "Dark mode"], SETTINGS, Screen::Settings, &["shensemoshi", "ssms", "dark", "theme"]),
     entry(["屏幕亮度", "螢幕亮度", "Screen brightness"], SETTINGS, Screen::Settings, &["pingmuliangdu", "pmld", "liangdu", "ld", "brightness"]),
     entry(["息屏时间", "螢幕自動關閉", "Screen timeout"], SETTINGS, Screen::ScreenOff, &["xipingshijian", "xpsj", "timeout"]),
+    entry(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"], SETTINGS, Screen::Settings, &["shuangjiliangping", "sjlp", "doubletap", "wake"]),
     entry(["振动强度", "震動強度", "Vibration intensity"], SETTINGS, Screen::Settings, &["zhendongqiangdu", "zdqd", "qiangdu", "qd", "intensity", "strength"]),
     entry(["触摸振动", "觸控震動", "Touch vibration"], SETTINGS, Screen::Settings, &["chumozhendong", "cmzd", "zhendong", "vibrate", "haptic"]),
     entry(["文件传输", "檔案傳輸", "File transfer"], SETTINGS, Screen::Settings, &["wenjianchuanshu", "wjcs", "chuanshu", "mtp", "usb"]),

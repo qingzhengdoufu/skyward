@@ -7,6 +7,8 @@ pub mod http;
 pub mod iface;
 pub mod mirror;
 pub mod reach;
+#[cfg(any(target_os = "android", test))]
+mod readiness;
 pub mod release;
 pub mod supplicant;
 pub mod wlan;

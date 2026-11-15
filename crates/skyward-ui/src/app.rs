@@ -57,6 +57,7 @@ pub enum Screen {
     /// keyboard.
     Search,
     Backup,
+    ImageBackup,
     /// The backups found, to restore one.
     Restore,
     /// One backup, and what to restore from it.
@@ -143,6 +144,9 @@ pub enum Screen {
     WlanAdd,
     /// Turning the phone off, and what that means: the swipe that does it.
     PowerOff,
+    /// The plugins installed, as much of them as the recovery reads now:
+    /// what one is, where they go, and what was found.
+    Plugins,
     /// The vbmeta image of the slot the phone runs from: the copies kept of
     /// it, making one, and putting one back.
     Vbmeta,
@@ -225,6 +229,7 @@ pub enum SkywardStage {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkywardEnd {
+    Ready(Slot),
     /// The build is in the recovery partitions of these slots.
     Updated(Vec<Slot>),
     /// The download was stopped; what it downloaded is kept to go on from.
@@ -242,6 +247,11 @@ pub enum SkywardEnd {
 /// Where the full packages downloaded go, from the top of internal
 /// storage: the folder the stock updater keeps them in.
 pub const DOWNLOADS: &str = "downloaded_rom";
+
+/// Where a plugin's folder is looked for, from the top of internal storage:
+/// beside the backups the recovery writes, so that what a person puts on the
+/// phone and what the recovery keeps are found in one place.
+pub const PLUGIN_FOLDER: &str = "Skyward/plugins";
 
 /// Where the USB drive plugged in is shown.
 pub const USB_DRIVE: &str = "/mnt/usb";
@@ -657,6 +667,7 @@ pub struct BackupAt {
 /// How backing up or restoring ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackupEnd {
+    ImageSaved(String),
     /// A backup made, in the folder of this name.
     Saved(String),
     /// A backup restored, but for what it held in the folders of users gone
@@ -923,6 +934,8 @@ pub enum Confirm {
     Wipe,
     Flash,
     Backup,
+    ImageBackup,
+    SkywardUpdate,
     Restore,
     /// Start next from the slot chosen on the slot page.
     Slot,
@@ -1305,7 +1318,13 @@ pub enum Action {
     /// Delete the full package downloaded, from internal storage. A swipe
     /// then confirms it.
     AskDeleteDownload,
+    /// Open the plugin at this place in the list of those found.
+    OpenPlugin(usize),
+    /// Open the folder the plugins are kept in, in the file manager.
+    OpenPluginFolder,
     Open(Screen),
+    /// Open the mounted USB drive in the full file manager, not the installer.
+    OpenUsbManager,
     /// Leave the decrypt page for the page it was opened from; the page
     /// the recovery started on, for the home page without keeping it
     /// behind.
@@ -1355,6 +1374,7 @@ pub enum Action {
     BackupPart(usize),
     /// Send the backup to this place.
     BackupTo(Place),
+    ImagePartition(usize),
     /// Open a backup found, by its place in the list, to restore it.
     OpenBackup(usize),
     /// Tick or untick a part of the backup being restored.
@@ -1747,6 +1767,9 @@ pub struct State {
     /// place in [`TIME_ZONES`].
     pub time_zone: usize,
     pub vibrate: bool,
+    /// User preference; independent from the device's wake capability.
+    pub double_tap: bool,
+    pub double_tap_supported: bool,
     /// How strongly the motor taps, from 0 at the slider's left end to 1
     /// at its right.
     pub vibration: f32,
@@ -1764,12 +1787,6 @@ pub struct State {
     /// reporting fingers with the panel off has nothing for the gesture to
     /// work with, and shows nothing either way.
     pub panel_taps: bool,
-    /// Two taps on the dark panel light it again. It starts off, because a
-    /// phone that offers the gesture has to keep its panel dozing rather than
-    /// taking it down — the touchscreen is suspended with the panel's
-    /// blanking — and a dozing panel is a phone that never suspends. Least
-    /// power is what a recovery should do unless someone asks for more.
-    pub double_tap: bool,
     /// This phone's panel has a doze of its own, which the settings page then
     /// offers a switch for.
     pub panel_dozes: bool,
@@ -1822,8 +1839,11 @@ pub struct State {
     pub mount_failure: Option<MountFailure>,
     /// Which of [`BACKUP_PARTS`] a backup takes.
     pub backup: [bool; 4],
+    pub efs_backup_available: bool,
     /// Where a backup goes.
     pub backup_to: Place,
+    pub image_partitions: Option<Result<Vec<(String, u64)>, String>>,
+    pub image_partition: Option<usize>,
     pub compress: bool,
     pub verify: bool,
     /// The backups found, newest first, those that cannot be read last.
@@ -1995,6 +2015,11 @@ pub struct State {
     /// The networks whose passwords the phone keeps, as the runtime last
     /// read them: what the WLAN page offers to forget one of.
     pub saved: Vec<SavedNetwork>,
+    /// The plugins kept on the phone, as the runtime last read them; none
+    /// until it has.
+    pub plugins: Option<Result<Vec<PluginRow>, String>>,
+    /// The plugin the page was opened on, by its place in the list.
+    pub plugin_chosen: usize,
 }
 
 /// A copy of the slot's vbmeta image kept somewhere that outlives a start,
@@ -2021,6 +2046,37 @@ pub struct VbmetaCopy {
     pub made: i64,
 }
 
+/// A plugin found in the folder the recovery reads them from: what its
+/// manifest says, or why it cannot be used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginRow {
+    /// The plugin's folder name, which is what it is called.
+    pub name: String,
+    /// What its manifest says, or why there is none to read: the page shows
+    /// either, so a folder a person dropped in is never silently passed
+    /// over.
+    pub manifest: Result<Plugin, String>,
+}
+
+/// What a plugin's manifest says it is.
+///
+/// Nothing runs one yet: this release is the page and the reading of what a
+/// plugin will be, so that a later one has somewhere to put what it does.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Plugin {
+    /// What it calls itself, where its folder's name is not enough.
+    pub title: Option<String>,
+    /// The version it is at, as its author numbers it.
+    pub version: Option<String>,
+    /// Who wrote it.
+    pub author: Option<String>,
+    /// What it is for, in one line.
+    pub about: Option<String>,
+    /// What it says it needs of the recovery, by name: what a later release
+    /// refuses to run it without.
+    pub needs: Vec<String>,
+}
+
 impl Default for State {
     fn default() -> Self {
         State {
@@ -2035,6 +2091,8 @@ impl Default for State {
             screen_off: 3,
             time_zone: 0,
             vibrate: true,
+            double_tap: true,
+            double_tap_supported: true,
             vibration: SLIDER_START,
             file_transfer: true,
             // Off, so a freshly flashed phone is put out as it always was and
@@ -2043,7 +2101,6 @@ impl Default for State {
             panel_taps: false,
             // Off, so a phone flashed and never visited here puts its panel
             // out and suspends, which is the least it can draw.
-            double_tap: false,
             panel_dozes: false,
             reboot: 0,
             wipe: [false; WIPES.len()],
@@ -2065,7 +2122,10 @@ impl Default for State {
             mounts: Ok(Vec::new()),
             mount_failure: None,
             backup: [true, true, false, true],
+            efs_backup_available: true,
             backup_to: Place::Storage,
+            image_partitions: None,
+            image_partition: None,
             compress: false,
             verify: true,
             backups: Vec::new(),
@@ -2134,6 +2194,8 @@ impl Default for State {
             avb_confirming: false,
             forget_pending: None,
             saved: Vec::new(),
+            plugins: None,
+            plugin_chosen: 0,
         }
     }
 }
@@ -2432,6 +2494,8 @@ pub enum Effect {
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
     /// and [`App::backup_ended`].
     Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool },
+    ReadImagePartitions,
+    BackupImage { name: String, place: Place },
     /// Restore the parts ticked of the backup in the folder `name` of
     /// `place`, telling how it goes as a backup does.
     Restore { place: Place, name: String, parts: [bool; 4] },
@@ -2464,6 +2528,7 @@ pub enum Effect {
     /// how it goes with [`App::skyward_progress`] and
     /// [`App::skyward_ended`].
     UpdateSkyward(Build),
+    WriteSkyward { build: Build, slot: Slot },
     StopSkywardUpdate,
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
@@ -2483,6 +2548,9 @@ pub enum Effect {
     /// Look for the vbmeta copies kept in the places that can be read,
     /// telling what is found with [`App::set_vbmeta_copies`].
     FindVbmeta { storage: bool, usb: bool },
+    /// Read the plugins kept on the phone, telling what is found with
+    /// [`App::set_plugins`].
+    ReadPlugins,
     /// Forget the network named `name`, with what was kept of it, telling
     /// how it went with [`App::wlan_forgotten`].
     ForgetWlan(String),
@@ -3505,11 +3573,23 @@ impl App {
         self.stir(now);
     }
 
+    /// A double tap already recognized by the touch controller. Never toggle
+    /// an already-lit screen or activate a page item with this event.
+    pub fn hardware_wake(&mut self, now: u64) {
+        if !self.display_on && self.state.double_tap && self.state.double_tap_supported {
+            self.wake(now);
+        }
+    }
+
     /// A finger came down on the dark panel: the second of two taps that land
     /// near each other, soon enough, lights it, as the phone's own double tap
     /// does. One that comes later than the window is a tap of its own and
     /// starts the count again.
     fn tap(&mut self, now: u64, x: f32, y: f32) {
+        if !self.state.double_tap || !self.state.double_tap_supported {
+            self.tapped = None;
+            return;
+        }
         let tap = Tap { x, y };
         let doubled =
             self.tapped.filter(|(first, at)| now.saturating_sub(*at) <= Tap::WINDOW_MS && first.doubles(&tap, self.w as f32));
@@ -3676,6 +3756,13 @@ impl App {
         // AVB page shows and what the next copy would save.
         self.state.avb = None;
         self.state.confirm = 0.0;
+        self.refresh();
+    }
+
+    /// The plugins found in the folder the recovery reads them from, or why
+    /// it could not be read.
+    pub fn set_plugins(&mut self, plugins: Result<Vec<PluginRow>, String>) {
+        self.state.plugins = Some(plugins);
         self.refresh();
     }
 
@@ -4202,6 +4289,7 @@ impl App {
     /// Updating Skyward has ended: its page says how, lit for the user to
     /// read.
     pub fn skyward_ended(&mut self, end: SkywardEnd, now: u64) {
+        self.state.confirm = 0.0;
         let job = self.state.skyward_job.as_mut().expect("only an update under way ends");
         job.stopping = false;
         job.outcome = Some(end);
@@ -4445,6 +4533,13 @@ impl App {
         self.open(Screen::BackupJob);
     }
 
+    pub fn image_partitions_read(&mut self, parts: Result<Vec<(String, u64)>, String>) {
+        self.state.image_partitions = Some(parts);
+        self.state.image_partition = None;
+        self.state.confirm = 0.0;
+        self.refresh();
+    }
+
     /// The parts the work goes through, once they are measured.
     pub fn backup_plan(&mut self, plan: Vec<(String, u64)>) {
         self.state.backup_job.as_mut().expect("only work under way is measured").plan = plan;
@@ -4520,6 +4615,21 @@ impl App {
     /// and one shown while its page is up is read at once. The backups
     /// listed are looked for again, and a backup on a drive gone leaves its
     /// page.
+    pub fn usb_drive_changed(&mut self, drive: Option<UsbDrive>, now: u64) -> Vec<Effect> {
+        if drive == self.state.usb_drive {
+            return Vec::new();
+        }
+        let message = match &drive {
+            Some(UsbDrive::Shown) => ["U 盘已连接", "USB 隨身碟已連接", "USB drive connected"],
+            Some(UsbDrive::Unreadable(_)) => ["U 盘已插入，无法读取", "USB 隨身碟已插入，無法讀取", "USB drive inserted, but unreadable"],
+            None => ["U 盘已拔出", "USB 隨身碟已拔出", "USB drive removed"],
+        };
+        let effects = self.set_usb_drive(drive);
+        self.wake(now);
+        self.say(self.state.lang.pick(message), now);
+        effects
+    }
+
     pub fn set_usb_drive(&mut self, drive: Option<UsbDrive>) -> Vec<Effect> {
         if drive == self.state.usb_drive {
             return Vec::new();
@@ -4527,6 +4637,15 @@ impl App {
         self.state.usb_drive = drive;
         self.state.drive = Folder::new("");
         self.refresh();
+        if self.screen() == Screen::Files && std::path::Path::new(&self.state.files.path).starts_with(USB_DRIVE) {
+            self.state.file = None;
+            self.state.clip = None;
+            if self.state.usb_drive == Some(UsbDrive::Shown) {
+                return vec![Effect::ReadDir(USB_DRIVE.into())];
+            }
+            self.state.files = Folder::new("/");
+            return vec![Effect::ReadDir("/".into())];
+        }
         let gone = !self.state.place_open(Place::UsbDrive) && self.state.restore.as_ref().is_some_and(|(e, _)| e.place == Place::UsbDrive);
         match self.screen() {
             Screen::RestoreBackup if gone => {
@@ -5654,6 +5773,17 @@ impl App {
             Screen::Slot | Screen::Reboot => vec![Effect::ReadSlots],
             Screen::Systems => vec![Effect::ReadSystems],
             Screen::Restore => vec![self.find_backups()],
+            Screen::ImageBackup => {
+                self.state.image_partitions = None;
+                self.state.image_partition = None;
+                self.state.confirm = 0.0;
+                vec![Effect::ReadImagePartitions]
+            }
+            Screen::Plugins => {
+                self.state.plugins = None;
+                self.state.plugin_chosen = 0;
+                vec![Effect::ReadPlugins]
+            }
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
             Screen::Choose(place) if self.state.place_open(place) => vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())],
             Screen::Search => {
@@ -5731,6 +5861,17 @@ impl App {
                 return self.arrive_at(s);
             }
             Action::OpenData => return self.open_data(),
+            Action::OpenUsbManager => {
+                match &self.state.usb_drive {
+                    Some(UsbDrive::Shown) => {
+                        self.state.files = Folder::new(USB_DRIVE);
+                        self.open(Screen::Files);
+                        return vec![Effect::ReadDir(USB_DRIVE.into())];
+                    }
+                    Some(UsbDrive::Unreadable(_)) => self.say(l.pick(USB_DRIVE_UNREADABLE), now),
+                    None => self.say(l.pick(USB_DRIVE_WANTED), now),
+                }
+            }
             // A user offered by name: the page asks for their screen lock,
             // as it does for the owner's.
             Action::UnlockUser(user) => {
@@ -5785,6 +5926,7 @@ impl App {
                 };
                 *on = !*on;
                 let now_on = *on;
+                if switch == Switch::DoubleTap { self.tapped = None; }
                 if switch == Switch::RememberPassword && !now_on {
                     self.state.remembered = None;
                 }
@@ -6040,12 +6182,23 @@ impl App {
                 self.refresh();
             }
             Action::BackupPart(k) => {
+                if k == 3 && !self.state.efs_backup_available {
+                    self.say(l.pick(["本机 EFS 分区清单尚未验证", "本機 EFS 分割區清單尚未驗證", "This device's EFS partition list is not verified"]), now);
+                    return Vec::new();
+                }
                 self.state.backup[k] = !self.state.backup[k];
                 self.refresh();
             }
             Action::BackupTo(place) => {
                 self.state.backup_to = place;
                 self.refresh();
+            }
+            Action::ImagePartition(index) => {
+                if self.state.image_partitions.as_ref().and_then(|parts| parts.as_ref().ok()).is_some_and(|parts| index < parts.len()) {
+                    self.state.image_partition = Some(index);
+                    self.state.confirm = 0.0;
+                    self.refresh();
+                }
             }
             // All a backup holds is ticked to restore at first.
             Action::OpenBackup(i) => {
@@ -6306,6 +6459,7 @@ impl App {
             }
             // Asking takes a network, which the WLAN page joins.
             Action::CheckUpdate => {
+                if self.state.downloading() { return Vec::new(); }
                 if !self.state.online() {
                     self.open(Screen::Wlan);
                     return self.arrive_at(Screen::Wlan);
@@ -6496,6 +6650,11 @@ impl App {
                     self.refresh();
                 }
             }
+            Action::OpenPlugin(i) => {
+                self.state.plugin_chosen = i;
+                self.refresh();
+            }
+            Action::OpenPluginFolder => return vec![Effect::ReadDir(PLUGIN_FOLDER.to_string())],
         }
         Vec::new()
     }
@@ -7338,6 +7497,14 @@ impl App {
     fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::SkywardUpdate => {
+                let slot = self.state.skyward_job.as_ref().and_then(|job| match job.outcome { Some(SkywardEnd::Ready(slot)) => Some(slot), _ => None });
+                if let (Some(slot), Some(build)) = (slot, self.state.skyward_newest().and_then(|newest| newest.build.clone())) {
+                    self.state.skyward_job = Some(SkywardJob { stage: Some(SkywardStage::Write { done: 0, total: build.size * 2 }), rate: 0, outcome: None, stopping: false });
+                    self.refresh();
+                    fx.push(Effect::WriteSkyward { build, slot });
+                }
+            }
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
@@ -7362,7 +7529,9 @@ impl App {
             }
             Confirm::Backup => {
                 let s = &self.state;
-                let refused = if !s.backup.contains(&true) {
+                let refused = if s.backup[3] && !s.efs_backup_available {
+                    Some(["本机 EFS 备份不可用，请取消勾选", "本機 EFS 備份無法使用，請取消勾選", "EFS backup is unavailable; deselect it"])
+                } else if !s.backup.contains(&true) {
                     Some(["请选择要备份的内容", "請選擇要備份的內容", "Choose what to back up"])
                 } else if s.backup[2] && s.data != Data::Open {
                     Some(["备份 data 分区需先完成「解密」", "備份 data 分割區需先完成「解密」", "Decrypt before backing up the data partition"])
@@ -7380,6 +7549,16 @@ impl App {
                 match refused {
                     Some(why) => self.say(l.pick(why), now),
                     None => fx.push(backup),
+                }
+            }
+            Confirm::ImageBackup => {
+                if !self.state.place_open(self.state.backup_to) {
+                    self.say(l.pick(["备份位置不可用，请先解密或连接 U 盘", "備份位置無法使用，請先解密或連接 USB 隨身碟", "Unlock storage or connect a readable USB drive"]), now);
+                } else if let Some((name, _)) = self.state.image_partitions.as_ref().and_then(|parts| parts.as_ref().ok())
+                    .and_then(|parts| self.state.image_partition.and_then(|index| parts.get(index))) {
+                    fx.push(Effect::BackupImage { name: name.clone(), place: self.state.backup_to });
+                } else {
+                    self.say(l.pick(["请选择一个分区", "請選擇一個分割區", "Select one partition"]), now);
                 }
             }
             Confirm::Restore => {
@@ -8063,6 +8242,7 @@ mod tests {
             Screen::Backup,
             Screen::Restore,
             Screen::Advanced,
+            Screen::Avb,
             Screen::Files,
             Screen::Terminal,
             Screen::Language,
@@ -8830,6 +9010,36 @@ mod tests {
     }
 
     #[test]
+    fn avb_switches_only_write_after_confirmation_and_never_enter_saved_settings() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        let saved = app.settings();
+        assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Avb)), vec![Effect::ReadAvb]);
+        let state = avbctl::State { suffix: "_a".into(), flags: 0, unlocked: true, digest: [0; 32] };
+        app.avb_read(Ok(state.clone()), None);
+        assert!(tap(&mut app, &f, &i, Action::AvbToggle(avbctl::Check::Verification)).is_empty());
+        assert_eq!(app.settings(), saved);
+        assert_eq!(app.state.avb, Some(Ok(state.clone())), "a pending switch does not claim a disk change");
+        tap(&mut app, &f, &i, Action::CancelAvb);
+        assert!(app.state.avb_pending.is_none());
+        tap(&mut app, &f, &i, Action::AvbToggle(avbctl::Check::Verification));
+        tap(&mut app, &f, &i, Action::AvbConfirmOpen);
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::AvbDisable), vec![Effect::SetAvb { expected: state, check: avbctl::Check::Verification, disabled: true }]);
+        assert!(app.state.avb_pending.is_none());
+    }
+
+    #[test]
+    fn unknown_or_locked_avb_state_offers_no_write_controls() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Avb, W, H, PPD);
+        for state in [Err("cannot read vbmeta".into()), Ok(avbctl::State { suffix: "_a".into(), flags: 3, unlocked: false, digest: [0; 32] })] {
+            app.avb_read(state, None);
+            assert!(app.frame(&f, &i).hits.is_empty());
+            assert!(app.confirmed(Confirm::Avb, 0).is_empty());
+        }
+    }
+
+    #[test]
     fn partitions_mount_while_an_update_waits_to_merge() {
         let (f, mut i) = (fonts(), info());
         i.snapshot = SnapshotState::Snapshotted;
@@ -9177,6 +9387,8 @@ mod tests {
         let (f, i) = (fonts(), info());
         let offered = |app: &mut App| app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::DoubleTap));
         let mut app = App::new(Screen::Settings, W, H, PPD);
+        app.state.double_tap_supported = false;
+        app.state.double_tap = false;
         assert!(!offered(&mut app), "no panel reports fingers with it dark, so there is nothing to offer");
         // A phone whose panel can doze and whose driver keeps reporting offers
         // the switch, and a start that has not been to the page yet has it
@@ -10560,6 +10772,7 @@ mod tests {
     fn a_backup_takes_what_is_ticked_to_where_it_is_sent() {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Backup, &f, &i);
+        app.state.efs_backup_available = true;
         assert_eq!(app.state.backup, [true, true, false, true]);
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "internal storage waits for the data partition");
         assert_eq!(app.deadline(0), Some(TOAST_MS), "and says so");
@@ -10583,6 +10796,19 @@ mod tests {
             tap(&mut app, &f, &i, Action::BackupPart(k));
         }
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "nothing ticked, nothing backed up");
+    }
+
+    #[test]
+    fn unavailable_efs_cannot_be_selected_or_silently_backed_up() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Backup, &f, &i);
+        app.state.efs_backup_available = false;
+        app.state.data = Data::Open;
+        app.state.backup = [false; 4];
+        tap(&mut app, &f, &i, Action::BackupPart(3));
+        assert!(!app.state.backup[3]);
+        app.state.backup[3] = true;
+        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty());
     }
 
     /// A backup found in `place`, made at `made`, holding `parts`.
@@ -11355,6 +11581,67 @@ mod tests {
         app.set_place(Place::Storage, String::new(), Ok(Vec::new()), LISTED);
         assert!(app.key(Key::Back, 1000).is_empty());
         assert_eq!(app.screen(), Screen::Install, "from the top, back leaves");
+    }
+
+    #[test]
+    fn usb_hotplug_notifications_only_show_on_changes_and_keep_navigation_effects() {
+        for (lang, connected, removed, unreadable) in [
+            (Lang::Hans, "U 盘已连接", "U 盘已拔出", "U 盘已插入，无法读取"),
+            (Lang::Hant, "USB 隨身碟已連接", "USB 隨身碟已拔出", "USB 隨身碟已插入，無法讀取"),
+            (Lang::En, "USB drive connected", "USB drive removed", "USB drive inserted, but unreadable"),
+        ] {
+            let mut app = App::new(Screen::Home, W, H, PPD);
+            app.state.lang = lang;
+            assert!(app.usb_drive_changed(None, 0).is_empty());
+            assert!(app.toast.is_none());
+            app.sleep(0);
+            assert!(app.usb_drive_changed(Some(UsbDrive::Shown), 100).is_empty());
+            assert!(app.display_on());
+            assert_eq!(app.toast.as_ref().unwrap(), &(connected.to_string(), 100 + TOAST_MS));
+            app.usb_drive_changed(Some(UsbDrive::Shown), 500);
+            assert_eq!(app.toast.as_ref().unwrap().1, 100 + TOAST_MS, "polling cannot extend the toast");
+            app.act(Action::OpenUsbManager, 1000);
+            assert_eq!(app.usb_drive_changed(None, 2000), vec![Effect::ReadDir("/".into())]);
+            assert_eq!(app.toast.as_ref().unwrap().0, removed);
+            app.usb_drive_changed(Some(UsbDrive::Unreadable("I/O error".into())), 3000);
+            assert_eq!(app.toast.as_ref().unwrap().0, unreadable);
+            assert_eq!(app.state.install, Install::Idle);
+        }
+    }
+
+    #[test]
+    fn usb_manager_is_available_on_home_and_advanced_without_starting_an_installer() {
+        let (f, i) = (fonts(), info());
+        for screen in [Screen::Home, Screen::Advanced] {
+            let mut app = App::new(screen, W, H, PPD);
+            assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::OpenUsbManager));
+            assert!(app.act(Action::OpenUsbManager, 0).is_empty());
+            assert_eq!(app.screen(), screen);
+            app.set_usb_drive(Some(UsbDrive::Unreadable("unsupported filesystem".into())));
+            assert!(app.act(Action::OpenUsbManager, 0).is_empty());
+            assert_eq!(app.screen(), screen);
+            app.set_usb_drive(Some(UsbDrive::Shown));
+            assert_eq!(app.act(Action::OpenUsbManager, 0), vec![Effect::ReadDir(USB_DRIVE.into())]);
+            assert_eq!(app.screen(), Screen::Files);
+            assert_eq!(app.state.files.path, USB_DRIVE);
+            assert_eq!(app.state.install, Install::Idle);
+            app.set_files(USB_DRIVE.into(), Ok(vec![entry("notes.txt", FileKind::File)]), LISTED);
+            assert_eq!(app.act(Action::OpenEntry(0), 0), vec![Effect::OpenText(format!("{USB_DRIVE}/notes.txt"))]);
+        }
+    }
+
+    #[test]
+    fn removing_a_usb_drive_leaves_no_stale_file_manager_entries_or_clipboard() {
+        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        app.set_usb_drive(Some(UsbDrive::Shown));
+        app.act(Action::OpenUsbManager, 0);
+        app.set_files(format!("{USB_DRIVE}/ROMs"), Ok(vec![entry("rom.zip", FileKind::File)]), LISTED);
+        app.state.clip = Some(Clip { op: FileOp::Copy, path: format!("{USB_DRIVE}/ROMs/rom.zip") });
+        assert_eq!(app.set_usb_drive(None), vec![Effect::ReadDir("/".into())]);
+        assert_eq!(app.state.files.path, "/");
+        assert!(app.state.clip.is_none());
+        assert!(app.state.file.is_none());
+        assert_eq!(app.state.install, Install::Idle);
     }
 
     #[test]
@@ -12312,6 +12599,25 @@ mod tests {
     }
 
     #[test]
+    fn downloaded_recovery_requires_a_new_slide_before_any_write_effect() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::SkywardUpdate, W, H, PPD);
+        app.state.wlan = Some(connected("Skyward"));
+        app.skyward_checked(Ok(skyward_newest(true)));
+        let build = skyward_newest(true).build.unwrap();
+        assert_eq!(tap(&mut app, &f, &i, Action::UpdateSkyward), vec![Effect::UpdateSkyward(build.clone())]);
+        app.skyward_ended(SkywardEnd::Ready(Slot::A), 0);
+        assert!(matches!(app.state.skyward_job.as_ref().unwrap().outcome, Some(SkywardEnd::Ready(Slot::A))));
+        assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::Confirm(Confirm::SkywardUpdate)));
+        let track = app.frame(&f, &i).hits.iter().find(|hit| hit.action == Action::Confirm(Confirm::SkywardUpdate)).unwrap().rect;
+        let y = track.centre().1 - app.top().1;
+        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 1000);
+        app.touch(Touch::Move(track.x + track.w, y), &f, 1000);
+        assert_eq!(app.touch(Touch::Up, &f, 1000), vec![Effect::WriteSkyward { build, slot: Slot::A }]);
+        assert!(matches!(app.state.skyward_job.as_ref().unwrap().stage, Some(SkywardStage::Write { .. })));
+    }
+
+    #[test]
     fn the_skyward_page_asks_github_as_it_opens_once_a_network_is_joined() {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Settings, W, H, PPD);
@@ -12765,6 +13071,68 @@ mod tests {
         app.touch(Touch::Down(x, y), &f, after);
         app.touch(Touch::Up, &f, after + 20);
         assert_eq!(app.screen(), Screen::Settings);
+    }
+
+    #[test]
+    fn double_tap_can_be_disabled_without_disabling_the_power_key() {
+        let f = fonts();
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.act(Action::Toggle(Switch::DoubleTap), 0);
+        assert!(!app.state.double_tap);
+        press(&mut app, Key::Power, 10);
+        for at in [100, 200] {
+            app.touch(Touch::Down(300.0, 500.0), &f, at);
+            app.touch(Touch::Up, &f, at + 20);
+        }
+        assert!(!app.display_on());
+        press(&mut app, Key::Power, 400);
+        assert!(app.display_on());
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.state.double_tap_supported = false;
+        press(&mut app, Key::Power, 0);
+        app.touch(Touch::Down(300.0, 500.0), &f, 100);
+        app.touch(Touch::Down(300.0, 500.0), &f, 200);
+        assert!(!app.display_on(), "a preference does not invent hardware support");
+    }
+
+    #[test]
+    fn hardware_gesture_wakes_without_toggling_or_clicking() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        let (x, y) = spot(&mut app, &f, &i, Action::Open(Screen::Settings));
+        press(&mut app, Key::Power, 0);
+        app.hardware_wake(100);
+        assert!(app.display_on());
+        app.hardware_wake(110);
+        assert!(app.display_on(), "a repeated wake event cannot turn the screen off");
+        app.touch(Touch::Down(x, y), &f, 120);
+        app.touch(Touch::Up, &f, 140);
+        assert_eq!(app.screen(), Screen::Home, "wake keeps the stray-touch guard");
+    }
+
+    #[test]
+    fn hardware_gesture_obeys_preference_and_capability() {
+        for (enabled, supported) in [(false, true), (true, false)] {
+            let mut app = App::new(Screen::Home, W, H, PPD);
+            app.state.double_tap = enabled;
+            app.state.double_tap_supported = supported;
+            press(&mut app, Key::Power, 0);
+            app.hardware_wake(100);
+            assert!(!app.display_on());
+            press(&mut app, Key::Power, 200);
+            assert!(app.display_on(), "power key remains independent");
+        }
+    }
+
+    #[test]
+    fn the_double_tap_switch_is_offered_only_when_supported() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Settings, W, H, PPD);
+        let offered = |app: &mut App| app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::DoubleTap));
+        assert!(offered(&mut app));
+        app.state.double_tap_supported = false;
+        app.refresh();
+        assert!(!offered(&mut app));
     }
 
     /// The two taps of one double tap are close together on the glass and

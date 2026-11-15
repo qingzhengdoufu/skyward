@@ -4,6 +4,20 @@
 use anyhow::{Context, Result};
 use std::net::Ipv4Addr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::time::Duration;
+
+/// A sysfs netdev can precede its ioctl registration during firmware startup.
+/// Retry only transient readiness errors; permission and driver faults surface.
+pub fn ready(interface: &str, timeout: Duration) -> Result<[u8; 6]> {
+    crate::readiness::retry(timeout, Duration::from_millis(100), || {
+        set_up(interface, true)?;
+        let mac = hardware_address(interface)?;
+        if mac == [0; 6] || mac[0] & 1 != 0 {
+            return Err(std::io::Error::from_raw_os_error(libc::EAGAIN)).context("interface has no usable hardware address yet");
+        }
+        Ok(mac)
+    })
+}
 
 /// The kernel's `struct rtentry`, which the C library of a phone does not
 /// describe.

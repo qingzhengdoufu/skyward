@@ -19,7 +19,7 @@ use crate::theme::Theme;
 use crate::tr;
 use crate::icons::{self, Icon};
 use crate::widgets::{self, Caption, Detail, Fact, Outline, Row, Spec, SystemCard, SystemMark, Tone, Trail};
-use skyward_info::{BUILDER, DeviceInfo, VERSION};
+use skyward_info::{DeviceInfo, VERSION};
 use skyward_install::{Outcome, Reflash, Refusal, Stage};
 use skyward_net::download::Progress;
 use skyward_net::supplicant::Security;
@@ -76,6 +76,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::ScreenOff => screen_off(cx),
         Screen::Search => search(cx),
         Screen::Backup => backup(cx),
+        Screen::ImageBackup => image_backup(cx),
         Screen::Restore => restore(cx),
         Screen::RestoreBackup => restore_backup(cx),
         Screen::BackupJob => backup_job(cx),
@@ -111,6 +112,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::WlanNetwork => wlan_network(cx),
         Screen::WlanAdd => wlan_add(cx),
         Screen::PowerOff => power_off(cx),
+        Screen::Plugins => plugins(cx),
         Screen::Vbmeta => vbmeta(cx),
     }
 }
@@ -129,6 +131,8 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::Wipe => (["滑动以清除", "滑動以清除", "Slide to wipe"], true),
         Confirm::Flash => (["滑动以刷入", "滑動以刷入", "Slide to flash"], true),
         Confirm::Backup => (["滑动以备份", "滑動以備份", "Slide to back up"], false),
+        Confirm::SkywardUpdate => (["滑动以更新 Recovery", "滑動以更新 Recovery", "Slide to update recovery"], true),
+        Confirm::ImageBackup => (["滑动以导出镜像", "滑動以匯出映像檔", "Slide to export image"], false),
         Confirm::Restore => (["滑动以恢复", "滑動以還原", "Slide to restore"], true),
         Confirm::Slot => (["滑动以切换", "滑動以切換", "Slide to switch"], true),
         Confirm::FactoryReset => (["滑动以恢复出厂设置", "滑動以恢復原廠設定", "Slide to factory reset"], true),
@@ -331,6 +335,7 @@ pub fn home(cx: &Ctx) -> Frame {
         Row::new(l.pick(["恢复", "還原", "Restore"])).icon(PURPLE, Icon::Restore),
         Row::new(l.pick(["挂载", "掛載", "Mount"])).icon(SLATE, Icon::Mount),
         Row::new(l.pick(DECRYPT)).icon(BLUE, Icon::Lock).trail(Trail::Value(fmt::data(l, &cx.state.data))),
+        Row::new(l.pick(USB_MANAGER)).icon(PURPLE, Icon::UsbDrive),
     ]);
     out.extend(hits(&tools.rows, &[
         Action::Open(Screen::Install),
@@ -338,6 +343,7 @@ pub fn home(cx: &Ctx) -> Frame {
         Action::Open(Screen::Restore),
         Action::Open(Screen::Mount),
         Action::Open(Screen::Decrypt),
+        Action::OpenUsbManager,
     ]));
     y = tools.bottom + t.m.card_gap;
     let target = l.pick(REBOOT_TARGETS[cx.state.reboot].0);
@@ -410,8 +416,16 @@ pub fn settings(cx: &Ctx) -> Frame {
     if let Some(r) = slider.below {
         out.push(Hit { rect: r, action: Action::Open(Screen::ScreenOff) });
     }
-    y = widgets::section(&mut c, t, f, slider.bottom, l.pick(["振动", "震動", "Vibration"]));
-    let below = Row::new(l.pick(["触摸振动", "觸控震動", "Touch vibration"])).switch(s.vibrate);
+    let mut after_brightness = slider.bottom;
+    if s.double_tap_supported {
+        let wake = widgets::list(&mut c, t, f, after_brightness, &[
+            Row::new(l.pick(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"])).trail(Trail::Switch(s.double_tap)),
+        ]);
+        out.extend(hits(&wake.rows, &[Action::Toggle(Switch::DoubleTap)]));
+        after_brightness = wake.bottom;
+    }
+    y = widgets::section(&mut c, t, f, after_brightness, l.pick(["振动", "震動", "Vibration"]));
+    let below = Row::new(l.pick(["触摸振动", "觸控震動", "Touch vibration"])).trail(Trail::Switch(s.vibrate));
     let vibration = widgets::slider_card(&mut c, t, f, y, Caption::Vibrate, l.pick(["振动强度", "震動強度", "Vibration intensity"]), s.vibration, Some(below));
     out.push(Hit { rect: vibration.track, action: Action::Slider(Slider::Vibration) });
     if let Some(r) = vibration.below {
@@ -446,12 +460,12 @@ pub fn settings(cx: &Ctx) -> Frame {
         Row::new(l.pick(LANGUAGE)).icon(BLUE, Icon::Globe).trail(Trail::Value(l.name())),
         Row::new(l.pick(TIME_ZONE)).icon(ORANGE, Icon::Clock).trail(Trail::Value(l.pick(TIME_ZONES[s.time_zone].0))),
     ];
-    if s.panel_taps {
+    if s.panel_taps && !s.double_tap_supported {
         rows.push(Row::new(l.pick(DOUBLE_TAP)).switch(s.double_tap));
     }
     let general = widgets::list(&mut c, t, f, y, &rows);
     let mut actions = vec![Action::Open(Screen::Language), Action::Open(Screen::TimeZone)];
-    if s.panel_taps {
+    if s.panel_taps && !s.double_tap_supported {
         actions.push(Action::Toggle(Switch::DoubleTap));
     }
     out.extend(hits(&general.rows, &actions));
@@ -472,15 +486,18 @@ pub fn settings(cx: &Ctx) -> Frame {
         let rows = widgets::list(&mut c, t, f, remember, &[row]);
         out.extend(hits(&rows.rows, &[Action::Toggle(Switch::RememberPassword)]));
         let note = l.pick([
-            "开启后，成功解密 data 的密码会保存在本机密文存储中，下次进入 recovery 自动尝试。密码改过或关闭开关即失效。",
-            "開啟後，成功解密 data 的密碼會儲存在本機的加密儲存空間，下次進入 recovery 自動嘗試。密碼改過或關閉開關即失效。",
-            "When on, the password that opens the data partition is kept on this phone and tried by itself at the next start. Changing the password or turning this off forgets it.",
+            "下次进入 recovery 自动尝试保存的密码。采用软件加密，持有文件与设备标识者可能恢复密码；非硬件安全存储。关闭开关会删除保存的副本。",
+            "下次進入 recovery 自動嘗試儲存的密碼。採用軟體加密，持有檔案與裝置識別資訊者可能還原密碼；並非硬體安全儲存。關閉開關會刪除儲存的副本。",
+            "Tries the saved password at the next start. Software encryption is not hardware-backed: the file and device identifiers can reveal the password. Turning this off deletes the saved copy.",
         ]);
         y = widgets::footnote(&mut c, t, f, rows.bottom, note);
     }
     y = widgets::section(&mut c, t, f, y, l.pick(["调试", "偵錯", "Debugging"]));
-    let debug = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal)]);
-    out.extend(hits(&debug.rows, &[Action::Open(Screen::Terminal)]));
+    let debug = widgets::list(&mut c, t, f, y, &[
+        Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
+        Row::new(l.pick(PLUGINS)).icon(PURPLE, Icon::More),
+    ]);
+    out.extend(hits(&debug.rows, &[Action::Open(Screen::Terminal), Action::Open(Screen::Plugins)]));
     y = widgets::section(&mut c, t, f, debug.bottom, l.pick(["关于", "關於", "About"]));
     let mut rows = vec![Row::new(l.pick(ABOUT)).trail(Trail::Value(VERSION))];
     let mut opens = vec![Action::Open(Screen::About)];
@@ -626,7 +643,7 @@ pub fn mount(cx: &Ctx) -> Frame {
 }
 
 /// Who made the recovery, as the About page names them under its version.
-const AUTHOR: &str = "© 2026 Kirk Lin & 澪洛依";
+const AUTHOR: &str = "© 2026 Kirk Lin & 澪洛依 & 红烧豆腐";
 
 /// About this device, modelled on the stock「我的设备」: the wordmark, the
 /// version and its author over a moving colour field, and the summary,
@@ -741,16 +758,10 @@ pub fn specs(cx: &Ctx) -> Frame {
     if let Some(r) = &i.android {
         y = widgets::info_card(&mut c, t, f, y + gap, &[(l.pick(ANDROID_VERSION), fmt::android(l, r, i.security_patch.as_ref()))]);
     }
-    let mut versions = vec![
+    y = widgets::info_card(&mut c, t, f, y + gap, &[
         (l.pick(["Recovery 版本", "Recovery 版本", "Recovery version"]), format!("Skyward {VERSION}")),
         (l.pick(["内核版本", "核心版本", "Kernel version"]), i.kernel.clone()),
-    ];
-    // Only a build that named someone has this row; the const is absent when
-    // the variable was not set at build time.
-    if let Some(builder) = BUILDER {
-        versions.push((l.pick(["构建者", "建置者", "Built by"]), builder.to_string()));
-    }
-    y = widgets::info_card(&mut c, t, f, y + gap, &versions);
+    ]);
 
     let mut boot = Vec::new();
     if let Some(s) = i.slot {
@@ -2050,7 +2061,9 @@ pub fn backup(cx: &Ctx) -> Frame {
     let mut c = long_page(cx);
     let mut out = Vec::new();
     let top = t.m.content_top;
-    let y = widgets::section_first(&mut c, t, f, top, l.pick(["备份内容", "備份內容", "Contents"]));
+    let images = widgets::list(&mut c, t, f, top, &[Row::new(l.pick(["分区镜像备份", "分割區映像檔備份", "Partition image backup"])).icon(BLUE, Icon::Backup).subtitle(l.pick(["单个分区或整个 super，raw .img", "單個分割區或整個 super，raw .img", "One partition or whole super, raw .img"]))]);
+    out.extend(hits(&images.rows, &[Action::Open(Screen::ImageBackup)]));
+    let y = widgets::section(&mut c, t, f, images.bottom, l.pick(["备份内容", "備份內容", "Contents"]));
     let system = fmt::snapshot_backup_note(l, &i.snapshot).unwrap_or(l.pick(["当前槽位在 super 中的分区", "目前槽位在 super 中的分割區", "The current slot's partitions in super"]));
     let data = l.pick(match s.data == Data::Open {
         true => ["应用、账户和设置，不包括内部存储、锁屏密码和指纹", "應用程式、帳戶和設定，不包括內部儲存空間、螢幕鎖定密碼和指紋", "Apps, accounts and settings, without internal storage, the screen lock or fingerprints"],
@@ -2061,7 +2074,11 @@ pub fn backup(cx: &Ctx) -> Frame {
         ],
     });
     let boot = l.pick(["boot、init_boot、vendor_boot、dtbo、vbmeta 和 recovery", "boot、init_boot、vendor_boot、dtbo、vbmeta 和 recovery", "boot, init_boot, vendor_boot, dtbo, vbmeta and recovery"]);
-    let modem = l.pick(["IMEI、基带设置和传感器校准数据", "IMEI、基頻設定和感應器校正資料", "IMEI, modem settings and sensor calibration"]);
+    let modem = l.pick(if s.efs_backup_available {
+        ["IMEI、基带设置和传感器校准数据", "IMEI、基頻設定和感應器校正資料", "IMEI, modem settings and sensor calibration"]
+    } else {
+        ["本机分区清单尚未验证，不可用", "本機分割區清單尚未驗證，無法使用", "Device partition list not verified; unavailable"]
+    });
     let subs = [boot, system, data, modem];
     let rows: Vec<Row> = BACKUP_PARTS
         .iter()
@@ -2104,6 +2121,39 @@ pub fn backup(cx: &Ctx) -> Frame {
     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
     out.push(Hit { rect: track, action: Action::Confirm(Confirm::Backup) });
     Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(["备份", "備份", "Backup"]), top)
+}
+
+pub fn image_backup(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let y = widgets::section_first(&mut c, t, f, top, l.pick(["分区", "分割區", "Partition"]));
+    let y = match &s.image_partitions {
+        None => widgets::footnote(&mut c, t, f, y, l.pick(["正在读取分区", "正在讀取分割區", "Reading partitions"])),
+        Some(Err(error)) => widgets::footnote(&mut c, t, f, y, error),
+        Some(Ok(parts)) => {
+            let details: Vec<_> = parts.iter().map(|(name, size)| {
+                if name == "super" { format!("{} · {}", fmt::bytes(*size), l.pick(["共享分区，包含全部逻辑分区", "共用分割區，包含全部邏輯分割區", "Shared, all logical partitions"])) }
+                else { fmt::bytes(*size) }
+            }).collect();
+            let rows: Vec<_> = parts.iter().zip(&details).enumerate().map(|(index, ((name, _), detail))| Row::new(name).subtitle(detail).trail(Trail::Check(s.image_partition == Some(index)))).collect();
+            let list = widgets::list(&mut c, t, f, y, &rows);
+            out.extend(hits(&list.rows, &(0..parts.len()).map(Action::ImagePartition).collect::<Vec<_>>()));
+            list.bottom
+        }
+    };
+    let y = widgets::section(&mut c, t, f, y, l.pick(["存放位置", "存放位置", "Save to"]));
+    let places = widgets::list(&mut c, t, f, y, &[
+        Row::new(place_name(l, Place::Storage)).trail(Trail::Check(s.backup_to == Place::Storage)),
+        Row::new(place_name(l, Place::UsbDrive)).trail(Trail::Check(s.backup_to == Place::UsbDrive)),
+    ]);
+    out.extend(hits(&places.rows, &[Action::BackupTo(Place::Storage), Action::BackupTo(Place::UsbDrive)]));
+    let y = widgets::footnote(&mut c, t, f, places.bottom, l.pick(["保存到 Skyward/images，raw .img 与 SHA-256；不压缩、不分卷，完成后读回校验。", "儲存到 Skyward/images，raw .img 與 SHA-256；不壓縮、不分卷，完成後讀回驗證。", "Skyward/images: raw .img and SHA-256, uncompressed and unsplit, verified after saving."]));
+    let (label, danger) = confirm_label(Confirm::ImageBackup, s);
+    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+    out.push(Hit { rect: track, action: Action::Confirm(Confirm::ImageBackup) });
+    Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(["分区镜像备份", "分割區映像檔備份", "Partition image backup"]), top)
 }
 
 /// The backups found, newest first, to restore one; those that cannot be
@@ -2276,7 +2326,7 @@ fn part_state(l: Lang, job: &BackupJob, k: usize) -> String {
     let (did, doing) = job_words(job.restore);
     let ended = job.outcome.is_some();
     let a = match (&job.outcome, job.at) {
-        (Some(BackupEnd::Saved(_)), _) => return l.pick(if job.checks { VERIFIED } else { did }).to_string(),
+        (Some(BackupEnd::Saved(_) | BackupEnd::ImageSaved(_)), _) => return l.pick(if job.checks { VERIFIED } else { did }).to_string(),
         (Some(BackupEnd::Restored { .. }), _) => return l.pick(did).to_string(),
         (_, None) => return l.pick(if ended { ["未开始", "未開始", "Not started"] } else { WAITING_TURN }).to_string(),
         (_, Some(a)) => a,
@@ -2335,6 +2385,7 @@ pub fn backup_job(cx: &Ctx) -> Frame {
             let gone = l.pick(if job.restore { ["未写入任何内容。", "未寫入任何內容。", "Nothing was written."] } else { ["未保存任何备份。", "未儲存任何備份。", "No backup was saved."] });
             let failed = l.pick(if job.restore { RESTORE_FAILED } else { ["备份失败", "備份失敗", "Backup failed"] });
             let (title, color, detail) = match end {
+                BackupEnd::ImageSaved(path) => (l.pick(BACKUP_COMPLETE), GREEN, path.clone()),
                 BackupEnd::Saved(name) => {
                     let saved = match job.place {
                         Place::Storage => tr!(l, "已保存到内部存储的 Skyward/backups/{name}", "已儲存到內部儲存空間的 Skyward/backups/{name}", "Saved to Skyward/backups/{name} in internal storage"),
@@ -2423,7 +2474,7 @@ pub fn backup_job(cx: &Ctx) -> Frame {
     }
     let title = l.pick(match (&job.outcome, job.restore) {
         (None, restore) => job_words(restore).1,
-        (Some(BackupEnd::Saved(_)), _) => BACKUP_COMPLETE,
+        (Some(BackupEnd::Saved(_) | BackupEnd::ImageSaved(_)), _) => BACKUP_COMPLETE,
         (Some(BackupEnd::Restored { .. }), _) => RESTORE_COMPLETE,
         (Some(_), false) => ["备份未完成", "備份未完成", "Backup incomplete"],
         (Some(_), true) => ["恢复未完成", "還原未完成", "Restore incomplete"],
@@ -2439,10 +2490,11 @@ const STOP: Text = ["停止", "停止", "Stop"];
 /// Tools for the experienced.
 pub fn advanced(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
-    let mut c = page(cx);
+    let mut c = long_page(cx);
     let top = t.m.content_top;
     let tools = widgets::list(&mut c, t, f, top, &[
         Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
+        Row::new(l.pick(USB_MANAGER)).icon(PURPLE, Icon::UsbDrive),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
@@ -2452,6 +2504,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
+        Action::OpenUsbManager,
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
@@ -2459,10 +2512,12 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Update),
         Action::Open(Screen::Avb),
     ]);
-    Frame::new(t, c, out, l.pick(ADVANCED), top)
+    Frame::new(t, fit(c, t, tools.bottom), out, l.pick(ADVANCED), top)
 }
 
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];
+const USB_MANAGER: Text = ["U 盘管理", "USB 隨身碟管理", "USB drive manager"];
+
 
 /// The two AVB checks, what each does, and the switch that turns it off.
 ///
@@ -2492,6 +2547,14 @@ pub fn avb(cx: &Ctx) -> Frame {
             None
         }
     };
+    if state.is_some_and(|state| !state.unlocked) {
+        y = widgets::footnote(&mut c, t, f, y, l.pick([
+            "未确认 Bootloader 已解锁，禁止修改。",
+            "未確認 Bootloader 已解鎖，禁止修改。",
+            "Bootloader unlock is not confirmed. Changes are blocked.",
+        ]));
+        return Frame::new(t, fit(c, t, y), out, l.pick(AVB), top);
+    }
     // The second confirmation stands in the page's place: what turning a check
     // off means, which check it is, and the one swipe that writes it. Back
     // leaves it without changing anything, and so does Cancel.
@@ -2959,6 +3022,13 @@ pub fn update(cx: &Ctx) -> Frame {
         let online_update = l.pick(["在线更新", "線上更新", "Online update"]);
         y = if y == top { widgets::section_first(&mut c, t, f, y, online_update) } else { widgets::section(&mut c, t, f, y, online_update) };
         y = online(&mut c, cx, y, &mut out);
+        if s.recovery_partitions {
+            let row = Row::new(l.pick(["刷入后保留当前 Recovery", "刷入後保留目前 Recovery", "Keep current Recovery after installation"]))
+                .trail(Trail::Switch(s.keep_recovery));
+            let options = widgets::list(&mut c, t, f, y + t.m.card_gap, &[row]);
+            out.extend(hits(&options.rows, &[Action::Toggle(Switch::KeepRecovery)]));
+            y = options.bottom;
+        }
     }
     let next = match &s.boot_slots {
         Some(Ok(slots)) => Some(slots.active),
@@ -3048,7 +3118,8 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                 None => (l.pick(GETTING_READY), String::new(), None),
                 Some(p) => downloaded(l, p, job.rate),
             };
-            y = widgets::progress_card(c, t, f, y + t.m.card_gap, heading, &detail, share);
+            let download_theme = Theme { pal: crate::theme::Palette { accent: GREEN, ..t.pal }, ..*t };
+            y = widgets::progress_card(c, &download_theme, f, y + t.m.card_gap, heading, &detail, share);
             let pause = widgets::list(c, t, f, y + t.m.card_gap, &[Row::new(l.pick(if job.stopping { PAUSING } else { PAUSE })).trail(Trail::None)]);
             if !job.stopping {
                 out.extend(hits(&pause.rows, &[Action::PauseDownload]));
@@ -3105,7 +3176,9 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                 }
                 _ => None,
             };
-            let sub = if !s.data.storage_open() {
+            let sub = if s.data == Data::Erased {
+                Some(l.pick(DATA_ERASED))
+            } else if !s.data.storage_open() {
                 Some(l.pick(DECRYPT_NEEDED))
             } else if !s.online() {
                 Some(l.pick(WLAN_FIRST))
@@ -3147,7 +3220,7 @@ fn downloaded(l: Lang, progress: Progress, rate: u64) -> (&'static str, String, 
         Progress::Checking { done, total } => (l.pick(CHECKING_PART), format!("{} / {}", fmt::file_size(done), fmt::file_size(total)), Some(share(done, total))),
         Progress::Downloading { done, total } => (
             l.pick(DOWNLOADING),
-            format!("{} / {} · {}/s", fmt::file_size(done), fmt::file_size(total), fmt::file_size(rate)),
+            format!("{}% · {} / {} · {}/s", percent(share(done, total)), fmt::file_size(done), fmt::file_size(total), fmt::file_size(rate)),
             Some(share(done, total)),
         ),
     }
@@ -3189,9 +3262,9 @@ pub fn skyward_update(cx: &Ctx) -> Frame {
             "The new version is downloaded from GitHub and goes into the recovery partitions once its SHA-256 checks out. The system and user data are left as they are.",
         ]),
         l.pick([
-            "新版本将写入下次启动所用槽位的 recovery 分区；另一个槽位装有 Skyward 时，也会一并更新。",
-            "新版本將寫入下次啟動所用槽位的 recovery 分割區；另一個槽位裝有 Skyward 時，也會一併更新。",
-            "The new version goes into the recovery partition of the slot that starts next, and into the other slot's where it holds Skyward.",
+            "验证发布签名与镜像后，滑动确认仅更新当前槽位的 recovery，不修改 AVB。",
+            "驗證發佈簽章與映像檔後，滑動確認僅更新目前槽位的 recovery，不修改 AVB。",
+            "After signature and image verification, slide to update only the current slot's recovery. AVB is unchanged.",
         ]),
         l.pick(["更新完成后，重启到恢复模式即可使用新版本。", "更新完成後，重新啟動到復原模式即可使用新版本。", "Once updated, reboot to recovery to use the new version."]),
     ];
@@ -3241,6 +3314,15 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         return y;
     }
     match &s.skyward_job {
+        Some(SkywardJob { outcome: Some(SkywardEnd::Ready(slot)), .. }) => {
+            let target = format!("recovery{}", slot.suffix());
+            let detail = tr!(l, "签名与 SHA-256 验证通过，目标：{target}", "簽章與 SHA-256 驗證通過，目標：{target}", "Signature and SHA-256 verified. Target: {target}");
+            let y = widgets::footnote(c, t, f, y + gap, &detail);
+            let (label, danger) = confirm_label(Confirm::SkywardUpdate, s);
+            let track = widgets::confirm(c, t, f, y + gap, label, danger, s.confirm);
+            out.push(Hit { rect: track, action: Action::Confirm(Confirm::SkywardUpdate) });
+            track.y + track.h
+        }
         Some(job) if job.outcome.is_none() => {
             let (heading, detail, share) = match job.stage {
                 None => (l.pick(GETTING_READY), String::new(), None),
@@ -3303,7 +3385,7 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                     y = widgets::footnote(c, t, f, y, &warning);
                     y = widgets::footnote(c, t, f, y, why);
                 }
-                Some(SkywardEnd::Updated(_)) => unreachable!("an update that went in shows how it did"),
+                Some(SkywardEnd::Updated(_) | SkywardEnd::Ready(_)) => unreachable!("a ready or completed update has its own controls"),
                 None => {}
             }
             let mut row = Row::new(l.pick(["下载并更新", "下載並更新", "Download and update"]));
@@ -4616,6 +4698,67 @@ pub fn power_off(cx: &Ctx) -> Frame {
 }
 
 const POWER_OFF: Text = ["关机", "關機", "Power off"];
+
+/// The plugins kept on the phone: where they go, what one has to be, and
+/// what was found. Nothing runs a plugin yet, and the page says so rather
+/// than showing switches for something that would do nothing.
+pub fn plugins(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let mut y = widgets::section_first(&mut c, t, f, top, l.pick(["已安装的插件", "已安裝的外掛", "Plugins installed"]));
+    match &s.plugins {
+        None => y = widgets::footnote(&mut c, t, f, y, l.pick(["正在读取插件目录", "正在讀取外掛目錄", "Reading the plugins folder"])),
+        Some(Err(why)) => y = widgets::footnote(&mut c, t, f, y, &tr!(l, "无法读取插件目录：{why}", "無法讀取外掛目錄：{why}", "The plugins folder can't be read: {why}")),
+        Some(Ok(rows)) if rows.is_empty() => {
+            y = widgets::footnote(&mut c, t, f, y, l.pick(["还没有安装任何插件。", "還沒有安裝任何外掛。", "No plugins are installed yet."]))
+        }
+        Some(Ok(rows)) => {
+            let titles: Vec<String> = rows
+                .iter()
+                .map(|r| match &r.manifest {
+                    Ok(p) => p.title.clone().unwrap_or_else(|| r.name.clone()),
+                    Err(_) => r.name.clone(),
+                })
+                .collect();
+            let subs: Vec<String> = rows
+                .iter()
+                .map(|r| match &r.manifest {
+                    Ok(p) => p.version.as_ref().map_or_else(|| l.pick(["已安装", "已安裝", "Installed"]).to_string(), |v| tr!(l, "版本 {v}", "版本 {v}", "Version {v}")),
+                    Err(why) => why.clone(),
+                })
+                .collect();
+            let list: Vec<Row> = titles.iter().zip(&subs).map(|(t, s)| Row::new(t).icon(PURPLE, Icon::More).subtitle(s).trail(Trail::None)).collect();
+            let drawn = widgets::list(&mut c, t, f, y, &list);
+            let opens: Vec<Action> = (0..rows.len()).map(Action::OpenPlugin).collect();
+            out.extend(hits(&drawn.rows, &opens));
+            y = drawn.bottom;
+        }
+    }
+    // What a plugin is, so that one can be made against this page before
+    // anything runs it.
+    y = widgets::section(&mut c, t, f, y, l.pick(["什么是插件", "什麼是外掛", "What a plugin is"]));
+    let where_ = l.pick([
+        "插件是一个文件夹，放在内部存储的 Skyward/plugins 中，里面有一个 plugin.json 写明名字、版本和用途。",
+        "外掛是一個資料夾，放在內部儲存空間的 Skyward/plugins 中，裡面有一個 plugin.json 寫明名稱、版本和用途。",
+        "A plugin is a folder in Skyward/plugins on internal storage, holding a plugin.json that names it, its version and what it is for.",
+    ]);
+    let what = l.pick([
+        "本版本只读取并列出插件，还不会运行它们。这是一个为之后的插件功能留出的位置。",
+        "本版本只讀取並列出外掛，還不會執行它們。這是一個為之後的外掛功能留出的位置。",
+        "This release only reads and lists plugins; it does not run them yet. It is the place the plugin feature will grow into.",
+    ]);
+    y = widgets::footnote(&mut c, t, f, y, where_);
+    y = widgets::footnote(&mut c, t, f, y, what);
+    // What can be done today, which is looking at the folder.
+    let open = widgets::list(&mut c, t, f, y + t.m.card_gap, &[Row::new(l.pick(["在文件管理中打开插件目录", "在檔案管理中開啟外掛目錄", "Open the plugins folder in File manager"])).trail(Trail::None)]);
+    out.extend(hits(&open.rows, &[Action::OpenPluginFolder]));
+    y = open.bottom;
+    Frame::new(t, fit(c, t, y), out, l.pick(PLUGINS), top)
+}
+
+const PLUGINS: Text = ["插件", "外掛", "Plugins"];
 
 /// The slot's vbmeta image: what it is, the copies kept of it, making one,
 /// and putting one back. A copy older than the phone's rollback index is

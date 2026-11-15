@@ -162,6 +162,43 @@ fn main() -> Result<()> {
     }
 
     let info = haotian(&cfg);
+    if args.iter().any(|arg| arg == "--miro-v1") {
+        let cfg = DeviceConfig::load(root.join("devices/miro.toml"))?;
+        let info = haotian(&cfg);
+        let (w, h) = (cfg.display.width, cfg.display.height);
+        let ppd = cfg.display.density as f32 / 160.0;
+        for lang in [Lang::Hans, Lang::En] {
+            for dark in [false, true] {
+                for (name, screen) in [("home", Screen::Home), ("settings", Screen::Settings), ("advanced", Screen::Advanced),
+                    ("wlan", Screen::Wlan), ("backup", Screen::ImageBackup), ("online", Screen::SkywardUpdate)] {
+                    let mut app = App::new(screen, w, h, ppd);
+                    app.state.lang = lang;
+                    app.state.dark = dark;
+                    app.state.data = Data::Open;
+                    app.state.usb_drive = Some(UsbDrive::Shown);
+                    app.state.wlan = Some(joined(Joining::Connected(router_link())));
+                    app.state.panel_taps = true;
+                    app.state.double_tap_supported = true;
+                    app.image_partitions_read(Ok(vec![("recovery_a".into(), 100 << 20), ("recovery_b".into(), 100 << 20), ("super".into(), 11 << 30)]));
+                    app.state.image_partition = Some(0);
+                    app.skyward_checked(Ok(Newest { version: "1.0.1".into(), newer: true, via: None, build: Some(Build {
+                        name: "skyward-v1.0.1-miro-stock303.img".into(), url: String::new(), link: String::new(), size: 100 << 20, sha256: "12".repeat(32),
+                    }) }));
+                    app.state.skyward_job = Some(SkywardJob { stage: None, rate: 0, outcome: Some(SkywardEnd::Ready(Slot::A)), stopping: false });
+                    write_png(&out.join(format!("v1-{name}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
+                }
+            }
+        }
+        let theme = Theme::dark(w, h, ppd);
+        let intro = skyward_ui::intro::Intro::new(&theme, &fonts, 0);
+        for at in [0, 140, 340, 510, 680] {
+            let mut frame = Canvas::new(w, h);
+            frame.clear(theme.pal.bg);
+            intro.draw(&mut frame, at);
+            write_png(&out.join(format!("v1-intro-{at}.png")), &frame)?;
+        }
+        return Ok(());
+    }
     let pending = DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info.clone() };
     let pattern = Data::Locked { user: 0, keys: Keys::Pattern, checking: false };
     // Whole pages, the way a long screenshot shows them. The About page's

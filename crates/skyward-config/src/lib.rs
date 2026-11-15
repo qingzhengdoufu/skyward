@@ -211,6 +211,9 @@ const DATA: &str = "/data";
 /// and the ticks of the screen going off by the power key, made too.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Haptics {
+    /// Driver effect ABI; existing devices retain periodic effects.
+    #[serde(default)]
+    pub effect: HapticEffect,
     /// The driver's number for a click waveform it keeps, on phones whose
     /// driver plays the waveforms it keeps.
     #[serde(default)]
@@ -234,6 +237,16 @@ pub struct Haptics {
     #[serde(default)]
     pub firmware: Vec<Firmware>,
     pub strength: Strength,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HapticEffect {
+    #[default]
+    Periodic,
+    Constant,
+    /// Qualcomm HV stored waveform: six-byte ID/seconds/milliseconds packet.
+    QcomWaveform,
 }
 
 /// The panel's own doze: what the display driver is told to keep a little of
@@ -671,6 +684,9 @@ impl DeviceConfig {
             ensure!(!aod.leave_cmds.is_empty(), "[aod] leave_cmds names no command set that brings the panel back out");
         }
         if let Some(haptics) = &cfg.haptics {
+            if haptics.effect == HapticEffect::QcomWaveform {
+                ensure!(haptics.click.is_some_and(|id| id >= 0), "[haptics] qcom_waveform requires a nonnegative click ID");
+            }
             // A click is either a waveform the driver keeps or one made at
             // the motor's own frequency, and a phone may name the frequency
             // beside a kept waveform too, for the ticks the screen going off
@@ -1247,13 +1263,35 @@ mod tests {
     }
 
     #[test]
-    fn minimal_miro_keeps_keys_and_touch_without_local_feature_configuration() {
+    fn miro_v1_restores_peripherals_without_replacing_keys_and_touch() {
         let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
         assert_eq!(cfg.device.codename, "miro");
         assert!(cfg.touch.keep_panel_on && cfg.touch.double_tap);
         assert!(cfg.modules.load.iter().any(|name| name == "focaltech_touch"));
         assert!(cfg.services.iter().any(|service| service.path == "/system/bin/se_omapi"));
         assert!(cfg.services.iter().any(|service| service.path.contains("keymint")));
-        assert!(cfg.wlan.is_none() && cfg.update.is_none() && cfg.haptics.is_none());
+        let wlan = cfg.wlan.unwrap();
+        assert_eq!(wlan.modules, ["rfkill", "qca_cld3_peach_v2"]);
+        assert_eq!(wlan.writes, [Write { path: "/sys/kernel/cnss/fs_ready".into(), value: "1".into() }]);
+        assert_eq!(wlan.firmware.len(), 1);
+        assert_eq!(wlan.firmware[0].name, "wlan/qca_cld/peach_v2/WCNSS_qcom_cfg.ini");
+        assert_eq!(wlan.firmware[0].path, "/vendor/etc/wifi/peach_v2/WCNSS_qcom_cfg.ini");
+        assert_eq!(wlan.interface, "wlan0");
+        let haptics = cfg.haptics.unwrap();
+        assert_eq!(haptics.effect, HapticEffect::QcomWaveform);
+        assert_eq!(haptics.click, Some(0));
+        assert_eq!(haptics.strength, Strength { lightest: 0.1, strongest: 0.4 });
+        assert!(haptics.firmware.is_empty() && haptics.modules.is_empty());
+        assert_eq!(cfg.update.unwrap().server, "https://update.miui.com/updates/miotaV3.php");
+    }
+
+    #[test]
+    fn qcom_waveforms_require_an_explicit_nonnegative_id() {
+        let with = |body: &str| DeviceConfig::parse(&format!("[device]\ncodename = 'x'\n[haptics]\neffect = 'qcom_waveform'\nstrength = {{ lightest = 0.1, strongest = 0.4 }}\n{body}\n"));
+        assert!(with("click = 0").is_ok());
+        assert!(with("").is_err());
+        assert!(with("click = -1").is_err());
+        let legacy = DeviceConfig::parse("[device]\ncodename = 'x'\n[haptics]\nstrength = { lightest = 0.1, strongest = 0.4 }\n").unwrap();
+        assert_eq!(legacy.haptics.unwrap().effect, HapticEffect::Periodic);
     }
 }

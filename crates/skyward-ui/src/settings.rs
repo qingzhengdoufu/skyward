@@ -53,6 +53,7 @@ pub struct Settings {
     /// The time zone, by its name in the tz database.
     pub time_zone: String,
     pub vibrate: bool,
+    pub double_tap: bool,
     /// The vibration slider's place, from 0 at its left end to 1.
     pub vibration: f32,
     /// A computer connected over USB is offered internal storage.
@@ -62,11 +63,6 @@ pub struct Settings {
     /// none leaves it off, which is what a freshly flashed phone starts with:
     /// the face is asked for on the settings page, not found already lit.
     pub always_on: bool,
-    /// Two taps on the dark panel light it again. A file that names none
-    /// leaves it off, which is what a freshly flashed phone starts with: the
-    /// gesture costs the phone its suspend, since the panel has to keep
-    /// dozing for the taps to be felt, so it is asked for rather than given.
-    pub double_tap: bool,
     /// Turn both AVB checks off after a ROM is installed.
     pub disable_avb: bool,
     /// Remember the screen lock that opens the data partition, and try it
@@ -157,10 +153,10 @@ impl Settings {
             screen_off: SCREEN_OFF[state.screen_off].map_or(0, |ms| ms / 1000),
             time_zone: TIME_ZONES[state.time_zone].2.to_string(),
             vibrate: state.vibrate,
+            double_tap: state.double_tap,
             vibration: state.vibration,
             file_transfer: state.file_transfer,
             always_on: state.always_on,
-            double_tap: state.double_tap,
             disable_avb: state.disable_avb,
             remember_password: state.remember_password,
             sort: SORTS[match state.sort {
@@ -224,12 +220,12 @@ impl Settings {
             state.time_zone = at;
         }
         state.vibrate = self.vibrate;
+        state.double_tap = self.double_tap;
         if (0.0..=1.0).contains(&self.vibration) {
             state.vibration = self.vibration;
         }
         state.file_transfer = self.file_transfer;
         state.always_on = self.always_on;
-        state.double_tap = self.double_tap;
         state.disable_avb = self.disable_avb;
         state.remember_password = self.remember_password;
         state.mirror = self.mirror;
@@ -402,12 +398,13 @@ mod tests {
             screen_off: 6,
             time_zone: 7,
             vibrate: false,
+            double_tap: false,
             vibration: 0.4,
             file_transfer: false,
             always_on: true,
-            double_tap: true,
             check_signature: true,
             keep_recovery: false,
+            disable_avb: true,
             backup: [false, true, true, false],
             backup_to: Place::UsbDrive,
             compress: true,
@@ -422,14 +419,14 @@ mod tests {
         assert_eq!(Settings::of(&back), Settings::of(&state));
         assert_eq!((back.lang, back.screen_off, back.time_zone), (Lang::En, 6, 7));
         assert!(back.always_on, "a face turned on is still on at the next start");
-        assert!(back.double_tap, "a two-tap wake turned on is still on at the next start");
+        assert!(!back.double_tap, "the disabled double-tap setting survives a restart");
         // The value carried is the one a start does not have of itself, so
         // what comes back proves the file rather than the default. The
         // default is the other half of the same question: a phone flashed and
-        // never visited here has no face on its dark panel, and no two-tap
-        // wake — both cost power, so both are asked for.
+        // never visited here has no face on its dark panel. Miro retains
+        // the software double-tap default used by its compatibility mode.
         assert!(!State::default().always_on, "the face on a dark panel is off until it is turned on");
-        assert!(!State::default().double_tap, "the two-tap wake is off until it is turned on");
+        assert!(State::default().double_tap, "miro keeps its established software double-tap default");
     }
 
     #[test]
@@ -443,7 +440,7 @@ mod tests {
         assert_eq!(json["logs"]["to"], "temporary");
         assert_eq!(json["spoken"], "zh-Hans");
         assert_eq!(json["always_on"], false, "the face on a dark panel is off until it is turned on");
-        assert_eq!(json["double_tap"], false, "the two-tap wake is off until it is turned on");
+        assert_eq!(json["double_tap"], true, "miro keeps its established software double-tap default");
         assert!(json.get("language").is_none(), "no language is chosen until one is");
         let never = Settings::of(&State { screen_off: SCREEN_OFF.len() - 1, ..State::default() });
         assert_eq!(never.screen_off, 0, "a screen that stays on");
@@ -457,6 +454,7 @@ mod tests {
         assert!(state.dark && state.compress);
         assert_eq!(Settings::of(&state), Settings { dark: true, backup: Backup { compress: true, ..Backup::default() }, ..Settings::default() });
         assert!(!state.language_chosen);
+        assert!(state.double_tap, "old settings retain the previous enabled default");
         assert!(Settings::read("dark = true").is_err(), "not JSON");
     }
 

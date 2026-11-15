@@ -3,12 +3,25 @@
 //! beside it while file transfer is on.
 
 use crate::{prop, set_prop, wait_prop};
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 static MTP: AtomicBool = AtomicBool::new(false);
+
+/// The gadget controller disappears while a dual-role port serves an OTG
+/// peripheral. That is not a failed recovery or a connected adb host.
+pub fn gadget_state(controllers: &Path, controller: Option<&str>) -> Result<Option<String>> {
+    let Some(controller) = controller.filter(|name| !name.is_empty()) else { return Ok(None) };
+    let path = controllers.join(controller).join("state");
+    match std::fs::read_to_string(&path) {
+        Ok(state) => Ok(Some(state.trim().to_string())),
+        Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ENODEV | libc::ENXIO)) => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
 
 /// What the port offers while nothing else has it.
 pub fn resting() -> &'static str {
@@ -72,4 +85,35 @@ pub fn switch(config: &str, timeout: Duration) -> Result<()> {
     }
     set("none", timeout)?;
     set(config, timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_otg_role_switch_can_remove_and_restore_the_gadget_controller() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(gadget_state(root.path(), None).unwrap(), None);
+        assert_eq!(gadget_state(root.path(), Some("")).unwrap(), None);
+        assert_eq!(gadget_state(root.path(), Some("a600000.dwc3")).unwrap(), None);
+        let controller = root.path().join("a600000.dwc3");
+        std::fs::create_dir(&controller).unwrap();
+        let state = controller.join("state");
+        std::fs::write(&state, "configured\n").unwrap();
+        assert_eq!(gadget_state(root.path(), Some("a600000.dwc3")).unwrap().as_deref(), Some("configured"));
+        std::fs::remove_file(&state).unwrap();
+        std::fs::remove_dir(&controller).unwrap();
+        assert_eq!(gadget_state(root.path(), Some("a600000.dwc3")).unwrap(), None);
+        std::fs::create_dir(&controller).unwrap();
+        std::fs::write(&state, "not attached\n").unwrap();
+        assert_eq!(gadget_state(root.path(), Some("a600000.dwc3")).unwrap().as_deref(), Some("not attached"));
+    }
+
+    #[test]
+    fn unrelated_gadget_read_errors_are_not_reported_as_a_disconnected_cable() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("controller/state")).unwrap();
+        assert!(gadget_state(root.path(), Some("controller")).is_err());
+    }
 }
