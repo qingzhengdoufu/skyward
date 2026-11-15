@@ -1,5 +1,8 @@
 # Miro upstream 0.3.1 integration experiment
 
+Historical record for c0eb050. On experiment/miro-upstream031-native the
+current state and remaining differences are in MIRO-UPSTREAM-NATIVE.md.
+
 ## Identity and rollback
 
 - Original upstream: kirklin/skyward release commit bd34c05 (v0.3.1).

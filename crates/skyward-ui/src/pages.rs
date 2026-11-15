@@ -62,6 +62,7 @@ pub struct Band {
 
 pub fn render(screen: Screen, cx: &Ctx) -> Frame {
     match screen {
+        Screen::Browser => browser(cx),
         Screen::Decrypt => decrypt(cx),
         Screen::Home => home(cx),
         Screen::Settings => settings(cx),
@@ -2493,6 +2494,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
         Row::new(l.pick(UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
         Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
+        Row::new(l.pick(["浏览器实验", "瀏覽器實驗", "Browser experiment"])).icon(BLUE, Icon::Globe),
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
@@ -2503,8 +2505,29 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Logs),
         Action::Open(Screen::Update),
         Action::Open(Screen::Avb),
+        Action::Open(Screen::Browser),
     ]);
     Frame::new(t, fit(c, t, tools.bottom), out, l.pick(ADVANCED), top)
+}
+
+pub fn browser(cx: &Ctx) -> Frame {
+    let (t,f,s,l)=(cx.t,cx.f,cx.state,cx.state.lang);
+    let mut c=page(cx);
+    let top=t.m.content_top;
+    let y=widgets::section_first(&mut c,t,f,top,l.pick(["网址", "網址", "Address"]));
+    let (below,caret)=widgets::text_field(&mut c,t,f,y,&s.browser_address);
+    let status=if s.browser_checking {
+        l.pick(["正在校验运行环境", "正在驗證執行環境", "Checking runtime"])
+    } else if s.browser_status.is_empty() {
+        l.pick(["实验组件未启动", "實驗元件尚未啟動", "Experimental component stopped"])
+    } else { &s.browser_status };
+    let tools=widgets::list(&mut c,t,f,below+t.m.card_gap,&[
+        Row::new(l.pick(["打开", "開啟", "Open"])).icon(BLUE,Icon::Globe),
+        Row::new(l.pick(["检查运行环境", "檢查執行環境", "Check runtime"])).subtitle(status).icon(SLATE,Icon::Shield),
+    ]);
+    let mut out=hits(&tools.rows,&[Action::BrowserGo,Action::BrowserCheck]);
+    keyboard_hits(&mut c,t,f,s,l.pick(["前往", "前往", "Go"]),&mut out);
+    Frame{caret:Some(caret),..Frame::new(t,c,out,l.pick(["网页浏览", "網頁瀏覽", "Web browser"]),top)}
 }
 
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];

@@ -2,6 +2,8 @@
 
 Historical record for parent test4. The later integration experiment and
 its explicit exceptions are documented in MIRO-UPSTREAM031-MERGE.md.
+The later native integration supersedes those exceptions as described in
+MIRO-UPSTREAM-NATIVE.md; the remaining text is historical, not current status.
 
 Checked on 2026-11-15 against kirklin/skyward, not the haotian fork.
 The GitHub latest release is v0.3.1, published 2026-11-13T23:45:50Z.

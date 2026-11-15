@@ -32,6 +32,7 @@ sha2 = "0.10.9"
 evdev = "0.13.2"
 hex = { workspace = true }
 skyward-backup = { path = "../skyward-backup" }
+skyward-browser = { path = "../skyward-browser" }
 skyward-binder = { path = "../skyward-binder" }
 skyward-crypto = { path = "../skyward-crypto" }
 skyward-files = { path = "../skyward-files" }

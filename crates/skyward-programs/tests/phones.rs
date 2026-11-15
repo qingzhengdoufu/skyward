@@ -28,10 +28,16 @@ fn mounted(partition: &str) -> String {
 /// The phone `codename` names, as its stock build describes it, with the
 /// properties its bootloader and its build give.
 fn phone(codename: &str, properties: &[(&str, &str)]) -> Phone {
+    with_bundle(codename, properties, None)
+}
+
+/// That phone, with `bundle` as where a recovery has opened the libraries
+/// its partitions were built against.
+fn with_bundle(codename: &str, properties: &[(&str, &str)], bundle: Option<&Path>) -> Phone {
     let at = described(codename);
     let partitions = PARTITIONS.iter().map(|name| Partition { name: name.to_string(), mounted: mounted(name).into(), at: at.join(name) }).collect();
     let properties: HashMap<String, String> = properties.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
-    Phone::read(partitions, properties).unwrap()
+    Phone::read(partitions, properties, bundle).unwrap()
 }
 
 /// The steps, each as the name of the program's file, or as the secure
@@ -52,8 +58,8 @@ fn strings(words: &[&str]) -> Vec<String> {
 
 /// The folders a program finds its libraries in, by the partition it is
 /// on.
-const ON_VENDOR: [&str; 2] = ["/system/lib64", "/vendor/lib64"];
-const ON_ODM: [&str; 5] = ["/system/lib64", "/vendor/lib64", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"];
+const ON_VENDOR: [&str; 5] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"];
+const ON_ODM: [&str; 6] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"];
 const ON_SYSTEM: [&str; 3] = ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64"];
 
 /// A program kept running as `user` in `groups`, with nothing else said
@@ -82,20 +88,15 @@ fn socket(name: &str, group: &str) -> Socket {
 }
 
 #[test]
-fn configured_miro_services_keep_their_explicit_socket_credentials() {
+fn miro_uses_one_discovered_key_chain_with_in_process_omapi() {
     let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
-    assert!(cfg.configured_keys);
-    let s = cfg.services.into_iter().find(|s| s.path.ends_with("ssgtzd")).unwrap();
-    let configured = s.sockets.clone();
-    let started = skyward_programs::secure::Started::from(s);
-    assert_eq!(started.sockets.len(), configured.len());
-    for (actual, expected) in started.sockets.iter().zip(configured) {
-        assert_eq!(actual.name, expected.name);
-        assert_eq!(actual.mode, expected.mode);
-        assert_eq!(actual.user.as_deref(), Some(expected.user.as_str()));
-        assert_eq!(actual.group.as_deref(), Some(expected.group.as_str()));
-        assert_eq!(actual.kind, SocketKind::Stream);
-        assert!(actual.listen);
+    assert!(!cfg.services.iter().any(|s| s.path.contains("keymint") || s.path.contains("weaver") || s.path.ends_with("se_omapi")));
+    let read = phone("miro", &[("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", "miro"), ("ro.boot.product.vendor.sku", "sun")]);
+    let steps = secure::steps(&read).unwrap();
+    assert_eq!(steps.iter().filter(|s| **s == Step::ServeElements).count(), 1);
+    let starts = secure::programs(&steps);
+    for suffix in ["qseecomd", "ssgtzd", "hlosminkdaemon", "android.hardware.security.keymint-service-qti", "android.hardware.gatekeeper-service-qti", "android.hardware.secure_element-service.qti", "android.hardware.weaver-service.nxp-qti", "android.hardware.boot-service.qti"] {
+        assert_eq!(starts.iter().filter(|s| s.service.path.ends_with(suffix)).count(), 1, "{suffix}");
     }
 }
 
@@ -301,6 +302,25 @@ fn ishtar_s_programs_are_found_as_they_were_started_on_the_phone_and_its_opener_
     assert_eq!(steps.len(), found.len(), "a phone without a weaver");
 }
 
+/// A phone that carries the libraries its partitions were built against
+/// as a bundle of their own. A program on the vendor partition looks in
+/// the bundle after its partition's folders and before the installed
+/// system's, which has libraries under the same names built for its own
+/// programs; the installed system's own program looks in the bundle last.
+#[test]
+fn ishtar_s_programs_look_in_its_bundle_before_the_installed_system_s_folders() {
+    let properties = [("ro.boot.hardware", "qcom"), ("ro.boot.product.vendor.sku", "kalama"), ("ro.boot.product.hardware.sku", "ishtar")];
+    let bundle = "/apex/com.android.vndk.v33/lib64";
+    let steps = secure::steps(&with_bundle("ishtar", &properties, Some(Path::new(bundle)))).unwrap();
+    let found = secure::programs(&steps);
+    let libraries = |path: &str| &found.iter().find(|s| s.service.path == path).unwrap_or_else(|| panic!("{path} is started")).service.libraries;
+    assert_eq!(
+        *libraries("/vendor/bin/hw/android.hardware.security.keymint-service-qti"),
+        ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", bundle, "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+    );
+    assert_eq!(*libraries("/mnt/system_ext/bin/hwservicemanager"), ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64", bundle]);
+}
+
 /// A phone whose weaver's secure element is behind a service of its own,
 /// and whose credential service is told of in the description its whole
 /// vendor partition shares, which tells of nothing else it registers.
@@ -368,7 +388,7 @@ fn a_program_its_partition_does_not_carry_is_not_one_the_phone_runs() {
     std::fs::write(vendor.join("bin/there"), b"").unwrap();
     std::fs::write(odm.join("bin/linked"), b"").unwrap();
     let partitions = vec![Partition { name: "vendor".into(), mounted: "/vendor".into(), at: vendor }, Partition { name: "odm".into(), mounted: "/odm".into(), at: odm }];
-    let phone = Phone::read(partitions, HashMap::new()).unwrap();
+    let phone = Phone::read(partitions, HashMap::new(), None).unwrap();
     let runs = |name: &str| phone.runs(phone.programs.iter().find(|p| p.name == name).unwrap());
     assert_eq!(runs("there"), Happens::Yes);
     assert_eq!(runs("gone"), Happens::No);

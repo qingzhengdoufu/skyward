@@ -1,23 +1,21 @@
 //! Backing up and restoring on a thread of its own, telling the screen how
 //! far it has come.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use skyward_backup::archive::{self, Skipped};
 use skyward_backup::store::{self, Reader, Stored, Writer};
-use skyward_backup::{Item, Manifest, Part, FORMAT};
-use skyward_block::{mount, BY_NAME};
+use skyward_backup::{FORMAT, Item, Manifest, Part};
+use skyward_block::{BY_NAME, mount};
 use skyward_files::{Cancelled, Ownership};
 use skyward_vab::{Slot, SnapshotState};
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The most often how far the work has come is told.
@@ -38,7 +36,16 @@ const ENTRY_BYTES: u64 = 2048;
 
 /// The slot's partitions that start the phone and check what it starts, in
 /// the order a backup takes them: those the phone has.
-const BOOT: [&str; 8] = ["boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "vbmeta_system", "vbmeta_vendor", "recovery"];
+const BOOT: [&str; 8] = [
+    "boot",
+    "init_boot",
+    "vendor_boot",
+    "dtbo",
+    "vbmeta",
+    "vbmeta_system",
+    "vbmeta_vendor",
+    "recovery",
+];
 
 /// The order a restore writes the parts in: what starts the phone and what
 /// it starts, then the baseband's, then the data partition's files, which
@@ -120,7 +127,13 @@ pub struct RestoreTask {
 pub enum Task {
     Backup(BackupTask),
     Restore(RestoreTask),
-    Image { name: String, into: PathBuf, stamp: String, ownership: Ownership, remount: Option<PathBuf> },
+    Image {
+        name: String,
+        into: PathBuf,
+        stamp: String,
+        ownership: Ownership,
+        remount: Option<PathBuf>,
+    },
 }
 
 /// Why backing up or restoring does not start.
@@ -162,7 +175,12 @@ pub enum Event {
     /// The part under way, the bytes of it done of how many in this pass
     /// over it, and whether this is the pass that checks a backup against
     /// what it recorded.
-    At { item: usize, done: u64, of: u64, checking: bool },
+    At {
+        item: usize,
+        done: u64,
+        of: u64,
+        checking: bool,
+    },
     Ended(End),
 }
 
@@ -173,7 +191,9 @@ pub enum End {
     /// A backup restored, but for the folders a key of their own began in
     /// that are gone, which only the system makes, with what the backup
     /// held in them.
-    Restored { unmade: Vec<PathBuf> },
+    Restored {
+        unmade: Vec<PathBuf>,
+    },
     /// Stopped as asked, with nothing of the backup left, or nothing of
     /// the restore written.
     Stopped,
@@ -182,84 +202,66 @@ pub enum End {
 }
 
 pub struct Worker {
-    events: Receiver<Event>,
-    /// Readable while events wait.
-    wake: OwnedFd,
     cancel: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    /// The screen lets it go once the work has ended.
+    worker: skyward_sys::worker::Worker<Event>,
 }
 
 impl Worker {
     pub fn start(task: Task) -> Result<Worker> {
-        let mut fds = [0; 2];
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
-            return Err(io::Error::last_os_error()).context("make the backup worker's wake pipe");
-        }
-        let (wake, signal) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-        let (tx, events) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
-        let thread = thread::Builder::new()
-            .name("backup".into())
-            .spawn(move || {
-                let tell = |event: Event| {
-                    // The screen only stops listening once it has let the
-                    // worker go.
-                    let _ = tx.send(event);
-                    unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
-                };
-                let ended = match task {
-                    Task::Backup(t) => backup(t, &tell, &stop).map(End::Saved),
-                    Task::Restore(t) => restore(t, &tell, &stop).map(|unmade| End::Restored { unmade }),
-                    Task::Image { name, into, stamp, ownership, remount } => export_image(&name, &into, &stamp, ownership, remount.as_deref(), &tell, &stop).map(End::ImageSaved),
-                };
-                let end = match ended {
-                    Ok(end) => end,
-                    Err(e) if e.is::<Cancelled>() => End::Stopped,
-                    Err(e) => match e.downcast::<Refusal>() {
-                        Ok(refusal) => End::Refused(refusal),
-                        Err(e) => End::Failed(format!("{e:#}")),
-                    },
-                };
-                let said = match &end {
-                    End::ImageSaved(path) => format!("partition image saved in {}", path.display()),
-                    End::Saved(folder) => format!("backup saved in {}", folder.display()),
-                    End::Restored { unmade } => format!("backup restored, all but {unmade:?}"),
-                    End::Stopped => "backup stopped".into(),
-                    End::Refused(why) => format!("backup refused: {why}"),
-                    End::Failed(why) => format!("backup failed: {why}"),
-                };
-                skyward_sys::kmsg(&said).expect("the kernel log takes a line");
-                tell(Event::Ended(end));
-            })
-            .context("start the backup worker")?;
-        Ok(Worker { events, wake, cancel, thread: Some(thread) })
+        let worker = skyward_sys::worker::Worker::start("backup", move |teller| {
+            let tell = |event: Event| {
+                teller.tell(event);
+            };
+            let ended = match task {
+                Task::Image {
+                    name,
+                    into,
+                    stamp,
+                    ownership,
+                    remount,
+                } => export_image(&name, &into, &stamp, ownership, remount.as_deref(), &tell, &stop).map(End::ImageSaved),
+                Task::Backup(t) => backup(t, &tell, &stop).map(End::Saved),
+                Task::Restore(t) => restore(t, &tell, &stop).map(|unmade| End::Restored { unmade }),
+            };
+            let end = match ended {
+                Ok(end) => end,
+                Err(e) if e.is::<Cancelled>() => End::Stopped,
+                Err(e) => match e.downcast::<Refusal>() {
+                    Ok(refusal) => End::Refused(refusal),
+                    Err(e) => End::Failed(format!("{e:#}")),
+                },
+            };
+            let said = match &end {
+                End::ImageSaved(path) => format!("partition image saved in {}", path.display()),
+                End::Saved(folder) => format!("backup saved in {}", folder.display()),
+                End::Restored { unmade } => format!("backup restored, all but {unmade:?}"),
+                End::Stopped => "backup stopped".into(),
+                End::Refused(why) => format!("backup refused: {why}"),
+                End::Failed(why) => format!("backup failed: {why}"),
+            };
+            let _ = skyward_sys::kmsg(&said);
+            tell(Event::Ended(end));
+        })?;
+        Ok(Worker { cancel, worker })
     }
 
+    /// Readable while events wait.
     pub fn fd(&self) -> RawFd {
-        self.wake.as_raw_fd()
+        self.worker.fd()
     }
 
     /// The events since the last call.
     pub fn events(&self) -> Vec<Event> {
-        let mut drain = [0u8; 64];
-        while unsafe { libc::read(self.wake.as_raw_fd(), drain.as_mut_ptr().cast(), drain.len()) } > 0 {}
-        self.events.try_iter().collect()
+        self.worker.events()
     }
 
     /// Ask the work to stop; it does between two chunks, and a restore
     /// only while nothing is written yet.
     pub fn stop(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-    }
-}
-
-impl Drop for Worker {
-    /// The screen lets the worker go once its work has ended.
-    fn drop(&mut self) {
-        if let Some(thread) = self.thread.take() {
-            thread.join().expect("the backup worker does not panic");
-        }
     }
 }
 
@@ -280,17 +282,32 @@ pub fn image_partitions() -> Result<Vec<(String, u64)>> {
     for base in skyward_backup::image::BOOT {
         let name = format!("{base}{}", slot.suffix());
         let path = partition(&name);
-        if path.try_exists()? { names.push((name, skyward_block::size_bytes(path)?)); }
+        if path.try_exists()? {
+            names.push((name, skyward_block::size_bytes(path)?));
+        }
     }
     let path = partition("super");
-    if path.try_exists()? { names.push(("super".into(), skyward_block::size_bytes(path)?)); }
+    if path.try_exists()? {
+        names.push(("super".into(), skyward_block::size_bytes(path)?));
+    }
     Ok(names)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn export_image(name: &str, into: &Path, stamp: &str, ownership: Ownership, remount: Option<&Path>, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
+fn export_image(
+    name: &str,
+    into: &Path,
+    stamp: &str,
+    ownership: Ownership,
+    remount: Option<&Path>,
+    tell: &dyn Fn(Event),
+    cancel: &AtomicBool,
+) -> Result<PathBuf> {
     let slot = skyward_vab::current_slot()?.context("the running slot is unknown")?;
-    ensure!(skyward_backup::image::in_slot(name, slot.suffix()), "image export is limited to the running slot and shared super");
+    ensure!(
+        skyward_backup::image::in_slot(name, slot.suffix()),
+        "image export is limited to the running slot and shared super"
+    );
     // Refuse all raw export while an OTA is in flight, even if only boot was
     // selected. A byte-consistent image is not an OTA snapshot of the system.
     no_update()?;
@@ -299,13 +316,22 @@ fn export_image(name: &str, into: &Path, stamp: &str, ownership: Ownership, remo
     let size = skyward_block::size_bytes(&device)?;
     let free = free_bytes(into)?;
     let needed = size.checked_add(1 << 20).context("image size overflow")?;
-    if needed > free { return Err(Refusal::Room { needed, free }.into()); }
+    if needed > free {
+        return Err(Refusal::Room { needed, free }.into());
+    }
     let there = into.ancestors().find(|p| p.exists()).context("no destination filesystem")?;
     let c = std::ffi::CString::new(there.as_os_str().as_bytes())?;
     let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statfs(c.as_ptr(), &mut stat) } != 0 { return Err(io::Error::last_os_error().into()); }
-    ensure!(stat.f_type as u64 != 0x4d44 || size < 1u64 << 32, "FAT32 cannot hold this single image; use exFAT or internal storage");
-    if let Some(at) = remount { mount::remount_writable(at, true)?; }
+    if unsafe { libc::statfs(c.as_ptr(), &mut stat) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    ensure!(
+        stat.f_type as u64 != 0x4d44 || size < 1u64 << 32,
+        "FAT32 cannot hold this single image; use exFAT or internal storage"
+    );
+    if let Some(at) = remount {
+        mount::remount_writable(at, true)?;
+    }
     let exported = (|| -> Result<PathBuf> {
         skyward_files::make_folders(into, ownership)?;
         // Unique folder creation must succeed before any output is made. Never
@@ -316,8 +342,11 @@ fn export_image(name: &str, into: &Path, stamp: &str, ownership: Ownership, remo
         let mut writing = Telling::new(tell, 0, size, false);
         let mut verifying = None;
         skyward_backup::image::export(&mut source, size, &folder, name, ownership, cancel, &mut |done, check| {
-            if check { verifying.get_or_insert_with(|| Telling::new(tell, 0, size, true)).done(done); }
-            else { writing.done(done); }
+            if check {
+                verifying.get_or_insert_with(|| Telling::new(tell, 0, size, true)).done(done);
+            } else {
+                writing.done(done);
+            }
         })
     })();
     if let Some(at) = remount {
@@ -346,14 +375,30 @@ struct Telling<'a> {
 
 impl Telling<'_> {
     fn new(tell: &dyn Fn(Event), item: usize, of: u64, checking: bool) -> Telling<'_> {
-        tell(Event::At { item, done: 0, of, checking });
-        Telling { tell, item, of, checking, told: Instant::now() }
+        tell(Event::At {
+            item,
+            done: 0,
+            of,
+            checking,
+        });
+        Telling {
+            tell,
+            item,
+            of,
+            checking,
+            told: Instant::now(),
+        }
     }
 
     fn done(&mut self, done: u64) {
         if self.told.elapsed() >= PROGRESS_EVERY {
             self.told = Instant::now();
-            (self.tell)(Event::At { item: self.item, done, of: self.of, checking: self.checking });
+            (self.tell)(Event::At {
+                item: self.item,
+                done,
+                of: self.of,
+                checking: self.checking,
+            });
         }
     }
 }
@@ -490,7 +535,11 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
                         .context("back up the data partition's files")?;
                 }
             }
-            items.push(Item { part: *part, name: name.clone(), stored: writer.finish()? });
+            items.push(Item {
+                part: *part,
+                name: name.clone(),
+                stored: writer.finish()?,
+            });
         }
         if t.verify {
             for (k, item) in items.iter().enumerate() {
@@ -499,8 +548,15 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
             }
         }
         let data_key = if data { Some(data_key()?) } else { None };
-        let manifest =
-            Manifest { format: FORMAT, device: t.device.clone(), made: t.made, slot: slot.suffix().into(), system: t.system.clone(), data_key, items };
+        let manifest = Manifest {
+            format: FORMAT,
+            device: t.device.clone(),
+            made: t.made,
+            slot: slot.suffix().into(),
+            system: t.system.clone(),
+            data_key,
+            items,
+        };
         manifest.write(&folder, t.ownership)?;
         unsafe { libc::sync() };
         Ok(())
@@ -575,7 +631,12 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
                 let device = target(item, slot);
                 ensure!(device.exists(), "the phone has no partition {}", device.display());
                 let size = skyward_block::size_bytes(&device)?;
-                ensure!(size == item.stored.size, "{} holds {size} bytes, and its backup {}", device.display(), item.stored.size);
+                ensure!(
+                    size == item.stored.size,
+                    "{} holds {size} bytes, and its backup {}",
+                    device.display(),
+                    item.stored.size
+                );
             }
             Part::System => {
                 let size = sizes.iter().find(|(base, _)| *base == item.name).map(|(_, size)| *size);
@@ -632,7 +693,10 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
                 let mut telling = Telling::new(tell, k, item.stored.size, false);
                 let read = Cell::new(0);
                 let mut reader = Reader::open(&t.folder, &item.stored);
-                let from = Counted { inner: &mut reader, read: &read };
+                let from = Counted {
+                    inner: &mut reader,
+                    read: &read,
+                };
                 let unpacked = archive::unpack(from, Path::new(DATA), &skipped, &go_on, &mut |_| telling.done(read.get()))
                     .context("restore the data partition's files")?;
                 io::copy(&mut reader, &mut io::sink()).context("read the rest of the backup")?;
@@ -659,7 +723,10 @@ fn target(item: &Item, slot: Slot) -> PathBuf {
 /// part's bytes, told as they go.
 fn write_image(device: &Path, folder: &Path, stored: &Stored, telling: &mut Telling) -> Result<()> {
     let mut reader = Reader::open(folder, stored);
-    let mut out = OpenOptions::new().write(true).open(device).with_context(|| format!("open {}", device.display()))?;
+    let mut out = OpenOptions::new()
+        .write(true)
+        .open(device)
+        .with_context(|| format!("open {}", device.display()))?;
     copy(&mut reader, &mut out, stored.size, &AtomicBool::new(false), telling).with_context(|| format!("write {}", device.display()))?;
     reader.check(stored)?;
     out.sync_all().with_context(|| format!("write {}", device.display()))?;
@@ -669,7 +736,8 @@ fn write_image(device: &Path, folder: &Path, stored: &Stored, telling: &mut Tell
         return Err(io::Error::from_raw_os_error(rc)).with_context(|| format!("drop the cached pages of {}", device.display()));
     }
     let back = File::open(device).with_context(|| format!("open {}", device.display()))?;
-    let read = store::digest(back, stored.size, &mut |n| telling.done(stored.size + n)).with_context(|| format!("read {} back", device.display()))?;
+    let read = store::digest(back, stored.size, &mut |n| telling.done(stored.size + n))
+        .with_context(|| format!("read {} back", device.display()))?;
     ensure!(read == stored.sha256, "{} reads back different from the backup", device.display());
     Ok(())
 }

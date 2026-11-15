@@ -58,9 +58,6 @@ pub struct DeviceConfig {
     pub firmware: Option<FirmwarePartition>,
     #[serde(default, rename = "service")]
     pub services: Vec<Service>,
-    /// Use an explicit, device-tested key-service chain rather than discovery.
-    #[serde(default)]
-    pub configured_keys: bool,
     /// The vibration motor's click, on phones that have one.
     #[serde(default)]
     pub haptics: Option<Haptics>,
@@ -221,12 +218,10 @@ pub struct Haptics {
     /// driver plays the waveforms it keeps.
     #[serde(default)]
     pub click: Option<i16>,
-    /// The file the driver says the motor's resonant frequency in, in
     /// The file the motor's driver says its resonant frequency in, in
     /// tenths of a hertz whatever its label, on phones whose click is made
-    /// for the motor's own frequency. A driver that says it nowhere, as
-    /// Cirrus Logic's CS40L26 does not, takes a click made at the nominal
-    /// frequency instead, which is why this may be left out.
+    /// for the motor's own frequency. Miro's stored waveform does not need it;
+    /// other motors without a readable frequency retain the nominal fallback.
     #[serde(default)]
     pub resonance: Option<String>,
     /// The kernel modules the motor's driver is in, which the recovery loads
@@ -247,7 +242,6 @@ pub struct Haptics {
 pub enum HapticEffect {
     #[default]
     Periodic,
-    Constant,
     /// Qualcomm HV stored waveform: six-byte ID/seconds/milliseconds packet.
     QcomWaveform,
 }
@@ -1269,11 +1263,9 @@ mod tests {
     fn miro_v1_restores_peripherals_without_replacing_keys_and_touch() {
         let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
         assert_eq!(cfg.device.codename, "miro");
-        assert!(cfg.configured_keys, "miro retains its tested key-service startup chain");
         assert!(cfg.touch.keep_panel_on && cfg.touch.double_tap);
         assert!(cfg.modules.load.iter().any(|name| name == "focaltech_touch"));
-        assert!(cfg.services.iter().any(|service| service.path == "/system/bin/se_omapi"));
-        assert!(cfg.services.iter().any(|service| service.path.contains("keymint")));
+        assert!(!cfg.services.iter().any(|service| service.path.contains("keymint") || service.path.contains("weaver") || service.path == "/system/bin/se_omapi"), "upstream discovers keys and serves OMAPI once");
         let wlan = cfg.wlan.unwrap();
         assert_eq!(wlan.modules, ["rfkill", "qca_cld3_peach_v2"]);
         assert_eq!(wlan.writes, [Write { path: "/sys/kernel/cnss/fs_ready".into(), value: "1".into() }]);

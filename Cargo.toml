@@ -5,6 +5,7 @@ members = [
     "crates/skyward-config",
     "crates/skyward-binder",
     "crates/skyward-backup",
+    "crates/skyward-browser",
     "crates/skyward-block",
     "crates/skyward-vab",
     "crates/skyward-modules",

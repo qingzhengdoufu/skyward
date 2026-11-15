@@ -165,13 +165,19 @@ fn main() -> Result<()> {
     let info = haotian(&cfg);
     if args.iter().any(|arg| arg == "--miro-v1") {
         let cfg = DeviceConfig::load(root.join("devices/miro.toml"))?;
-        let info = haotian(&cfg);
+        let info = DeviceInfo {
+            model: "REDMI K80 Pro".into(),
+            os_version: Some("OS3.0.305.0.WOMCNXM".into()),
+            android: Some("16".into()),
+            ..haotian(&cfg)
+        };
         let (w, h) = (cfg.display.width, cfg.display.height);
         let ppd = cfg.display.density as f32 / 160.0;
         for lang in [Lang::Hans, Lang::En] {
             for dark in [false, true] {
                 for (name, screen) in [("home", Screen::Home), ("settings", Screen::Settings), ("advanced", Screen::Advanced),
-                    ("wlan", Screen::Wlan), ("backup", Screen::ImageBackup), ("contents", Screen::Backup), ("online", Screen::SkywardUpdate)] {
+                    ("wlan", Screen::Wlan), ("backup", Screen::ImageBackup), ("contents", Screen::Backup), ("online", Screen::SkywardUpdate),
+                    ("browser", Screen::Browser)] {
                     let mut app = App::new(screen, w, h, ppd);
                     app.state.lang = lang;
                     app.state.dark = dark;

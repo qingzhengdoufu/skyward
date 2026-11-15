@@ -6,7 +6,6 @@ use skyward_programs::secure::Started;
 use skyward_sys::{bcb, Power};
 use skyward_vab::SnapshotState;
 use std::path::{Path, PathBuf};
-
 #[cfg(target_os = "android")]
 mod aod;
 #[cfg(target_os = "android")]
@@ -17,6 +16,7 @@ mod remembered;
 mod plugins;
 #[cfg(target_os = "android")]
 mod vbmeta;
+
 #[cfg(target_os = "android")]
 mod backup;
 #[cfg(target_os = "android")]
@@ -51,7 +51,7 @@ mod systems;
 mod ui;
 #[cfg(target_os = "android")]
 mod updates;
-#[cfg(test)]
+#[cfg(any(target_os = "android", test))]
 mod waveform;
 #[cfg(target_os = "android")]
 mod wipe;
@@ -299,13 +299,10 @@ fn main() -> Result<()> {
         Cmd::Services { config } => {
             let slot = booted_slot()?;
             let props = skyward_info::installed_props(slot)?;
-            let cfg = DeviceConfig::load(&config)?;
-            let services: Vec<Started> = cfg.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
+            let services: Vec<Started> = DeviceConfig::load(&config)?.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
             let libraries = secure::libraries()?;
             services::start(&services, libraries.as_deref())?;
-            if !cfg.configured_keys {
-                keys::start(&keys::found(slot, libraries.as_deref())?.steps?, libraries.as_deref())?;
-            }
+            keys::start(&keys::found(slot, libraries.as_deref())?.steps?)?;
             loop {
                 std::thread::park();
             }
@@ -456,11 +453,9 @@ fn main() -> Result<()> {
             // keys are read from the partitions again, as it read them;
             // where they do not show, it started none.
             let mut programs = cfg.services.clone();
-            if !cfg.configured_keys {
-                match booted_slot().and_then(|slot| keys::found(slot, secure::libraries()?.as_deref())?.steps) {
-                    Ok(steps) => programs.extend(keys::programs(&steps)),
-                    Err(e) => eprintln!("the programs of the phone's keys are not known: {e:#}"),
-                }
+            match booted_slot().and_then(|slot| keys::found(slot, secure::libraries()?.as_deref())?.steps) {
+                Ok(steps) => programs.extend(keys::programs(&steps)),
+                Err(e) => eprintln!("the programs of the phone's keys are not known: {e:#}"),
             }
             ui::run(&cfg, &programs, &font, &mono, bcb::Request::default(), start, dump.as_deref())
         }
@@ -562,12 +557,8 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     }
     if cfg.device.codename == "miro"
         && let Err(e) = skyward_sys::remoteproc::find_and_start_adsp(Path::new("/sys/class/remoteproc"), Path::new("/firmware/image")) {
-            let _ = skyward_sys::kmsg(&format!("ADSP startup: {e:#}"));
-        }
-    if let Some(haptics) = &cfg.haptics
-        && let Err(e) = haptics::bring_up(haptics, &cfg.modules.sources) {
-            let _ = skyward_sys::kmsg(&format!("the motor's driver is not brought up: {e:#}"));
-        }
+        let _ = skyward_sys::kmsg(&format!("ADSP startup: {e:#}"));
+    }
     if !cfg.owners.is_empty() {
         let handed = hand_over(&cfg.owners)?;
         skyward_sys::kmsg(&format!("{handed} of the phone's own files handed to the accounts its init gives them"))?;
@@ -607,45 +598,34 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     let mut told = registering.clone();
     told.extend(described.into_iter().filter(|name| !registering.contains(name)));
     if !told.is_empty() {
-        if cfg.configured_keys {
-            let files: Vec<_> = services.iter().filter_map(|s| s.service.description.clone()).collect();
-            if let Err(e) = secure::publish_configured_descriptions(&told, &files) {
-                let _ = skyward_sys::kmsg(&format!("configured descriptions: {e:#}"));
-            }
-        } else {
-            secure::publish_descriptions(&told)?;
-        }
+        secure::publish_descriptions(&told)?;
         skyward_sys::kmsg(&format!("the service directory is told of {} of the phone's own services", told.len()))?;
     }
     let libraries = secure::libraries()?;
-    if cfg.configured_keys
-        && let Err(e) = secure::provide_system_libraries() {
-            let _ = skyward_sys::kmsg(&format!("configured runtime libraries: {e:#}"));
-        }
     if let Some(dir) = &libraries {
         skyward_sys::kmsg(&format!("the phone's own libraries are at {}", dir.display()))?;
     }
-    if cfg.configured_keys {
-        for program in &services {
-            if let Err(e) = services::start(std::slice::from_ref(program), libraries.as_deref()) {
-                let _ = skyward_sys::kmsg(&format!("configured service {}: {e:#}", program.service.path));
-            }
-        }
-    } else {
-        services::start(&services, libraries.as_deref())?;
-    }
+    services::start(&services, libraries.as_deref())?;
     let steps = found.context("make out from the phone's partitions how its keys are used")?;
     for line in keys::describe(&steps) {
         skyward_sys::kmsg(&format!("for the phone's keys: {}", line.replace("\n  ", ", ")))?;
     }
-    keys::start(&steps, libraries.as_deref())?;
+    keys::start(&steps)?;
     agree_on_the_notes_key(&registering)
 }
 
+/// How long a file handed over may take to be there once the modules are
+/// loaded: a driver makes its files as it takes its device up, and ueventd
+/// makes the device's node once the kernel has told it of the device,
+/// either of which may come after the load of the module returns.
+#[cfg(target_os = "android")]
+const FILES_MADE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Give each file the phone's own init hands over as it boots to the
 /// account it names, with the mode it gives, as its chown and chmod lines
-/// do. The files are the ones the modules just loaded made, which the
-/// phone's own programs open as those accounts.
+/// do. The files are the ones the modules just loaded make, which the
+/// phone's own programs open as those accounts; one not there yet is
+/// waited for.
 #[cfg(target_os = "android")]
 fn hand_over(owners: &[skyward_config::Owners]) -> Result<usize> {
     use skyward_sys::ueventd;
@@ -656,6 +636,7 @@ fn hand_over(owners: &[skyward_config::Owners]) -> Result<usize> {
     for run in owners {
         let (uid, gid) = (id(&run.user)?, id(&run.group)?);
         for path in &run.paths {
+            skyward_sys::wait_file(Path::new(path), FILES_MADE).context("wait for a file the modules just loaded make")?;
             std::os::unix::fs::chown(path, Some(uid), Some(gid)).with_context(|| format!("give {path} to {}:{}", run.user, run.group))?;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(run.mode))
                 .with_context(|| format!("give {path} the mode {:o}", run.mode))?;
@@ -880,11 +861,7 @@ fn prepare(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<Vec<skyward_co
             for m in &mounts.partitions {
                 skyward_sys::kmsg(&format!("mounted {} on {} ({})", m.partition, m.mount_point.display(), m.filesystem))?;
             }
-            let found = if cfg.configured_keys {
-                Ok(keys::Found { described: Vec::new(), steps: Ok(Vec::new()) })
-            } else {
-                secure::libraries().and_then(|libraries| keys::found(slot, libraries.as_deref()))
-            };
+            let found = secure::libraries().and_then(|libraries| keys::found(slot, libraries.as_deref()));
             let steps = found.as_ref().ok().and_then(|found| found.steps.as_deref().ok());
             let programs = steps.map(keys::programs).unwrap_or_default();
             // Without them the screen still shows and the keys still work,
