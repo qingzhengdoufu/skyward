@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
 mod aod;
-mod art;
 #[cfg(target_os = "android")]
 mod backup;
 #[cfg(target_os = "android")]
@@ -534,7 +533,7 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<()> {
     // looks in. Never write the SSR switch beside it: that takes the DSP
     // down through rproc_shutdown, which hangs the writer in the ADSP
     // driver's shutdown path until the DSP is gone.
-    if let Err(e) = wait_for_adsp() {
+    if let Err(e) = wait_for_adsp(cfg.device.codename == "miro") {
         skyward_sys::kmsg(&format!("the ADSP is not running: {e:#}"))?;
     }
     // The motor driver is loaded by init before the recovery can mount its
@@ -714,7 +713,7 @@ const ADSP_BOOT: &str = "/sys/kernel/boot_adsp/boot";
 /// driver's shutdown path until the DSP is gone. A phone whose DSP will not
 /// come up at all still shows its pages.
 #[cfg(target_os = "android")]
-fn wait_for_adsp() -> Result<()> {
+fn wait_for_adsp(miro: bool) -> Result<()> {
     if let Some(adsp) = adsp()? {
         if waiting_for_running(&adsp, ADSP_READY)? {
             return skyward_sys::kmsg(&format!("{} runs, so the secure element's HAL can reach it", adsp.display()));
@@ -723,9 +722,13 @@ fn wait_for_adsp() -> Result<()> {
         // in. Ask now that it does. A phone without that switch is left as it
         // is, and so is one whose firmware is missing outright - the loader
         // says so in the kernel log and the moment below runs out.
-        match std::fs::write(ADSP_BOOT, "1") {
-            Ok(()) => skyward_sys::kmsg("the ADSP is offline; asked the loader again now that /firmware is in place")?,
-            Err(e) => skyward_sys::kmsg(&format!("the ADSP is offline and cannot be asked again: {e}"))?,
+        if miro {
+            skyward_sys::remoteproc::start_adsp(&adsp, Path::new("/firmware/image"))?;
+        } else {
+            match std::fs::write(ADSP_BOOT, "1") {
+                Ok(()) => { let _ = skyward_sys::kmsg("the ADSP is offline; asked the loader again now that /firmware is in place"); }
+                Err(e) => { let _ = skyward_sys::kmsg(&format!("the ADSP is offline and cannot be asked again: {e}")); }
+            }
         }
         if waiting_for_running(&adsp, ADSP_RETRY)? {
             return skyward_sys::kmsg(&format!("{} runs, so the secure element's HAL can reach it", adsp.display()));
@@ -906,14 +909,6 @@ fn recovery() -> Result<()> {
             // shared blocks, which writes to the slot's own.
             if !matches!(request.work, bcb::Work::Fastboot | bcb::Work::WipeAb { .. } | bcb::Work::UnshareBlocks) {
                 prepare(&cfg, booted_slot()?)?;
-                // A recovery flashed over the system leaves behind what ART
-                // compiled for the system that was there. Clearing it once per
-                // image makes the system compile its own again, which is what the
-                // phone then runs: on the older code it re-verifies and recompiles
-                // as it goes, and is slower and hotter for as long as that lasts.
-                // The key service the data partition opens with is up by now,
-                // since prepare brought it up.
-                art::clear_once(open_data_for_art);
             }
             let root = Path::new("/");
             ui::run(&cfg, &root.join(ramdisk::FONT), &root.join(ramdisk::MONO), request, Screen::Home, None)
@@ -926,19 +921,6 @@ fn recovery() -> Result<()> {
     run().inspect_err(|e| {
         let _ = skyward_sys::kmsg(&format!("recovery failed: {e:#}"));
     })
-}
-
-/// Open the data partition as far as it opens with nothing a user knows,
-/// which is what clearing what ART compiled needs: none of it is a user's
-/// own file. The key service has to answer, which `prepare` has by now
-/// started; where it does not, the reason is what the caller says.
-#[cfg(target_os = "android")]
-fn open_data_for_art() -> Result<()> {
-    use skyward_crypto::data;
-    let binder = skyward_binder::driver::Binder::open()?;
-    let service = skyward_crypto::keymint::KeyMint::open(&binder)?;
-    data::open_without_credential(&service)?;
-    Ok(())
 }
 
 /// Map and mount the slot's partitions from super, then bring up what runs

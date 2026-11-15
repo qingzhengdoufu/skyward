@@ -12,10 +12,10 @@ use std::io::{ErrorKind, Write};
 use std::path::Path;
 
 const METADATA: &str = "/metadata";
-const FOLDER: &str = "/metadata/skyward";
-const FILE: &str = "/metadata/skyward/settings.json";
+const FOLDER: &str = "/metadata/skyward-minimal";
+const FILE: &str = "/metadata/skyward-minimal/settings.json";
 /// What a write goes into first, to be moved over the file whole.
-const WRITING: &str = "/metadata/skyward/settings.json.new";
+const WRITING: &str = "/metadata/skyward-minimal/settings.json.new";
 
 /// What the file holds. The recovery starts as well where it cannot be
 /// read, as with /metadata damaged, so why goes to the kernel log.

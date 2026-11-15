@@ -146,7 +146,12 @@ fn main() -> Result<()> {
                 anyhow::bail!("{} holds {}, which is not a stock recovery", stock.display(), e.name);
             }
             let read = |p: &PathBuf| std::fs::read(p).with_context(|| format!("read {}", p.display()));
-            skyward_config::DeviceConfig::load(&config)?;
+            let cfg = skyward_config::DeviceConfig::load(&config)?;
+            if cfg.device.codename == "miro" {
+                let name = "init.recovery.qcom.rc";
+                let rc = &rd.find(name).context("miro stock init script missing")?.data;
+                rd.replace(name, without_adsp_restart(rc)?)?;
+            }
             rd.replace(paths::RECOVERY, read(&binary)?)?;
             // Install scripts look for the commands a stock recovery lacks
             // among its programs, and its unzip there too, a link to ziptool
@@ -276,6 +281,17 @@ fn partition_size(stock: &Path) -> Result<usize> {
 /// they say the wrong one, so they are left out here for the recovery to
 /// fill in from the installed system once it has that mounted.
 const BUILD_VERSION: [&str; 3] = ["ro.build.version.release", "ro.build.version.security_patch", "ro.vendor.build.security_patch"];
+
+fn without_adsp_restart(rc: &[u8]) -> Result<Vec<u8>> {
+    let text = std::str::from_utf8(rc).context("stock init script is not UTF-8")?;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let words: Vec<_> = line.split_whitespace().collect();
+        if words == ["wait", "/sys/kernel/boot_adsp/ssr"] || words == ["write", "/sys/kernel/boot_adsp/ssr", "1"] { continue; }
+        out.push_str(line);
+    }
+    Ok(out.into_bytes())
+}
 
 /// The scheduling profiles a recovery's programs look up by name. A
 /// recovery's cgroup setup mounts no controllers, so of all a system's

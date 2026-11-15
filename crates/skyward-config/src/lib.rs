@@ -400,6 +400,9 @@ impl Default for Modules {
 /// something before a recovery can read touches from it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Touch {
+    /// Keep scanout active behind black where panel-off loses touch.
+    #[serde(default)]
+    pub keep_panel_on: bool,
     /// What is written once the touchscreen's input device has appeared,
     /// each value to its file: the driver makes that device as the last
     /// step of starting the controller.
@@ -1241,5 +1244,16 @@ mod tests {
         assert!(!DeviceConfig::parse(none).unwrap().touch.double_tap);
         let set = format!("{none}\n[touch.double_tap]\n");
         assert!(DeviceConfig::parse(&set).is_err(), "the flag is a word of [touch], not a table of its own");
+    }
+
+    #[test]
+    fn minimal_miro_keeps_keys_and_touch_without_local_feature_configuration() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
+        assert_eq!(cfg.device.codename, "miro");
+        assert!(cfg.touch.keep_panel_on && cfg.touch.double_tap);
+        assert!(cfg.modules.load.iter().any(|name| name == "focaltech_touch"));
+        assert!(cfg.services.iter().any(|service| service.path == "/system/bin/se_omapi"));
+        assert!(cfg.services.iter().any(|service| service.path.contains("keymint")));
+        assert!(cfg.wlan.is_none() && cfg.update.is_none() && cfg.haptics.is_none());
     }
 }

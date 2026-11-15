@@ -1234,6 +1234,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let locale = request.locale.as_deref().or(info.locale.as_deref());
     let named = locale.map(Lang::for_locale).transpose()?;
     app.take_settings(kept.settings(), named);
+    if cfg.touch.keep_panel_on && kept.settings().is_none() { app.state.double_tap = true; }
     // Whether the update reaches for a mirror is settled before the first
     // frame, so a file that says no is honoured without the switch being
     // touched. Nothing here can fail the run: `set` writes a flag.
@@ -1284,7 +1285,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // The two-tap wake is offered where the phone's configuration names it and
     // the panel can doze: the taps are only felt while the panel stays in its
     // doze, so a phone with no doze of its own has no way to offer them.
-    app.state.panel_taps = cfg.touch.double_tap && app.state.panel_dozes;
+    app.state.panel_taps = cfg.touch.double_tap && (app.state.panel_dozes || cfg.touch.keep_panel_on);
     // The credential an earlier start kept, where remembering is on: offered
     // on the decrypt page, and tried by the page's own open where it can be.
     // A phone that turned remembering off, or forgot it, has none.
@@ -1753,6 +1754,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             backlight = None;
         } else if dozing {
             // The panel keeps the face in its doze; there is nothing to rest.
+        } else if panel.is_none() && cfg.touch.keep_panel_on {
+            rested_at = None;
+            dark_at = None;
         } else if panel.is_some() {
             // Lit, a panel that came on again switches to its fastest
             // refresh.
@@ -1858,7 +1862,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         }
         let dark_for = dark_at.map(|at| at.elapsed().as_millis() as u64);
         let idle = Idle { dark: surface.is_off(), dark_for, wants_taps: want_taps, taps_wake, needed };
-        let may_sleep = idle.may_sleep() == Sleep::May && !keeps_touch;
+        let may_sleep = idle.may_sleep() == Sleep::May && !keeps_touch && !cfg.touch.keep_panel_on;
         sleeper.allow(may_sleep);
         // With the panel dark the battery is read less often, since each read
         // is a call into its driver that wakes the CPU for it.

@@ -24,10 +24,10 @@ use std::path::Path;
 /// Where the credential is kept: a file of the recovery's own beside the
 /// settings, for the same reasons that file is there. `/metadata` needs no
 /// screen lock to open and is there before the data partition is.
-pub const FILE: &str = "/metadata/skyward/credential";
+pub const FILE: &str = "/metadata/skyward-minimal/credential";
 
 /// What a write goes into first, to be moved over the file whole.
-const WRITING: &str = "/metadata/skyward/credential.new";
+const WRITING: &str = "/metadata/skyward-minimal/credential.new";
 
 /// The layout of the file: its magic, then the nonce and the sealed
 /// credential.
