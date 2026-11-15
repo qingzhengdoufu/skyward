@@ -1,5 +1,6 @@
 # Fresh device configuration, verified against the local stock 303 images.
 # Successful haotian flashing baseline with miro peripherals restored.
+configured_keys = true
 [device]
 codename = "miro"
 brand = "Redmi"
@@ -53,6 +54,52 @@ oneshot = true
 user = "root"
 groups = ["root", "system", "wakelock", "graphics"]
 
+[[service]]
+path = "/vendor/bin/qseecomd"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_property = "vendor.sys.listeners.registered"
+sockets = [{ name = "notify-topology", kind = "stream", mode = 0o660, user = "system", group = "drmrpc" }]
+user = "root"
+groups = ["root", "drmrpc"]
+
+# Account, groups, capabilities and sockets from vendor/etc/init/ssgtzd.rc.
+[[service]]
+path = "/vendor/bin/ssgtzd"
+libraries = ["/system/lib64", "/vendor/lib64"]
+sockets = [
+    { name = "ssgtzd", kind = "stream", mode = 0o660, user = "system", group = "oem_2912" },
+    { name = "ssgtzd_opener", kind = "stream", mode = 0o660, user = "system", group = "system" },
+]
+user = "system"
+groups = ["system", "oem_2912", "wakelock"]
+capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
+
+[[service]]
+path = "/vendor/bin/hlosminkdaemon"
+libraries = ["/system/lib64", "/vendor/lib64"]
+sockets = [{ name = "hlos_mink_opener", kind = "stream", mode = 0o660, user = "system", group = "system" }]
+user = "system"
+groups = ["system"]
+
+[[service]]
+path = "/vendor/bin/hw/android.hardware.security.keymint-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
+registers = [
+    "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
+    "android.hardware.security.secureclock.ISecureClock/default",
+    "android.hardware.security.sharedsecret.ISharedSecret/default",
+]
+user = "system"
+groups = ["system", "drmrpc"]
+
+[[service]]
+path = "/vendor/bin/hw/android.hardware.gatekeeper-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
+description = "/vendor/etc/vintf/manifest_sun.xml"
+user = "system"
+groups = ["system"]
 
 [[service]]
 path = "/odm/bin/hw/android.hardware.nqnfc-service.nxp"
@@ -62,6 +109,44 @@ description = "/odm/etc/vintf/manifest/manifest_nxp_nfc_ese.xml"
 user = "nfc"
 groups = ["nfc", "oem_2912"]
 
+# NFC's manifest alone does not supply an eSE implementation. The QTI
+# binary contains /eSE1 and libEseUtils handles /dev/nq-nci on this build.
+# Start with stock credentials; root fallback needs device-side evidence.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.secure_element-service.qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+ready_service = "android.hardware.secure_element.ISecureElement/eSE1"
+registers = [
+    "android.hardware.secure_element.ISecureElement/SIM1",
+    "android.hardware.secure_element.ISecureElement/SIM2",
+]
+user = "system"
+groups = ["nfc", "system"]
+
+# Stock ese_weaver.so imports OmapiTransport's vtable and death callback.
+# This is the generic standalone OMAPI service, not a Thales APDU bridge.
+[[service]]
+path = "/system/bin/se_omapi"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.se.omapi.ISecureElementService/default"
+user = "root"
+groups = ["root", "system"]
+
+[[service]]
+path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64"]
+ready_service = "android.hardware.weaver.IWeaver/default"
+description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.nxp.xml"
+user = "vendor_nxp_weaver"
+groups = ["vendor_nxp_weaver"]
+capabilities = ["WAKE_ALARM"]
+
+[[service]]
+path = "/vendor/bin/hw/android.hardware.boot-service.qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.boot.IBootControl/default"
+user = "root"
+groups = ["root"]
 
 # Use stock Peach v2 firmware and the CNSS readiness node.
 [wlan]

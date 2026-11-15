@@ -95,7 +95,7 @@ struct Phone<'a> {
 
 pub(super) fn run(args: &[OsString], io: &mut Io) -> i32 {
     let suffix = skyward_sys::prop("ro.boot.slot_suffix").unwrap_or_default();
-    let locked = skyward_sys::prop("ro.boot.vbmeta.device_state").as_deref() == Some("locked");
+    let locked = skyward_sys::bootloader_unlocked().ok().flatten() != Some(true);
     avbctl(args, io, &Phone { by_name: Path::new(skyward_block::BY_NAME), suffix: &suffix, locked })
 }
 
@@ -253,7 +253,7 @@ fn current_phone() -> io::Result<(String, bool)> {
     if !matches!(suffix.as_str(), "_a" | "_b") {
         return Err(io::Error::other("the current A/B slot is unknown"));
     }
-    let unlocked = skyward_sys::prop("ro.boot.vbmeta.device_state").as_deref() == Some("unlocked");
+    let unlocked = skyward_sys::bootloader_unlocked().map_err(io::Error::other)? == Some(true);
     Ok((suffix, unlocked))
 }
 
@@ -438,7 +438,7 @@ pub fn write_back(copy: &Path) -> io::Result<Back> {
     if !matches!(suffix.as_str(), "" | "_a" | "_b") {
         return Err(io::Error::other(format!("{suffix:?} is not a slot suffix")));
     }
-    let unlocked = skyward_sys::prop("ro.boot.vbmeta.device_state").as_deref() == Some("unlocked");
+    let unlocked = skyward_sys::bootloader_unlocked().map_err(io::Error::other)? == Some(true);
     if !unlocked {
         return Err(io::Error::other("an unlocked bootloader is required to change vbmeta"));
     }

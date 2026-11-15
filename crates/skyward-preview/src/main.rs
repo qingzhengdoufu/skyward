@@ -177,7 +177,7 @@ fn main() -> Result<()> {
             for dark in [false, true] {
                 for (name, screen) in [("home", Screen::Home), ("settings", Screen::Settings), ("advanced", Screen::Advanced),
                     ("wlan", Screen::Wlan), ("backup", Screen::ImageBackup), ("contents", Screen::Backup), ("online", Screen::SkywardUpdate),
-                    ("browser", Screen::Browser)] {
+                    ("browser", Screen::Browser), ("browser-live",Screen::Browser), ("browser-keys",Screen::Browser)] {
                     let mut app = App::new(screen, w, h, ppd);
                     app.state.lang = lang;
                     app.state.dark = dark;
@@ -194,6 +194,14 @@ fn main() -> Result<()> {
                         name: "skyward-v1.0.1-miro-stock303.img".into(), url: String::new(), link: String::new(), size: 100 << 20, sha256: "12".repeat(32),
                     }) }));
                     app.state.skyward_job = Some(SkywardJob { stage: None, rate: 0, outcome: Some(SkywardEnd::Ready(Slot::A)), stopping: false });
+                    if name.starts_with("browser-") {
+                        app.browser_started();
+                        app.state.browser_keyboard=name=="browser-keys";
+                        app.state.browser_focus_y=620.0;
+                        if let Ok(pixels)=std::fs::read("/mnt/d/k80ptwrp/out/browser-example-test4.bgra") {
+                            app.browser_frame(pixels);
+                        }
+                    }
                     write_png(&out.join(format!("v1-{name}-{}-{dark}.png", lang.tag())), &whole_page(&mut app, &fonts, &info))?;
                 }
             }

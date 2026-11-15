@@ -5,6 +5,23 @@ impl App {
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
+            Action::BrowserNav(kind) => return vec![Effect::BrowserCommand(skyward_browser::protocol::Message::command(kind))],
+            Action::BrowserAddress => {
+                self.state.browser_address_edit = true;
+                self.state.browser_keyboard = true;
+                self.refresh();
+            }
+            Action::BrowserKeyboard => {
+                self.state.browser_keyboard = !self.state.browser_keyboard;
+                self.state.browser_address_edit = false;
+                self.refresh();
+            }
+            Action::BrowserClear => {
+                self.state.browser_address.clear();
+                self.state.browser_address_edit = true;
+                self.state.browser_keyboard = true;
+                self.refresh();
+            }
             Action::BrowserCheck => {
                 if !self.state.browser_checking {
                     self.state.browser_checking = true;
@@ -950,6 +967,23 @@ impl App {
     /// A key of the on-screen keyboard. A capital lasts one letter; return
     /// opens the first result of a search, and runs a terminal's command.
     pub(super) fn type_key(&mut self, cap: Cap, now: u64) -> Vec<Effect> {
+        if self.screen() == Screen::Browser && self.state.browser_live && !self.state.browser_address_edit {
+            let mut key = skyward_browser::protocol::Message::command(9);
+            match cap {
+                Cap::Char(ch) => key.value = if self.state.layer == Layer::Shifted { ch.to_ascii_uppercase() } else { ch } as u32,
+                Cap::Space => key.value = u32::from(' '),
+                Cap::Backspace => key.value = 8,
+                Cap::Enter => key.value = 13,
+                Cap::Shift => {
+                    self.state.layer = if self.state.layer == Layer::Shifted { Layer::Letters } else { Layer::Shifted };
+                    self.refresh();
+                    return Vec::new();
+                }
+                Cap::Show(layer) => { self.state.layer = layer; self.refresh(); return Vec::new(); }
+            }
+            if self.state.layer == Layer::Shifted { self.state.layer = Layer::Letters; self.refresh(); }
+            return vec![Effect::BrowserCommand(key)];
+        }
         let (l, layer) = (self.state.lang, self.state.layer);
         match cap {
             Cap::Char(ch) => {

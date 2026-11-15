@@ -1,5 +1,6 @@
 use crate::aod;
 mod credential;
+mod browser;
 use crate::backup;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
@@ -1350,6 +1351,11 @@ pub(super) struct Pages<'a> {
     faced: String,
     was_dark: bool,
     browser_check: Option<skyward_sys::worker::Worker<String>>,
+    browser_start: Option<skyward_sys::worker::Worker<Result<tempfile::TempDir, String>>>,
+    browser: Option<skyward_browser::session::Browser>,
+    browser_address: String,
+    browser_dns: Vec<std::net::Ipv4Addr>,
+    browser_touch: Option<(i32, i32)>,
 }
 
 impl<'a> Pages<'a> {
@@ -1573,6 +1579,11 @@ impl<'a> Pages<'a> {
             faced: String::new(),
             was_dark: false,
             browser_check: None,
+            browser_start: None,
+            browser: None,
+            browser_address: String::new(),
+            browser_dns: Vec::new(),
+            browser_touch: None,
         })
     }
     /// Start the work the request in misc asks for, take up what an earlier
@@ -1759,6 +1770,7 @@ impl<'a> Pages<'a> {
         self.updates_told(now)?;
         self.skyward_told(now)?;
         self.decrypt_told(now)?;
+        self.browser_told(now);
         if let Some(worker) = &self.browser_check {
             let reports = worker.events();
             if let Some(report) = reports.into_iter().last() {
@@ -2008,6 +2020,8 @@ impl<'a> Pages<'a> {
         if let Some(worker) = &self.browser_check {
             fds.push(worker.fd());
         }
+        if let Some(worker) = &self.browser_start { fds.push(worker.fd()); }
+        if let Some(browser) = &self.browser { fds.push(browser.fd()); }
         wait(&fds, timeout)
     }
     /// Whether the phone may sleep. With the display off, it sleeps unless
@@ -2017,7 +2031,7 @@ impl<'a> Pages<'a> {
     /// USB port, whose adb and file transfer stay up.
     pub(super) fn may_sleep(&self) -> Result<bool> {
         let systems_busy = self.systems_worker.as_ref().is_some_and(systems::Worker::busy);
-        let busy = self.browser_check.is_some()
+        let busy = self.browser.is_some() || self.browser_start.is_some() || self.browser_check.is_some()
             || self.installer.is_some()
             || self.eraser.is_some()
             || self.worker.is_some()
@@ -2683,6 +2697,7 @@ impl Pages<'_> {
                     answer(asked, self.fastboot)
                 }
                 Incoming::Input(Event::Touch(t, at)) => {
+                    if self.browser_touch(t, at) { continue; }
                     if self.intro.take().is_some() {
                         self.app.redraw();
                         continue;
@@ -2724,12 +2739,9 @@ impl Pages<'_> {
                 }
             }
             Effect::OpenBrowser(address) => {
-                let result = skyward_browser::protocol::address(&address).and_then(|_| skyward_browser::session::launcher_available());
-                self.app.browser_checked(match result {
-                    Ok(()) => "Browser sandbox has not completed validation".into(),
-                    Err(e) => format!("{e:#}"),
-                });
+                self.open_browser(address, now);
             }
+            Effect::BrowserCommand(message) => self.browser_send(message, now),
             Effect::ReadAvb => {
                 self.app
                     .avb_read(skyward_install::commands::avbctl::current().map_err(|e| e.to_string()), None);
@@ -3198,7 +3210,7 @@ impl Pages<'_> {
     }
 
     fn partition_busy(&self) -> bool {
-        self.eraser.is_some()
+        self.browser.is_some() || self.browser_start.is_some() || self.eraser.is_some()
             || self.decryptor.is_some()
             || self.part_worker.is_some()
             || self.backuper.is_some()

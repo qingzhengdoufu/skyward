@@ -10,6 +10,4 @@ libc.workspace = true
 sha2 = "0.10.9"
 liblzma = "0.4.9"
 url = "2.5.8"
-
-[dev-dependencies]
 tempfile = "3.27.0"

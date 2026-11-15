@@ -83,6 +83,20 @@ enum Cmd {
         /// the installed system's vendor_dlkm.
         #[arg(long = "module")]
         modules: Vec<String>,
+        /// A folder holding se_omapi as system/bin/se_omapi and its service
+        /// description as se_omapi.xml.
+        ///
+        /// A phone whose weaver HAL reaches the secure element through
+        /// Android's own OMAPI service gets nothing back from it in a
+        /// recovery, which runs no such service: every call to the weaver
+        /// then fails, and a user's secret behind a weaver slot cannot be
+        /// read. se_omapi is that service on its own; this puts it in the
+        /// ramdisk, for the configuration to start.
+        #[arg(long)]
+        omapi: Option<PathBuf>,
+        /// Private-development AERA runtime and Skyward jail stage.
+        #[arg(long)]
+        browser_stage: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -144,7 +158,7 @@ fn main() -> Result<()> {
             img.kernel = BootImage::read(&kernel)?.kernel;
             write(&out, &img, &img.to_bytes()?)
         }
-        Cmd::Recovery { stock, binary, system_init, config, font, mono, mono_license, firmware, modules, out } => {
+        Cmd::Recovery { stock, binary, system_init, config, font, mono, mono_license, firmware, modules, omapi, browser_stage, out } => {
             let size = partition_size(&stock)?;
             let mut img = BootImage::read(&stock)?;
             let mut rd = Ramdisk::decode(&img.ramdisk)?;
@@ -191,7 +205,16 @@ fn main() -> Result<()> {
                 rd.add(paths::TASK_PROFILES, 0o644, TASK_PROFILES.to_vec())?;
             }
             put(&mut rd, paths::MTP_RC, 0o644, MTP_RC.to_vec())?;
-
+            // The OMAPI service the weaver reaches a secure element through,
+            // and the description the service directory wants of it. The
+            // recovery starts it with the phone's other services.
+            if let Some(stage) = &omapi {
+                install_omapi(&mut rd, stage, &read)?;
+            }
+            if let Some(stage) = &browser_stage {
+                put(&mut rd, "skyward/browser/runtime.xz", 0o644, read(&stage.join("runtime.xz"))?)?;
+                put(&mut rd, "system/bin/skyward-browser-jail", 0o755, read(&stage.join("skyward-browser-jail"))?)?;
+            }
             // On an unlocked device adbd keeps root when ro.secure is 0 and
             // lets any computer in without authorization when ro.adb.secure is
             // 0; init lets a later line of a property file override an earlier
@@ -309,6 +332,45 @@ const TASK_PROFILES: &[u8] = include_bytes!("task_profiles.json");
 /// The init rules that give the USB port file transfer beside adb, which a
 /// stock recovery does not offer.
 const MTP_RC: &[u8] = include_bytes!("mtp.rc");
+
+/// The OMAPI service a weaver reaches a secure element through, and the
+/// description that lets it register.
+///
+/// The service registers `android.se.omapi.ISecureElementService/default`,
+/// which is the name the Thales weaver HAL looks up. Android's own lives in
+/// system_server; a recovery runs no framework, so it gets its own.
+///
+/// No init rule starts it: the recovery starts it with the phone's other
+/// services, once the vendor partition is mounted, since it loads its two
+/// interface libraries from there and asks the secure element HAL for eSE1.
+/// The phone's configuration names it after the secure element and before
+/// the weaver. The service directory turns away a name no description
+/// declares, so the description goes where the directory reads them at boot.
+/// The rest of what it loads, libbinder_ndk and below, is the stock
+/// recovery's own: a newer build of the interface libraries asks libbinder_ndk
+/// for symbols the stock one lacks.
+const OMAPI_FILES: [(&str, &str, u32); 2] = [
+    ("system/bin/se_omapi", "system/bin/se_omapi", 0o755),
+    ("se_omapi.xml", "system/etc/vintf/manifest/se_omapi.xml", 0o644),
+];
+
+/// Put the OMAPI service and its description into `rd`, from the folder
+/// `stage` holds them in.
+///
+/// A stock recovery that already carries the service keeps its own: the two
+/// would answer to the same name, and the second to register would replace
+/// the first.
+fn install_omapi(rd: &mut Ramdisk, stage: &Path, read: &impl Fn(&PathBuf) -> Result<Vec<u8>>) -> Result<()> {
+    if rd.find(OMAPI_FILES[0].1).is_some() {
+        return Ok(());
+    }
+    let at = |name: &str| stage.join(name.replace('/', std::path::MAIN_SEPARATOR_STR));
+    for (from, to, mode) in OMAPI_FILES {
+        let bytes = read(&at(from)).with_context(|| format!("--omapi: {} is not in {}", from, stage.display()))?;
+        rd.add(to, mode, bytes)?;
+    }
+    Ok(())
+}
 
 /// A property file without the lines that set any of `names`.
 fn without(props: &[u8], names: &[&str]) -> Vec<u8> {

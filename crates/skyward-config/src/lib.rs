@@ -58,6 +58,9 @@ pub struct DeviceConfig {
     pub firmware: Option<FirmwarePartition>,
     #[serde(default, rename = "service")]
     pub services: Vec<Service>,
+    /// Use an explicit, device-tested key-service chain rather than discovery.
+    #[serde(default)]
+    pub configured_keys: bool,
     /// The vibration motor's click, on phones that have one.
     #[serde(default)]
     pub haptics: Option<Haptics>,
@@ -1263,9 +1266,11 @@ mod tests {
     fn miro_v1_restores_peripherals_without_replacing_keys_and_touch() {
         let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
         assert_eq!(cfg.device.codename, "miro");
+        assert!(cfg.configured_keys, "miro retains its tested key-service startup chain");
         assert!(cfg.touch.keep_panel_on && cfg.touch.double_tap);
         assert!(cfg.modules.load.iter().any(|name| name == "focaltech_touch"));
-        assert!(!cfg.services.iter().any(|service| service.path.contains("keymint") || service.path.contains("weaver") || service.path == "/system/bin/se_omapi"), "upstream discovers keys and serves OMAPI once");
+        assert!(cfg.services.iter().any(|service| service.path == "/system/bin/se_omapi"));
+        assert!(cfg.services.iter().any(|service| service.path.contains("keymint")));
         let wlan = cfg.wlan.unwrap();
         assert_eq!(wlan.modules, ["rfkill", "qca_cld3_peach_v2"]);
         assert_eq!(wlan.writes, [Write { path: "/sys/kernel/cnss/fs_ready".into(), value: "1".into() }]);

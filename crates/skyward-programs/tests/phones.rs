@@ -88,9 +88,15 @@ fn socket(name: &str, group: &str) -> Socket {
 }
 
 #[test]
-fn miro_uses_one_discovered_key_chain_with_in_process_omapi() {
+fn miro_retains_one_configured_chain_while_discovery_remains_available_to_other_devices() {
     let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
-    assert!(!cfg.services.iter().any(|s| s.path.contains("keymint") || s.path.contains("weaver") || s.path.ends_with("se_omapi")));
+    assert!(cfg.configured_keys);
+    let at = |tail: &str| cfg.services.iter().position(|s| s.path.ends_with(tail)).unwrap();
+    let chain = ["qseecomd", "ssgtzd", "hlosminkdaemon", "android.hardware.security.keymint-service-qti", "android.hardware.gatekeeper-service-qti", "android.hardware.secure_element-service.qti", "se_omapi", "android.hardware.weaver-service.nxp-qti", "android.hardware.boot-service.qti"];
+    assert!(chain.windows(2).all(|pair| at(pair[0]) < at(pair[1])));
+    for tail in chain {
+        assert_eq!(cfg.services.iter().filter(|s| s.path.ends_with(tail)).count(), 1);
+    }
     let read = phone("miro", &[("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", "miro"), ("ro.boot.product.vendor.sku", "sun")]);
     let steps = secure::steps(&read).unwrap();
     assert_eq!(steps.iter().filter(|s| **s == Step::ServeElements).count(), 1);

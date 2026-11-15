@@ -38,6 +38,7 @@ use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 mod act;
 mod backup;
+mod browser;
 mod decrypt;
 mod draw;
 mod entry;
@@ -259,6 +260,10 @@ pub enum Confirm {
 pub enum Action {
     BrowserCheck,
     BrowserGo,
+    BrowserNav(u32),
+    BrowserAddress,
+    BrowserKeyboard,
+    BrowserClear,
     /// Ask to turn one AVB check on or off; a second call on the same
     /// check takes the request back.
     AvbToggle(avbctl::Check),
@@ -502,6 +507,7 @@ pub enum Shot {
 pub enum Effect {
     CheckBrowser,
     OpenBrowser(String),
+    BrowserCommand(skyward_browser::protocol::Message),
     /// Read the AVB checks of the slot the phone runs from, telling the
     /// page with `App::avb_read`.
     ReadAvb,

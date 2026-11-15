@@ -22,7 +22,7 @@ impl App {
 impl App {
     /// Something was touched or pressed: the panel stays at full
     /// brightness for the screen-off time from now.
-    pub(super) fn stir(&mut self, now: u64) {
+    pub(crate) fn stir(&mut self, now: u64) {
         self.active = Some(now);
         self.bright.set(true, now);
     }

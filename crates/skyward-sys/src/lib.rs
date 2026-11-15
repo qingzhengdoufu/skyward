@@ -18,6 +18,31 @@ pub mod ueventd;
 pub mod usb;
 pub mod worker;
 
+/// Kernel boot parameters take precedence over mutable Android properties.
+/// Some Xiaomi bootloaders omit device_state but still provide flash.locked
+/// or the orange verified-boot state. Any explicit locked state wins.
+pub fn bootloader_unlocked() -> Result<Option<bool>> {
+    let mut kernel = [None, None, None];
+    for (at, name) in ["vbmeta.device_state", "flash.locked", "verifiedbootstate"].iter().enumerate() {
+        kernel[at] = skyward_block::boot_param(&format!("androidboot.{name}"))?;
+    }
+    let properties = ["ro.boot.vbmeta.device_state", "ro.boot.flash.locked", "ro.boot.verifiedbootstate"].map(prop);
+    Ok(unlocked_from(kernel.each_ref().map(|v| v.as_deref()), properties.each_ref().map(|v| v.as_deref())))
+}
+
+fn unlocked_from(kernel: [Option<&str>; 3], properties: [Option<&str>; 3]) -> Option<bool> {
+    for values in [kernel, properties] {
+        let answers = [
+            values[0].and_then(|v| match v { "unlocked" => Some(true), "locked" => Some(false), _ => None }),
+            values[1].and_then(|v| match v { "0" => Some(true), "1" => Some(false), _ => None }),
+            values[2].and_then(|v| match v { "orange" => Some(true), "green" | "yellow" => Some(false), _ => None }),
+        ];
+        if answers.contains(&Some(false)) { return Some(false); }
+        if answers.contains(&Some(true)) { return Some(true); }
+    }
+    None
+}
+
 /// A system property, or `None` when it is unset.
 #[cfg(target_os = "android")]
 pub fn prop(name: &str) -> Option<String> {
@@ -300,6 +325,18 @@ fn without_levels(log: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_device_state_uses_other_bootloader_evidence_without_unlocking_unknown_devices() {
+        let empty = [None; 3];
+        assert_eq!(unlocked_from([None, None, Some("orange")], empty), Some(true));
+        assert_eq!(unlocked_from(empty, [None, Some("0"), Some("orange")]), Some(true));
+        assert_eq!(unlocked_from(empty, empty), None);
+        assert_eq!(unlocked_from([Some("locked"), None, None], [Some("unlocked"), Some("0"), None]), Some(false));
+        assert_eq!(unlocked_from([None, Some("1"), Some("orange")], empty), Some(false));
+        assert_eq!(unlocked_from(empty, [Some("locked"), Some("0"), Some("orange")]), Some(false));
+        assert_eq!(unlocked_from([Some("unlocked"), None, None], [Some("locked"), None, None]), Some(true));
+    }
 
     #[test]
     fn long_and_multiline_logs_fit_the_kernel_without_losing_utf8() {

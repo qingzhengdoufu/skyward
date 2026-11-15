@@ -86,7 +86,8 @@ impl Message {
     pub fn validate_command(&self) -> Result<()> {
         let valid = match self.kind {
             1 => address(&self.text).is_ok(),
-            2..=5 | 9..=11 | 15 => true,
+            2..=5 | 10..=11 | 15 => true,
+            9 => self.value <= 0x10ffff && !(0xd800..=0xdfff).contains(&self.value),
             6..=8 => (0..VIEW_WIDTH).contains(&self.x) && (0..VIEW_HEIGHT).contains(&self.y) && self.value < 2,
             12 => (50..=300).contains(&self.value),
             13 => self.sequence > 0,

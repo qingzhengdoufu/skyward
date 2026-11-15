@@ -23,6 +23,60 @@ fn browser_controls_validate_addresses_and_do_not_start_partition_work() {
 }
 
 const W: u32 = 1440;
+
+#[test]
+fn browser_page_keyboard_sends_unicode_keys_and_address_editor_stays_local() {
+    let mut app = App::new(Screen::Browser, 1440, 3200, 3.75);
+    app.browser_started();
+    let address = app.state.browser_address.clone();
+    let effect = app.type_key(Cap::Char('a'), 1);
+    assert!(matches!(&effect[..], [Effect::BrowserCommand(message)] if message.kind == 9 && message.value == 97));
+    assert_eq!(app.state.browser_address, address);
+    app.act(Action::BrowserAddress, 2);
+    assert!(app.state.browser_keyboard && app.state.browser_address_edit);
+    assert!(app.type_key(Cap::Char('b'), 3).is_empty());
+    assert_eq!(app.state.browser_address, format!("{address}b"));
+    app.browser_closed();
+    assert!(!app.state.browser_live && app.state.browser_pixels.is_none());
+}
+
+#[test]
+fn browser_frames_draw_the_same_in_bands_and_keep_channels_in_rgba_order() {
+    let (f,i) = (fonts(),info());
+    let mut app = App::new(Screen::Browser,1440,3200,3.75);
+    app.browser_started();
+    app.browser_frame([23,61,197,255].repeat(1080*2100));
+    let theme = app.theme();
+    let view = crate::browser::viewport(&theme,false);
+    let cx = Ctx { t:&theme,f:&f,info:&i,state:&app.state,term:None,band:None };
+    let whole = pages::render(Screen::Browser,&cx).canvas;
+    let (x,y) = (view.centre().0 as usize,view.centre().1 as usize);
+    assert_eq!(&whole.data[(y*1440+x)*4..(y*1440+x)*4+4], &[197,61,23,255]);
+    let band = Band { rows:(y as u32,y as u32+1),cols:(0,1440) };
+    let partial = pages::render(Screen::Browser,&Ctx { band:Some(band),..cx }).canvas;
+    assert_eq!(partial.data,&whole.data[y*1440*4..(y+1)*1440*4]);
+}
+
+#[test]
+fn browser_viewport_stays_above_the_keyboard_and_within_the_screen() {
+    for (w,h,density) in [(1440,3200,3.75), (1080,2400,3.0)] {
+        let t = Theme::light(w,h,density);
+        for keyboard in [false,true] {
+            let view = crate::browser::viewport(&t,keyboard);
+            let bottom = h as f32 - if keyboard { widgets::keyboard_height(&t) } else { 0.0 };
+            assert!(view.x >= 0.0 && view.x + view.w <= w as f32);
+            assert!(view.y >= t.m.dp(220.0) && view.y + view.h <= bottom);
+            assert_eq!(view.w,w as f32-t.m.margin*2.0);
+            let full = crate::browser::viewport(&t,false);
+            assert_eq!(view.w,full.w,"keyboard never shrinks the page width");
+            let top = crate::browser::source_top(view,keyboard,620.0);
+            let (px,py) = crate::browser::page_point(view,top,view.x+view.w/2.0,view.y+view.h/2.0);
+            assert_eq!(px,180);
+            assert!((py as f32-(top+view.h/2.0*360.0/view.w)).abs()<1.1);
+            if keyboard { assert!(top>0.0 && top+view.h*360.0/view.w>=620.0); }
+        }
+    }
+}
 const H: u32 = 3200;
 const PPD: f32 = 3.5;
 fn fonts() -> Fonts {
@@ -4708,11 +4762,11 @@ fn usb_hotplug_notifications_only_show_on_changes_and_keep_navigation_effects() 
     }
 }
 #[test]
-fn usb_manager_is_available_on_home_and_advanced_without_starting_an_installer() {
+fn usb_manager_is_available_on_home_without_a_duplicate_advanced_entry() {
     let (f, i) = (fonts(), info());
     for screen in [Screen::Home, Screen::Advanced] {
         let mut app = App::new(screen, W, H, PPD);
-        assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::OpenUsbManager));
+        assert_eq!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::OpenUsbManager), screen == Screen::Home);
         assert!(app.act(Action::OpenUsbManager, 0).is_empty());
         assert_eq!(app.screen(), screen);
         app.set_usb_drive(Some(UsbDrive::Unreadable("unsupported filesystem".into())));

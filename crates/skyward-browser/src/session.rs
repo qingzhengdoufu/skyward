@@ -2,6 +2,7 @@
 
 use crate::protocol::{FRAME_BYTES, MESSAGE_BYTES, Message, SHARED_BYTES};
 use anyhow::{Context, Result, ensure};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom},
@@ -10,6 +11,8 @@ use std::{
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::Path,
+    process::{Child, Command, Stdio},
+    os::unix::process::CommandExt,
 };
 
 pub struct Session {
@@ -110,7 +113,7 @@ impl Session {
 
 /// A missing launcher is a hard gate, not permission to run WebKit as root.
 pub fn launcher_available() -> Result<()> {
-    let file = OpenOptions::new()
+    let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(Path::new(crate::LAUNCHER))
@@ -120,8 +123,69 @@ pub fn launcher_available() -> Result<()> {
         m.is_file() && m.uid() == 0 && m.mode() & 0o022 == 0 && m.mode() & 0o111 != 0,
         "unsafe browser launcher ownership or mode"
     );
-    // No launcher digest has passed device isolation tests yet. Fail closed.
-    anyhow::bail!("browser launcher is not yet approved for this build")
+    ensure!(m.len() < 1 << 20, "oversized browser launcher");
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    ensure!(format!("{:x}", Sha256::digest(&bytes)) == crate::LAUNCHER_SHA256, "browser launcher digest mismatch");
+    Ok(())
+}
+
+pub struct Browser {
+    pub session: Session,
+    child: Child,
+    _runtime: tempfile::TempDir,
+}
+
+impl Browser {
+    pub fn start(runtime: tempfile::TempDir, dns: &[std::net::Ipv4Addr]) -> Result<Self> {
+        launcher_available()?;
+        let resolver = dns.iter().map(|ip| format!("nameserver {ip}\n")).collect::<String>();
+        ensure!(!resolver.is_empty(), "connect WLAN before opening the browser");
+        std::fs::write(runtime.path().join("etc/resolv.conf"), resolver)?;
+        std::fs::set_permissions(runtime.path().join("etc/resolv.conf"), std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
+        let (pixels, host, worker) = new_channels()?;
+        let duplicate = |fd: i32| -> Result<OwnedFd> {
+            let new = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10) };
+            ensure!(new >= 0, "duplicate browser channel");
+            Ok(unsafe { OwnedFd::from_raw_fd(new) })
+        };
+        let frame = duplicate(pixels.as_raw_fd())?;
+        let control = duplicate(worker.as_raw_fd())?;
+        let log = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open("/tmp/skyward-browser.log")?;
+        let mut command = Command::new(crate::LAUNCHER);
+        command.arg(runtime.path()).stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log);
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(frame.as_raw_fd(), 3) < 0 || libc::dup2(control.as_raw_fd(), 4) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().context("start browser jail")?;
+        let session = match Session::attach(pixels, host) {
+            Ok(session) => session,
+            Err(e) => { let _ = child.kill(); let _ = child.wait(); return Err(e); }
+        };
+        Ok(Self { session, child, _runtime: runtime })
+    }
+
+    pub fn running(&mut self) -> Result<bool> { Ok(self.child.try_wait()?.is_none()) }
+    pub fn fd(&self) -> i32 { self.session.control.as_raw_fd() }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM); }
+            for _ in 0..20 {
+                if self.child.try_wait().ok().flatten().is_some() { return; }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 pub fn new_channels() -> Result<(File, OwnedFd, OwnedFd)> {

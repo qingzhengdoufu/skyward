@@ -146,12 +146,7 @@ pub fn collect(cfg: &DeviceConfig) -> Result<DeviceInfo> {
 /// Readings can keep an earlier battery value when its driver is unavailable.
 pub fn collect_with(cfg: &DeviceConfig, battery: Option<Battery>) -> Result<DeviceInfo> {
     let d = &cfg.display;
-    let unlocked = match skyward_block::boot_param("androidboot.vbmeta.device_state")?.as_deref() {
-        None => None,
-        Some("locked") => Some(false),
-        Some("unlocked") => Some(true),
-        Some(other) => bail!("androidboot.vbmeta.device_state {other:?}"),
-    };
+    let unlocked = skyward_sys::bootloader_unlocked()?;
     let system = SystemProps::current()?;
     Ok(DeviceInfo {
         // The system names the exact edition; the configured model covers a

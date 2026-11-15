@@ -1,5 +1,10 @@
 # Miro native upstream integration
 
+This is the historical test3 integration record. The current phone-tested
+follow-up and browser limitations are in MIRO-BROWSER-TEST9.md. In particular,
+miro now uses the earlier tested configured key chain again; test3's automatic
+startup failed before KeyMint registration. The browser is no longer gated.
+
 Checked 2026-11-15. This supersedes MIRO-UPSTREAM031-MERGE.md for the
 experiment/miro-upstream031-native branch only. Previous images and source
 branches remain unchanged. Device version remains 1.0.0.

@@ -1,11 +1,12 @@
-//! Read-only validation of AERA's pinned runtime. Validation does not execute it.
+//! Bounded verification and private RAM extraction of AERA's pinned runtime.
 
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    fs::File,
-    io::{Read, Seek, SeekFrom},
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
 };
 
@@ -26,6 +27,17 @@ fn path_safe(name: &str) -> bool {
 }
 
 pub fn verify(path: &Path) -> Result<Inventory> {
+    verified(path, None)
+}
+
+pub fn prepare(path: &Path) -> Result<tempfile::TempDir> {
+    let root = tempfile::Builder::new().prefix("skyward-web-").rand_bytes(6).tempdir_in("/tmp")?;
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))?;
+    verified(path, Some(root.path()))?;
+    Ok(root)
+}
+
+fn verified(path: &Path, into: Option<&Path>) -> Result<Inventory> {
     let mut source = File::open(path).context("browser runtime is not installed")?;
     ensure!(source.metadata()?.len() == COMPRESSED_BYTES, "browser runtime length mismatch");
     let mut digest = Sha256::new();
@@ -49,7 +61,7 @@ pub fn verify(path: &Path) -> Result<Inventory> {
         digest: Sha256::new(),
         bytes: 0,
     };
-    let inventory = inspect(&mut hashing, MEMBERS, EXPANDED_BYTES)?;
+    let inventory = inspect_into(&mut hashing, MEMBERS, EXPANDED_BYTES, into)?;
     ensure!(
         hashing.bytes == EXPANDED_BYTES && format!("{:x}", hashing.digest.finalize()) == EXPANDED_SHA256,
         "expanded browser runtime mismatch"
@@ -72,7 +84,12 @@ impl<R: Read> Read for Hashing<'_, R> {
 }
 
 /// Enforce the bounded AERAWEB1 format without trusting member paths or modes.
+#[cfg(test)]
 fn inspect(source: &mut impl Read, expected: u32, cap: u64) -> Result<Inventory> {
+    inspect_into(source, expected, cap, None)
+}
+
+fn inspect_into(source: &mut impl Read, expected: u32, cap: u64, into: Option<&Path>) -> Result<Inventory> {
     let mut header = [0; 12];
     source.read_exact(&mut header)?;
     ensure!(&header[..8] == b"AERAWEB1", "unknown browser archive");
@@ -120,17 +137,27 @@ fn inspect(source: &mut impl Read, expected: u32, cap: u64) -> Result<Inventory>
             ensure!(path_safe(&target), "unsafe browser alias target");
             aliases.push((name, target));
         } else {
+            let mut output = match into {
+                Some(root) => {
+                    let path = root.join(&name);
+                    fs::create_dir_all(path.parent().context("browser member has no parent")?)?;
+                    Some(OpenOptions::new().write(true).create_new(true).mode(mode as u32).custom_flags(libc::O_NOFOLLOW).open(path)?)
+                }
+                None => None,
+            };
             regular.insert(name);
             let mut left = size;
             while left > 0 {
                 let n = left.min(buffer.len() as u64) as usize;
                 source.read_exact(&mut buffer[..n])?;
+                if let Some(output) = &mut output { output.write_all(&buffer[..n])?; }
                 left -= n as u64;
             }
+            if let Some(output) = output { output.set_permissions(fs::Permissions::from_mode(mode as u32))?; }
         }
     }
-    for (name, target) in aliases {
-        ensure!(regular.contains(&target), "browser alias must name a regular member: {name}");
+    for (name, target) in &aliases {
+        ensure!(regular.contains(target), "browser alias must name a regular member: {name}");
     }
     for name in &names {
         for (at, _) in name.match_indices('/') {
@@ -139,6 +166,24 @@ fn inspect(source: &mut impl Read, expected: u32, cap: u64) -> Result<Inventory>
     }
     let mut extra = [0];
     ensure!(source.read(&mut extra)? == 0 && used == cap, "browser archive extent mismatch");
+    if let Some(root) = into {
+        for (name, target) in aliases {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().context("browser alias has no parent")?)?;
+            fs::hard_link(root.join(target), path)?;
+        }
+        fn readable_dirs(path: &Path) -> Result<()> {
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    readable_dirs(&entry.path())?;
+                    fs::set_permissions(entry.path(), fs::Permissions::from_mode(0o755))?;
+                }
+            }
+            Ok(())
+        }
+        readable_dirs(root)?;
+    }
     Ok(Inventory {
         members: count,
         expanded_bytes: used,
@@ -202,5 +247,18 @@ mod tests {
     fn wrong_payload_is_rejected_before_decompression() {
         let file = tempfile::NamedTempFile::new().unwrap();
         assert!(verify(file.path()).is_err());
+    }
+
+    #[test]
+    fn extraction_creates_regular_files_and_resolved_aliases_in_a_private_directory() {
+        let data = members(&[("lib/alias", 0, b"lib/real"), ("lib/real", 0o755, b"ELF"), ("etc/config", 0o644, b"config")]);
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(),fs::Permissions::from_mode(0o700)).unwrap();
+        inspect_into(&mut &data[..], 3, data.len() as u64, Some(root.path())).unwrap();
+        assert_eq!(fs::read(root.path().join("lib/alias")).unwrap(), b"ELF");
+        assert_eq!(fs::metadata(root.path().join("lib/real")).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(fs::metadata(root.path().join("etc/config")).unwrap().permissions().mode() & 0o777, 0o644);
+        assert!(!fs::symlink_metadata(root.path().join("lib/alias")).unwrap().file_type().is_symlink());
+        assert_eq!(fs::metadata(root.path()).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }

@@ -2487,7 +2487,6 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let top = t.m.content_top;
     let tools = widgets::list(&mut c, t, f, top, &[
         Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
-        Row::new(l.pick(USB_MANAGER)).icon(PURPLE, Icon::UsbDrive),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
@@ -2498,7 +2497,6 @@ pub fn advanced(cx: &Ctx) -> Frame {
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
-        Action::OpenUsbManager,
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
@@ -2513,6 +2511,36 @@ pub fn advanced(cx: &Ctx) -> Frame {
 pub fn browser(cx: &Ctx) -> Frame {
     let (t,f,s,l)=(cx.t,cx.f,cx.state,cx.state.lang);
     let mut c=page(cx);
+    if s.browser_live {
+        let m = &t.m;
+        let top = m.dp(100.0);
+        let (_, caret) = widgets::text_field(&mut c, t, f, top, &s.browser_address);
+        let mut out = vec![Hit { rect: Rect::new(m.margin, top, m.w as f32 - m.margin * 2.0, m.dp(56.0)), action: Action::BrowserAddress }];
+        let toolbar = m.dp(160.0);
+        let commands = [
+            ("<", Action::BrowserNav(2)), (">", Action::BrowserNav(3)),
+            (l.pick(["刷新", "重新整理", "Reload"]), Action::BrowserNav(4)),
+            (l.pick(["停止", "停止", "Stop"]), Action::BrowserNav(5)),
+            (l.pick(["键盘", "鍵盤", "Keys"]), Action::BrowserKeyboard),
+            ("X", Action::BrowserClear),
+            (l.pick(["前往", "前往", "Go"]), Action::BrowserGo),
+        ];
+        let width = (m.w as f32 - m.margin * 2.0) / commands.len() as f32;
+        for (index, (label, action)) in commands.into_iter().enumerate() {
+            let rect = Rect::new(m.margin + index as f32 * width, toolbar, width, m.dp(40.0));
+            c.text_center(&f.heading, label, rect.centre().0, rect.centre().1, m.dp(13.0), t.pal.text);
+            out.push(Hit { rect, action });
+        }
+        let view = crate::browser::viewport(t, s.browser_keyboard);
+        c.fill_rect(view.x, view.y, view.w, view.h, Rgba::rgb(255,255,255));
+        c.fill_rect(view.x, view.y - m.dp(4.0), view.w * s.browser_progress as f32 / 100.0, m.dp(2.0), GREEN);
+        crate::browser::draw_pixels(&mut c,t,s);
+        if !s.browser_status.is_empty() {
+            c.text_vc(&f.body, &s.browser_status, m.margin, m.dp(210.0), m.dp(11.0), t.pal.text, Some(m.w as f32 - m.margin*2.0));
+        }
+        if s.browser_keyboard { keyboard_hits(&mut c,t,f,s,l.pick(["前往", "前往", "Go"]),&mut out); }
+        return Frame { header: false, caret: (s.browser_address_edit && s.browser_keyboard).then_some(caret), ..Frame::new(t,c,out,l.pick(["网页浏览", "網頁瀏覽", "Web browser"]), top) };
+    }
     let top=t.m.content_top;
     let y=widgets::section_first(&mut c,t,f,top,l.pick(["网址", "網址", "Address"]));
     let (below,caret)=widgets::text_field(&mut c,t,f,y,&s.browser_address);
