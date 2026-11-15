@@ -1,0 +1,2 @@
+crates/skyward/src/chromium-launch.sh text eol=lf
+crates/skyward-files/src/chromium-run.sh text eol=lf

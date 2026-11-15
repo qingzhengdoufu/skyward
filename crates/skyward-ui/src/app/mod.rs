@@ -64,6 +64,7 @@ mod wipe;
 mod wlan;
 
 pub use backup::*;
+pub use browser::*;
 pub use decrypt::*;
 pub use entry::*;
 pub use filesystem::*;
@@ -85,7 +86,20 @@ pub use wlan::*;
 /// The pages of the recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
+    #[doc = " The web, read as text, pictures and links."]
     Browser,
+    BrowserAddress,
+    BrowserDownloads,
+    BrowserForm,
+    BrowserFull,
+    BrowserTabs,
+    BrowserQuick,
+    BrowserMenu,
+    BrowserHistory,
+    BrowserBookmarks,
+    RootModules,
+    Partitions,
+    ControlCenter,
     Decrypt,
     Home,
     Settings,
@@ -258,12 +272,60 @@ pub enum Confirm {
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
-    BrowserCheck,
-    BrowserGo,
-    BrowserNav(u32),
+    ReadRootModules,
+    RootModule(usize, u8),
+    OpenControlCenter,
+    FlashPartitionImage,
+    CloseControlCenter,
     BrowserAddress,
+    BrowserSaveFile,
+    BrowserQuickOpen(usize),
+    BrowserQuick,
+    BrowserQuickAdd,
+    BrowserQuickRemove(usize),
+    BrowserQuickReset,
+    BrowserHistory(usize),
+    BrowserDownloads,
+    BrowserFull,
+    BrowserBasic,
+    BrowserPluginTap(u16, u16),
+    BrowserPluginPinch(f32),
+    BrowserPluginText,
+    BrowserPluginScroll(f32),
+    BrowserPluginReload,
+    BrowserPluginStop,
+    BrowserPluginStart,
+    BrowserPluginInstall,
+    BrowserPluginRemove,
+    BrowserPluginDownload,
+    BrowserStop,
+    BrowserStopDownload,
+    BrowserOpenDownload(usize),
+    BrowserClearAddress,
+    BrowserTabs,
+    BrowserNewTab,
+    BrowserPickTab(usize),
+    BrowserCloseTab(usize),
+    BrowserMenu,
+    BrowserBookmark,
+    BrowserHistoryList,
+    BrowserBookmarksList,
+    BrowserMarkOpen(usize),
+    BrowserMarkRemove(usize),
+    BrowserLink(usize),
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserHome,
+    BrowserFormField(usize, usize),
+    BrowserFormSubmit(usize),
+    BrowserFormClose,
+    BrowserFullLoad,
     BrowserKeyboard,
-    BrowserClear,
+    BrowserScrollUp,
+    BrowserScrollDown,
+    BrowserZoomIn,
+    BrowserZoomOut,
     /// Ask to turn one AVB check on or off; a second call on the same
     /// check takes the request back.
     AvbToggle(avbctl::Check),
@@ -505,9 +567,57 @@ pub enum Shot {
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
-    CheckBrowser,
-    OpenBrowser(String),
-    BrowserCommand(skyward_browser::protocol::Message),
+    ReadRootModules,
+    RootModule {
+        path: String,
+        marker: String,
+        present: bool,
+    },
+    BrowserOpen {
+        url: String,
+        cookie: Option<String>,
+    },
+    BrowserSubmit {
+        url: String,
+        fields: Vec<(String, String)>,
+        post: bool,
+        cookie: Option<String>,
+    },
+    BrowserDownload {
+        url: String,
+        name: String,
+        path: String,
+    },
+    StopBrowser,
+    BrowserPluginInstall {
+        archive: String,
+        dir: String,
+    },
+    BrowserPluginDownload {
+        url: String,
+        path: String,
+    },
+    BrowserPluginStart {
+        dir: String,
+        url: String,
+        out: String,
+    },
+    BrowserPluginTap {
+        x: u16,
+        y: u16,
+    },
+    BrowserPluginPinch {
+        scale: f64,
+    },
+    BrowserPluginText(String),
+    BrowserPluginReload,
+    BrowserPluginScroll {
+        dy: i64,
+    },
+    BrowserPluginStop,
+    BrowserPluginRemove {
+        dir: String,
+    },
     /// Read the AVB checks of the slot the phone runs from, telling the
     /// page with `App::avb_read`.
     ReadAvb,
@@ -813,6 +923,10 @@ pub(super) enum Drag {
     /// counts until it lifts.
     Held,
     Scroll {
+        last: f32,
+    },
+    BrowserScroll {
+        start: f32,
         last: f32,
     },
     /// Swiping in from a screen edge, the finger now `x` across; the cue
@@ -1336,6 +1450,7 @@ pub(super) fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
+    shade_pull: Option<(f32, f32)>,
     pub state: State,
     /// The pages open, the one shown last: each with how far it is
     /// scrolled and where the keys are on it.
@@ -1488,6 +1603,7 @@ pub struct App {
 impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
+            shade_pull: None,
             state: State::default(),
             stack: vec![(start, 0.0, Focus::Unset)],
             frame: None,

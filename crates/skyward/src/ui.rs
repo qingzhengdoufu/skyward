@@ -1,6 +1,6 @@
 use crate::aod;
-mod credential;
 mod browser;
+mod credential;
 use crate::backup;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
@@ -1350,12 +1350,9 @@ pub(super) struct Pages<'a> {
     unlock_typed: Option<(u32, String)>,
     faced: String,
     was_dark: bool,
-    browser_check: Option<skyward_sys::worker::Worker<String>>,
-    browser_start: Option<skyward_sys::worker::Worker<Result<tempfile::TempDir, String>>>,
-    browser: Option<skyward_browser::session::Browser>,
-    browser_address: String,
-    browser_dns: Vec<std::net::Ipv4Addr>,
-    browser_touch: Option<(i32, i32)>,
+    browser: Option<crate::browser::Worker>,
+    browser_stream: Option<crate::browser::Worker>,
+    browser_download: Option<crate::browser::Worker>,
 }
 
 impl<'a> Pages<'a> {
@@ -1578,12 +1575,9 @@ impl<'a> Pages<'a> {
             unlock_typed: None,
             faced: String::new(),
             was_dark: false,
-            browser_check: None,
-            browser_start: None,
             browser: None,
-            browser_address: String::new(),
-            browser_dns: Vec::new(),
-            browser_touch: None,
+            browser_stream: None,
+            browser_download: None,
         })
     }
     /// Start the work the request in misc asks for, take up what an earlier
@@ -1771,13 +1765,6 @@ impl<'a> Pages<'a> {
         self.skyward_told(now)?;
         self.decrypt_told(now)?;
         self.browser_told(now);
-        if let Some(worker) = &self.browser_check {
-            let reports = worker.events();
-            if let Some(report) = reports.into_iter().last() {
-                self.app.browser_checked(report);
-                self.browser_check = None;
-            }
-        }
         self.shell_told()?;
         self.take_in(drive_told, now)?;
         self.offer_storage(now)
@@ -2017,11 +2004,15 @@ impl<'a> Pages<'a> {
             fds.push(s.fd());
         }
         fds.push(self.readings.fd());
-        if let Some(worker) = &self.browser_check {
-            fds.push(worker.fd());
+        if let Some(b) = &self.browser {
+            fds.push(b.fd());
         }
-        if let Some(worker) = &self.browser_start { fds.push(worker.fd()); }
-        if let Some(browser) = &self.browser { fds.push(browser.fd()); }
+        if let Some(b) = &self.browser_stream {
+            fds.push(b.fd());
+        }
+        if let Some(b) = &self.browser_download {
+            fds.push(b.fd());
+        }
         wait(&fds, timeout)
     }
     /// Whether the phone may sleep. With the display off, it sleeps unless
@@ -2031,7 +2022,9 @@ impl<'a> Pages<'a> {
     /// USB port, whose adb and file transfer stay up.
     pub(super) fn may_sleep(&self) -> Result<bool> {
         let systems_busy = self.systems_worker.as_ref().is_some_and(systems::Worker::busy);
-        let busy = self.browser.is_some() || self.browser_start.is_some() || self.browser_check.is_some()
+        let busy = self.browser_download.is_some()
+            || self.browser.is_some()
+            || self.browser_stream.is_some()
             || self.installer.is_some()
             || self.eraser.is_some()
             || self.worker.is_some()
@@ -2697,7 +2690,6 @@ impl Pages<'_> {
                     answer(asked, self.fastboot)
                 }
                 Incoming::Input(Event::Touch(t, at)) => {
-                    if self.browser_touch(t, at) { continue; }
                     if self.intro.take().is_some() {
                         self.app.redraw();
                         continue;
@@ -2726,22 +2718,200 @@ impl Pages<'_> {
     pub(super) fn effect(&mut self, fx: Effect, now: u64) -> Result<Vec<Effect>> {
         let cfg = self.cfg;
         match fx {
-            Effect::CheckBrowser => {
-                if self.browser_check.is_none() {
-                    self.browser_check = Some(skyward_sys::worker::Worker::start("browser-check", move |tell| {
-                        let checked = (|| -> Result<String> {
-                            let inventory = skyward_browser::runtime::verify(Path::new(skyward_browser::RUNTIME_FILE))?;
-                            skyward_browser::session::launcher_available()?;
-                            Ok(format!("Runtime verified: {} files", inventory.members))
-                        })();
-                        tell.tell(checked.unwrap_or_else(|e| format!("{e:#}")));
-                    })?);
+            Effect::ReadRootModules => {
+                self.app.state.root_modules = Some(if self.app.state.data.storage_open() {
+                    skyward_files::root_modules::read(Path::new("/data/adb")).map_err(|e| format!("{e:#}"))
+                } else {
+                    Err("Decrypt data first".into())
+                });
+                self.app.refresh();
+            }
+            Effect::RootModule { path, marker, present } => {
+                let result = if !self.app.state.data.storage_open() {
+                    Err(anyhow!("Decrypt data first"))
+                } else if self.installer.is_some() || self.partition_busy() {
+                    Err(anyhow!("Another partition operation is active"))
+                } else {
+                    skyward_files::root_modules::marker(Path::new("/data/adb"), Path::new(&path), &marker, present)
+                };
+                self.app.state.root_notice = match result {
+                    Ok(()) => self
+                        .app
+                        .state
+                        .lang
+                        .pick(["模块状态已保存", "模組狀態已儲存", "Module state saved"])
+                        .into(),
+                    Err(e) => format!("{e:#}"),
+                };
+                if self.app.state.data.storage_open() {
+                    self.app.state.root_modules =
+                        Some(skyward_files::root_modules::read(Path::new("/data/adb")).map_err(|e| format!("{e:#}")));
+                }
+                self.app.refresh();
+            }
+            Effect::BrowserOpen { url, cookie } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::Open { url, cookie }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_opened(Err(format!("{e:#}"))),
                 }
             }
-            Effect::OpenBrowser(address) => {
-                self.open_browser(address, now);
+            Effect::BrowserSubmit { url, fields, post, cookie } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::Submit { url, fields, post, cookie };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_opened(Err(format!("{e:#}"))),
+                }
             }
-            Effect::BrowserCommand(message) => self.browser_send(message, now),
+            Effect::BrowserDownload { url, path, .. } => {
+                if let Some(worker) = self.browser_download.take() {
+                    worker.stop();
+                }
+                if let Some(parent) = Path::new(&path).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let task = crate::browser::Task::Save {
+                    url,
+                    path: PathBuf::from(path),
+                };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser_download = Some(worker),
+                    Err(e) => self.app.browser_save_ended(Err(format!("{e:#}")), now),
+                }
+            }
+            Effect::StopBrowser => {
+                if let Some(worker) = &self.browser {
+                    worker.stop();
+                }
+                if let Some(worker) = &self.browser_download {
+                    worker.stop();
+                }
+            }
+            Effect::BrowserPluginInstall { archive, dir } => {
+                if dir != skyward_files::browser_plugin::ROOT
+                    || !self.app.state.data.storage_open()
+                    || self.browser_stream.is_some()
+                    || self.installer.is_some()
+                    || self.partition_busy()
+                {
+                    self.app
+                        .browser_plugin_installed(Err("Decrypt data and finish active operations first".into()));
+                    return Ok(Vec::new());
+                }
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::Install {
+                    archive: PathBuf::from(archive),
+                    dir: PathBuf::from(dir),
+                };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_installed(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginStart { dir, url, out } => {
+                if self.browser_stream.is_some() {
+                    if let Some(worker) = self.browser.take() {
+                        worker.stop();
+                    }
+                    match crate::browser::Worker::start(crate::browser::Task::FullNavigate { url }, self.servers.clone()) {
+                        Ok(worker) => self.browser = Some(worker),
+                        Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                    }
+                    return Ok(Vec::new());
+                }
+                if let Some(worker) = self.browser_stream.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::FullStream {
+                    dir: PathBuf::from(dir),
+                    url,
+                };
+                let _ = out;
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser_stream = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginTap { x, y } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullTap { x, y }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginPinch { scale } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullPinch { scale }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginText(text) => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullText { text }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginScroll { dy } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullScroll { dy }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginReload => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullReload, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginDownload { url, path } => {
+                if let Some(worker) = self.browser_download.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::PluginDownload {
+                    url,
+                    path: PathBuf::from(path),
+                };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser_download = Some(worker),
+                    Err(e) => self.app.plugin_downloaded(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginStop => {
+                if let Some(worker) = &self.browser {
+                    worker.stop();
+                }
+                if let Some(worker) = self.browser_stream.take() {
+                    worker.stop();
+                }
+                let _ = crate::browser::Worker::start(crate::browser::Task::FullStop, self.servers.clone()).map(|w| w.stop());
+            }
+            Effect::BrowserPluginRemove { dir } => {
+                if dir == skyward_files::browser_plugin::ROOT && self.browser_stream.is_none() {
+                    let result = std::fs::remove_dir_all(dir).map_err(|e| e.to_string());
+                    self.app.browser_plugin_installed(result.and(Err("Plugin removed".into())));
+                }
+            }
             Effect::ReadAvb => {
                 self.app
                     .avb_read(skyward_install::commands::avbctl::current().map_err(|e| e.to_string()), None);
@@ -3210,7 +3380,8 @@ impl Pages<'_> {
     }
 
     fn partition_busy(&self) -> bool {
-        self.browser.is_some() || self.browser_start.is_some() || self.eraser.is_some()
+        self.browser_stream.is_some()
+            || self.eraser.is_some()
             || self.decryptor.is_some()
             || self.part_worker.is_some()
             || self.backuper.is_some()

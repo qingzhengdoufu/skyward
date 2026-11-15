@@ -4,43 +4,51 @@ impl App {
     /// Carry out a tapped control.
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
+        if Self::is_browser_action(action) {
+            return self.browser_act(action, now);
+        }
         match action {
-            Action::BrowserNav(kind) => return vec![Effect::BrowserCommand(skyward_browser::protocol::Message::command(kind))],
-            Action::BrowserAddress => {
-                self.state.browser_address_edit = true;
-                self.state.browser_keyboard = true;
-                self.refresh();
+            Action::FlashPartitionImage => {
+                self.state.image_only = true;
+                let place = if self.state.data.storage_open() {
+                    Place::Storage
+                } else if self.state.usb_drive == Some(UsbDrive::Shown) {
+                    Place::UsbDrive
+                } else {
+                    self.open(Screen::Decrypt);
+                    return self.arrive_at(Screen::Decrypt);
+                };
+                self.open(Screen::Choose(place));
+                return self.arrive_at(Screen::Choose(place));
             }
-            Action::BrowserKeyboard => {
-                self.state.browser_keyboard = !self.state.browser_keyboard;
-                self.state.browser_address_edit = false;
-                self.refresh();
+            Action::OpenControlCenter => {
+                if self.screen() != Screen::ControlCenter {
+                    self.open(Screen::ControlCenter);
+                }
+                return Vec::new();
             }
-            Action::BrowserClear => {
-                self.state.browser_address.clear();
-                self.state.browser_address_edit = true;
-                self.state.browser_keyboard = true;
-                self.refresh();
-            }
-            Action::BrowserCheck => {
-                if !self.state.browser_checking {
-                    self.state.browser_checking = true;
-                    self.refresh();
-                    return vec![Effect::CheckBrowser];
+            Action::CloseControlCenter => return self.back(now),
+            Action::ReadRootModules => return vec![Effect::ReadRootModules],
+            Action::RootModule(index, op) => {
+                if let Some(Ok((_, modules))) = &self.state.root_modules
+                    && let Some(module) = modules.get(index)
+                {
+                    let (marker, present) = match op {
+                        0 => ("disable", module.enabled),
+                        1 => ("remove", !module.removing),
+                        _ => return Vec::new(),
+                    };
+                    return vec![Effect::RootModule {
+                        path: module.path.clone(),
+                        marker: marker.into(),
+                        present,
+                    }];
                 }
             }
-            Action::BrowserGo => match skyward_browser::protocol::address(&self.state.browser_address) {
-                Ok(url) => return vec![Effect::OpenBrowser(url)],
-                Err(_) => self.say(
-                    l.pick([
-                        "请输入有效的 HTTP(S) 地址",
-                        "請輸入有效的 HTTP(S) 網址",
-                        "Enter a valid HTTP(S) address",
-                    ]),
-                    now,
-                ),
-            },
             Action::Open(s) => {
+                if s == Screen::Install {
+                    self.state.image_only = false;
+                }
                 if s == Screen::Search && self.screen() == Screen::Home {
                     if let Some((rest, _)) = self.seek.take() {
                         self.top_mut().1 = rest;
@@ -91,11 +99,9 @@ impl App {
                 }
             }
             Action::Toggle(Switch::Wlan) => {
-                let w = self
-                    .state
-                    .wlan
-                    .as_mut()
-                    .expect("the WLAN switch shows on a phone whose WLAN is brought up");
+                let Some(w) = self.state.wlan.as_mut() else {
+                    return Vec::new();
+                };
                 let on = matches!(w.power, Power::Off | Power::Failed(_));
                 *w = Wlan {
                     power: if on { Power::Starting } else { Power::Off },
@@ -936,6 +942,7 @@ impl App {
             Action::OpenPluginFolder => {
                 return vec![Effect::ReadDir(PLUGIN_FOLDER.to_string())];
             }
+            _ => {}
         }
         Vec::new()
     }
@@ -945,7 +952,11 @@ impl App {
     /// The text the keyboard types into on this page.
     pub(super) fn typing(&mut self) -> &mut String {
         match self.screen() {
-            Screen::Browser => &mut self.state.browser_address,
+            Screen::BrowserAddress => &mut self.state.browser.address,
+            Screen::BrowserForm => {
+                let (form, field) = self.state.browser.field.expect("form input");
+                &mut self.state.browser.form[form][field]
+            }
             Screen::Search => &mut self.state.search,
             Screen::Files => &mut self.state.files_query,
             Screen::Decrypt => &mut self.state.code,
@@ -967,23 +978,6 @@ impl App {
     /// A key of the on-screen keyboard. A capital lasts one letter; return
     /// opens the first result of a search, and runs a terminal's command.
     pub(super) fn type_key(&mut self, cap: Cap, now: u64) -> Vec<Effect> {
-        if self.screen() == Screen::Browser && self.state.browser_live && !self.state.browser_address_edit {
-            let mut key = skyward_browser::protocol::Message::command(9);
-            match cap {
-                Cap::Char(ch) => key.value = if self.state.layer == Layer::Shifted { ch.to_ascii_uppercase() } else { ch } as u32,
-                Cap::Space => key.value = u32::from(' '),
-                Cap::Backspace => key.value = 8,
-                Cap::Enter => key.value = 13,
-                Cap::Shift => {
-                    self.state.layer = if self.state.layer == Layer::Shifted { Layer::Letters } else { Layer::Shifted };
-                    self.refresh();
-                    return Vec::new();
-                }
-                Cap::Show(layer) => { self.state.layer = layer; self.refresh(); return Vec::new(); }
-            }
-            if self.state.layer == Layer::Shifted { self.state.layer = Layer::Letters; self.refresh(); }
-            return vec![Effect::BrowserCommand(key)];
-        }
         let (l, layer) = (self.state.lang, self.state.layer);
         match cap {
             Cap::Char(ch) => {
@@ -1011,7 +1005,17 @@ impl App {
             }
             Cap::Show(layer) => self.state.layer = layer,
             Cap::Enter => match self.screen() {
-                Screen::Browser => return self.act(Action::BrowserGo, now),
+                Screen::BrowserAddress => {
+                    let input = self.state.browser.address.clone();
+                    self.open(Screen::Browser);
+                    return self.browser_go(&input, now);
+                }
+                Screen::BrowserForm => {
+                    let (form, _) = self.state.browser.field.expect("form input");
+                    self.state.browser.field = None;
+                    self.back(now);
+                    return self.act(Action::BrowserFormSubmit(form), now);
+                }
                 Screen::Search => {
                     if let Some(first) = search::find_on(&self.state.search, l, |screen| self.state.offers(screen)).first() {
                         return self.act(Action::Open(first.screen), now);

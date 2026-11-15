@@ -1348,3 +1348,5 @@ mod tests {
         fs::remove_dir_all(&at).unwrap();
     }
 }
+pub mod root_modules;
+pub mod browser_plugin;

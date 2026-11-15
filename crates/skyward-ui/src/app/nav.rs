@@ -353,6 +353,8 @@ impl App {
                 self.state.layer = Layer::Letters;
                 Vec::new()
             }
+            Screen::RootModules => vec![Effect::ReadRootModules],
+            Screen::Partitions => vec![Effect::ReadImagePartitions],
             Screen::Avb => {
                 self.state.avb = None;
                 self.state.avb_pending = None;

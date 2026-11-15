@@ -210,7 +210,7 @@ impl App {
         }
         self.state.install = Install::Wiped(outcome);
         self.wake(now);
-        if self.screen() == Screen::Installing {
+        if matches!(self.screen(), Screen::Installing | Screen::ControlCenter) {
             self.refresh();
         }
     }
@@ -377,7 +377,7 @@ impl App {
                 *install = Install::Finished { outcome, damage };
             }
         }
-        if self.screen() == Screen::Installing {
+        if matches!(self.screen(), Screen::Installing | Screen::ControlCenter) {
             self.refresh();
         }
     }

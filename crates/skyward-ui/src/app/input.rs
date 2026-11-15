@@ -20,6 +20,28 @@ impl App {
             self.drag = Drag::Waking;
             return Vec::new();
         }
+        if self.screen() != Screen::Fastboot {
+            let t = self.theme();
+            match ev {
+                Touch::Down(_, y) if y < t.m.dp(48.0) => {
+                    self.shade_pull = Some((y, y));
+                    return Vec::new();
+                }
+                Touch::Move(_, y) if self.shade_pull.is_some() => {
+                    let start = self.shade_pull.unwrap().0;
+                    self.shade_pull = Some((start, y));
+                    return Vec::new();
+                }
+                Touch::Up if self.shade_pull.is_some() => {
+                    let (start, last) = self.shade_pull.take().unwrap();
+                    if last - start > t.m.dp(40.0) {
+                        return self.act(Action::OpenControlCenter, now);
+                    }
+                    return Vec::new();
+                }
+                _ => {}
+            }
+        }
         if matches!(ev, Touch::Down(..)) {
             if self.keys {
                 self.keys = false;
@@ -128,7 +150,22 @@ impl App {
                     })
                     .map(|h| (h.action, h.rect))
                 };
+                let hit = hit.map(|(action, rect)| {
+                    let action = if let Action::BrowserPluginTap(px, py) = action {
+                        let (cx, cy) = rect.centre();
+                        Action::BrowserPluginTap(
+                            (f32::from(px) + (x - cx) / rect.w * (1000.0 / 12.0)).clamp(0.0, 999.0) as u16,
+                            (f32::from(py) + (y + scroll - cy) / rect.h * (1000.0 / 24.0)).clamp(0.0, 999.0) as u16,
+                        )
+                    } else {
+                        action
+                    };
+                    (action, rect)
+                });
                 let action = hit.map(|h| h.0);
+                if matches!(action, Some(Action::Type(_))) && self.state.vibrate {
+                    fx.push(Effect::Haptic);
+                }
                 let row = hit
                     .filter(|&(a, r)| self.frame.as_ref().is_some_and(|fr| fr.hits.contains(&Hit { rect: r, action: a })))
                     .filter(|&(a, r)| {
@@ -193,6 +230,9 @@ impl App {
                                 cy: y0 - m.dp(CUE_LIFT_DP),
                             }
                         }
+                        _ if matches!(action, Some(Action::BrowserPluginTap(..))) && dy.abs() > slop => {
+                            Drag::BrowserScroll { start: y0, last: y }
+                        }
                         _ if dy.abs() > slop => {
                             let history = self
                                 .frame
@@ -225,6 +265,7 @@ impl App {
                     self.drag_by(last - y);
                     self.drag = Drag::Scroll { last: y };
                 }
+                Drag::BrowserScroll { start, .. } => self.drag = Drag::BrowserScroll { start, last: y },
                 Drag::Edge {
                     start,
                     from_left,
@@ -301,6 +342,9 @@ impl App {
                         }
                         _ => self.settle_fold(now),
                     }
+                }
+                Drag::BrowserScroll { start, last } => {
+                    fx.extend(self.act(Action::BrowserPluginScroll((last - start) / self.px_per_dp), now))
                 }
                 Drag::Edge { armed: true, .. } => fx.extend(self.back(now)),
                 Drag::Edge {

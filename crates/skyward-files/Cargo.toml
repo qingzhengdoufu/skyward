@@ -7,3 +7,6 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 libc = { workspace = true }
+sha2 = "0.10.9"
+tempfile = "3.27.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }

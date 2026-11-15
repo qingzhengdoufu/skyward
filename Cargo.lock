@@ -1380,6 +1380,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+
+[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2366,16 +2372,18 @@ version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "evdev",
  "hex",
  "libc",
  "procfs",
+ "serde_json",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "skyward-backup",
  "skyward-binder",
  "skyward-block",
- "skyward-browser",
  "skyward-config",
  "skyward-crypto",
  "skyward-files",
@@ -2489,6 +2497,9 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "libc",
+ "sha2 0.10.9",
+ "tempfile",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -2585,6 +2596,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "ureq",
 ]
 
@@ -2623,6 +2635,7 @@ dependencies = [
  "png",
  "serde",
  "skyward-config",
+ "skyward-files",
  "skyward-info",
  "skyward-install",
  "skyward-net",
@@ -2697,12 +2710,13 @@ dependencies = [
  "drm-ffi",
  "icu_locale_core",
  "jiff",
+ "jpeg-decoder",
  "libc",
  "png",
  "proc-macro2",
  "serde",
  "serde_json",
- "skyward-browser",
+ "skyward-files",
  "skyward-info",
  "skyward-install",
  "skyward-net",

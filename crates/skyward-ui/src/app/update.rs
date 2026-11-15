@@ -69,7 +69,7 @@ impl App {
         let job = self.state.download.as_mut().expect("only a download under way moves on");
         job.progress = Some(progress);
         job.rate = rate;
-        if self.screen() == Screen::Update {
+        if matches!(self.screen(), Screen::Update | Screen::ControlCenter) {
             self.refresh();
         }
     }

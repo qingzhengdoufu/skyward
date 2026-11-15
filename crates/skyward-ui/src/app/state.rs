@@ -4,15 +4,10 @@ use super::*;
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
-    pub browser_address: String,
-    pub browser_status: String,
-    pub browser_checking: bool,
-    pub browser_live: bool,
-    pub browser_keyboard: bool,
-    pub browser_address_edit: bool,
-    pub browser_progress: u32,
-    pub browser_focus_y: f32,
-    pub browser_pixels: Option<std::sync::Arc<[u8]>>,
+    pub image_only: bool,
+    pub browser: super::Browser,
+    pub root_modules: Option<Result<(String, Vec<skyward_files::root_modules::Module>), String>>,
+    pub root_notice: String,
     /// What the AVB page last read: none before its first read, and why
     /// where it could not be read.
     pub avb: Option<Result<avbctl::State, String>>,
@@ -294,15 +289,10 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
-            browser_address: "https://hyperos.fans/zh/devices/miro".into(),
-            browser_status: String::new(),
-            browser_checking: false,
-            browser_live: false,
-            browser_keyboard: true,
-            browser_address_edit: true,
-            browser_progress: 0,
-            browser_focus_y: 0.0,
-            browser_pixels: None,
+            image_only: false,
+            browser: super::Browser::default(),
+            root_modules: None,
+            root_notice: String::new(),
             avb: None,
             avb_pending: None,
             avb_notice: None,

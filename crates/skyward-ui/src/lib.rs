@@ -35,3 +35,4 @@ pub use lang::Lang;
 pub use pages::Ctx;
 pub use surface::Surface;
 pub use theme::Theme;
+pub mod tools;

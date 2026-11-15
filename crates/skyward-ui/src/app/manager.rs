@@ -345,7 +345,19 @@ impl App {
     /// the place's top, or could not: it becomes the folder shown to choose
     /// a file to install in, with what it holds that may be installed.
     pub fn set_place(&mut self, place: Place, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
-        let files = files.map(|entries| entries.into_iter().filter(installable).collect());
+        let images = self.state.image_only;
+        let files = files.map(|entries| {
+            entries
+                .into_iter()
+                .filter(installable)
+                .filter(|e| {
+                    !images
+                        || matches!(e.kind, FileKind::Folder { .. } | FileKind::Link { folder: true, .. })
+                        || e.name.to_ascii_lowercase().ends_with(".img")
+                        || e.name.to_ascii_lowercase().ends_with(".img.zst")
+                })
+                .collect()
+        });
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 }

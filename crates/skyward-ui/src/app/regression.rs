@@ -6,81 +6,85 @@ use skyward_install::{Failure, Refusal};
 use skyward_net::reach::Reach;
 use skyward_vab::SnapshotState;
 
-#[test]
-fn browser_controls_validate_addresses_and_do_not_start_partition_work() {
-    let mut app = App::new(Screen::Browser, 1440, 3200, 3.75);
-    let before = app.settings();
-    app.state.browser_address = "https://example.com/test?q=1".into();
-    assert_eq!(app.act(Action::BrowserGo, 0), vec![Effect::OpenBrowser("https://example.com/test?q=1".into())]);
-    app.state.browser_address = "file:///dev/block/by-name/super".into();
-    assert!(app.act(Action::BrowserGo, 1).is_empty());
-    assert_eq!(app.act(Action::BrowserCheck, 2), vec![Effect::CheckBrowser]);
-    assert!(app.state.browser_checking);
-    assert!(app.act(Action::BrowserCheck, 3).is_empty());
-    app.browser_checked("runtime unavailable".into());
-    assert!(!app.state.browser_checking);
-    assert_eq!(app.settings(), before);
-}
-
 const W: u32 = 1440;
-
-#[test]
-fn browser_page_keyboard_sends_unicode_keys_and_address_editor_stays_local() {
-    let mut app = App::new(Screen::Browser, 1440, 3200, 3.75);
-    app.browser_started();
-    let address = app.state.browser_address.clone();
-    let effect = app.type_key(Cap::Char('a'), 1);
-    assert!(matches!(&effect[..], [Effect::BrowserCommand(message)] if message.kind == 9 && message.value == 97));
-    assert_eq!(app.state.browser_address, address);
-    app.act(Action::BrowserAddress, 2);
-    assert!(app.state.browser_keyboard && app.state.browser_address_edit);
-    assert!(app.type_key(Cap::Char('b'), 3).is_empty());
-    assert_eq!(app.state.browser_address, format!("{address}b"));
-    app.browser_closed();
-    assert!(!app.state.browser_live && app.state.browser_pixels.is_none());
-}
-
-#[test]
-fn browser_frames_draw_the_same_in_bands_and_keep_channels_in_rgba_order() {
-    let (f,i) = (fonts(),info());
-    let mut app = App::new(Screen::Browser,1440,3200,3.75);
-    app.browser_started();
-    app.browser_frame([23,61,197,255].repeat(1080*2100));
-    let theme = app.theme();
-    let view = crate::browser::viewport(&theme,false);
-    let cx = Ctx { t:&theme,f:&f,info:&i,state:&app.state,term:None,band:None };
-    let whole = pages::render(Screen::Browser,&cx).canvas;
-    let (x,y) = (view.centre().0 as usize,view.centre().1 as usize);
-    assert_eq!(&whole.data[(y*1440+x)*4..(y*1440+x)*4+4], &[197,61,23,255]);
-    let band = Band { rows:(y as u32,y as u32+1),cols:(0,1440) };
-    let partial = pages::render(Screen::Browser,&Ctx { band:Some(band),..cx }).canvas;
-    assert_eq!(partial.data,&whole.data[y*1440*4..(y+1)*1440*4]);
-}
-
-#[test]
-fn browser_viewport_stays_above_the_keyboard_and_within_the_screen() {
-    for (w,h,density) in [(1440,3200,3.75), (1080,2400,3.0)] {
-        let t = Theme::light(w,h,density);
-        for keyboard in [false,true] {
-            let view = crate::browser::viewport(&t,keyboard);
-            let bottom = h as f32 - if keyboard { widgets::keyboard_height(&t) } else { 0.0 };
-            assert!(view.x >= 0.0 && view.x + view.w <= w as f32);
-            assert!(view.y >= t.m.dp(220.0) && view.y + view.h <= bottom);
-            assert_eq!(view.w,w as f32-t.m.margin*2.0);
-            let full = crate::browser::viewport(&t,false);
-            assert_eq!(view.w,full.w,"keyboard never shrinks the page width");
-            let top = crate::browser::source_top(view,keyboard,620.0);
-            let (px,py) = crate::browser::page_point(view,top,view.x+view.w/2.0,view.y+view.h/2.0);
-            assert_eq!(px,180);
-            assert!((py as f32-(top+view.h/2.0*360.0/view.w)).abs()<1.1);
-            if keyboard { assert!(top>0.0 && top+view.h*360.0/view.w>=620.0); }
-        }
-    }
-}
 const H: u32 = 3200;
 const PPD: f32 = 3.5;
+
+#[test]
+fn aurora_tabs_keep_the_previous_page_and_navigation_stays_in_the_selected_engine() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.browser_read("https://example.com/one".into());
+    app.act(Action::BrowserNewTab, 0);
+    app.browser_read("https://example.com/two".into());
+    app.act(Action::BrowserPickTab(0), 0);
+    assert_eq!(app.state.browser.url, "https://example.com/one");
+    app.state.browser.full_active = true;
+    let effects = app.browser_read("https://example.com/three".into());
+    assert!(matches!(effects.as_slice(), [Effect::BrowserPluginStart { .. }]));
+    assert!(matches!(app.act(Action::BrowserBack,0).as_slice(),[Effect::BrowserPluginStart {url,..}] if url.ends_with("/one")));
+    assert_eq!(app.act(Action::BrowserZoomIn, 0), vec![Effect::BrowserPluginPinch { scale: 1.2 }]);
+    assert_eq!(
+        app.act(Action::BrowserPluginScroll(-300.0), 0),
+        vec![Effect::BrowserPluginScroll { dy: -300 }]
+    );
+}
+
+#[test]
+fn shade_gesture_and_image_picker_have_explicit_entry_points() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    assert!(!app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Open(Screen::PowerOff)));
+    app.touch(Touch::Down(500.0, 10.0), &f, 1000);
+    app.touch(Touch::Move(500.0, 240.0), &f, 1100);
+    app.touch(Touch::Up, &f, 1200);
+    assert_eq!(app.screen(), Screen::ControlCenter);
+    assert!(app.act(Action::Toggle(Switch::Wlan), 1300).is_empty());
+    app.state.data = Data::Open;
+    assert!(matches!(
+        app.act(Action::FlashPartitionImage, 1400).as_slice(),
+        [Effect::ReadPlace(Place::Storage, ..)]
+    ));
+    assert!(app.state.image_only);
+    app.act(Action::Open(Screen::Install), 1500);
+    assert!(!app.state.image_only);
+}
+
+#[test]
+fn browser_file_offers_download_to_decrypted_internal_storage_only() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.view = BrowserView::File(skyward_net::web::FileOffer {
+        url: "https://example.com/a.zip".into(),
+        name: "a.zip".into(),
+        kind: "application/zip".into(),
+        size: Some(42),
+    });
+    assert!(app.act(Action::BrowserSaveFile, 0).is_empty());
+    app.state.data = Data::Open;
+    let effects = app.act(Action::BrowserSaveFile, 1);
+    assert!(matches!(effects.as_slice(),[Effect::BrowserDownload{path,..}] if path=="/data/media/0/Download/Skyward/a.zip"));
+    app.browser_saved(42, Some(42));
+    app.browser_save_ended(Ok(()), 2);
+    assert_eq!(
+        app.act(Action::BrowserOpenDownload(0), 3),
+        vec![Effect::InstallPath("/data/media/0/Download/Skyward/a.zip".into())]
+    );
+}
 fn fonts() -> Fonts {
     crate::font::bundled()
+}
+
+#[test]
+fn keyboard_haptics_obey_the_vibration_switch() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::BrowserAddress, W, H, PPD);
+    for enabled in [true, false] {
+        app.state.vibrate = enabled;
+        app.refresh();
+        let (x, y) = spot(&mut app, &f, &i, Action::Type(Cap::Char('q')));
+        let effects = app.touch(Touch::Down(x, y), &f, 1000);
+        assert_eq!(effects.contains(&Effect::Haptic), enabled);
+        app.touch(Touch::Up, &f, 1100);
+    }
 }
 fn info() -> DeviceInfo {
     DeviceInfo {
@@ -322,6 +326,9 @@ fn tap_at(app: &mut App, f: &Fonts, i: &DeviceInfo, action: Action, now: u64) ->
     let (x, y) = spot(app, f, i, action);
     let mut fx = app.touch(Touch::Down(x, y), f, now);
     fx.extend(app.touch(Touch::Up, f, now));
+    if matches!(action, Action::Type(_)) {
+        fx.retain(|fx| *fx != Effect::Haptic);
+    }
     fx
 }
 /// Tap the `<`, which stays at the top of the screen.
@@ -2347,16 +2354,16 @@ fn the_keys_reach_the_last_row_of_a_home_page_grown_by_an_update_notice() {
         ..info()
     };
     let mut app = App::new(Screen::Home, W, snug, PPD);
-    let (_, y) = spot(&mut app, &f, &i, Action::Open(Screen::PowerOff));
+    let (_, y) = spot(&mut app, &f, &i, Action::Open(Screen::Reboot));
     assert!(y > snug as f32, "below the screen to start with");
-    light_on(&mut app, &f, &i, Stop::Hit(Action::Open(Screen::PowerOff)));
+    light_on(&mut app, &f, &i, Stop::Hit(Action::Open(Screen::Reboot)));
     for ms in (0..3000).step_by(8) {
         app.tick(ms);
     }
-    let (_, y) = spot(&mut app, &f, &i, Action::Open(Screen::PowerOff));
+    let (_, y) = spot(&mut app, &f, &i, Action::Open(Screen::Reboot));
     assert!(y < snug as f32, "the page scrolled the lit row into view");
     press(&mut app, Key::Power, 3000);
-    assert_eq!(app.screen(), Screen::PowerOff);
+    assert_eq!(app.screen(), Screen::Reboot);
 }
 #[test]
 fn the_fastboot_page_is_worked_with_the_keys() {
@@ -2437,7 +2444,7 @@ fn the_volume_keys_light_the_controls_down_the_page_and_up_it() {
     press(&mut app, Key::VolumeUp, 0);
     assert_eq!(
         lit(&mut app, &f, &i),
-        Some(Stop::Hit(Action::Open(Screen::PowerOff))),
+        Some(Stop::Hit(Action::Open(Screen::Reboot))),
         "up from the first goes round to the last"
     );
     app.tick(5000);
@@ -4766,7 +4773,10 @@ fn usb_manager_is_available_on_home_without_a_duplicate_advanced_entry() {
     let (f, i) = (fonts(), info());
     for screen in [Screen::Home, Screen::Advanced] {
         let mut app = App::new(screen, W, H, PPD);
-        assert_eq!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::OpenUsbManager), screen == Screen::Home);
+        assert_eq!(
+            app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::OpenUsbManager),
+            screen == Screen::Home
+        );
         assert!(app.act(Action::OpenUsbManager, 0).is_empty());
         assert_eq!(app.screen(), screen);
         app.set_usb_drive(Some(UsbDrive::Unreadable("unsupported filesystem".into())));
