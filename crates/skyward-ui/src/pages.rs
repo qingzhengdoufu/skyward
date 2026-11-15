@@ -410,21 +410,16 @@ pub fn settings(cx: &Ctx) -> Frame {
     out.extend(hits(&themes.rows, &[Action::Theme { dark: false }, Action::Theme { dark: true }]));
     let mut y = widgets::section(&mut c, t, f, themes.bottom, l.pick(["亮度", "亮度", "Brightness"]));
     let off = fmt::screen_off(l, SCREEN_OFF[s.screen_off]);
-    let below = Row::new(l.pick(SCREEN_TIMEOUT)).trail(Trail::Value(&off));
-    let slider = widgets::slider_card(&mut c, t, f, y, Caption::Sun, l.pick(["屏幕亮度", "螢幕亮度", "Screen brightness"]), s.brightness, Some(below));
-    out.push(Hit { rect: slider.track, action: Action::Slider(Slider::Brightness) });
-    if let Some(r) = slider.below {
-        out.push(Hit { rect: r, action: Action::Open(Screen::ScreenOff) });
-    }
-    let mut after_brightness = slider.bottom;
+    let mut rows = vec![Row::new(l.pick(SCREEN_TIMEOUT)).trail(Trail::Value(&off))];
+    let mut actions = vec![Action::Open(Screen::ScreenOff)];
     if s.double_tap_supported {
-        let wake = widgets::list(&mut c, t, f, after_brightness, &[
-            Row::new(l.pick(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"])).trail(Trail::Switch(s.double_tap)),
-        ]);
-        out.extend(hits(&wake.rows, &[Action::Toggle(Switch::DoubleTap)]));
-        after_brightness = wake.bottom;
+        rows.push(Row::new(l.pick(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"])).trail(Trail::Switch(s.double_tap)));
+        actions.push(Action::Toggle(Switch::DoubleTap));
     }
-    y = widgets::section(&mut c, t, f, after_brightness, l.pick(["振动", "震動", "Vibration"]));
+    let slider = widgets::slider_rows(&mut c, t, f, y, Caption::Sun, l.pick(["屏幕亮度", "螢幕亮度", "Screen brightness"]), s.brightness, &rows);
+    out.push(Hit { rect: slider.track, action: Action::Slider(Slider::Brightness) });
+    out.extend(hits(&slider.rows, &actions));
+    y = widgets::section(&mut c, t, f, slider.bottom, l.pick(["振动", "震動", "Vibration"]));
     let below = Row::new(l.pick(["触摸振动", "觸控震動", "Touch vibration"])).trail(Trail::Switch(s.vibrate));
     let vibration = widgets::slider_card(&mut c, t, f, y, Caption::Vibrate, l.pick(["振动强度", "震動強度", "Vibration intensity"]), s.vibration, Some(below));
     out.push(Hit { rect: vibration.track, action: Action::Slider(Slider::Vibration) });

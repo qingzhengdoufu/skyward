@@ -1815,6 +1815,13 @@ pub struct SliderBlock {
     pub below: Option<Rect>,
 }
 
+/// One slider and its settings rows, sharing a single outer outline.
+pub struct SliderRows {
+    pub bottom: f32,
+    pub track: Rect,
+    pub rows: Vec<Rect>,
+}
+
 /// The monochrome icon beside a slider card's caption.
 #[derive(Clone, Copy)]
 pub enum Caption {
@@ -1826,15 +1833,23 @@ pub enum Caption {
 /// Card with a monochrome icon caption, a slider, and an optional row below.
 #[allow(clippy::too_many_arguments)]
 pub fn slider_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, caption: Caption, label: &str, value: f32, below: Option<Row>) -> SliderBlock {
+    let rows: Vec<Row> = below.into_iter().collect();
+    let block = slider_rows(c, t, f, top, caption, label, value, &rows);
+    SliderBlock { bottom: block.bottom, track: block.track, below: block.rows.first().copied() }
+}
+
+/// Draw the group background once, so adjacent rows have no internal corners.
+#[allow(clippy::too_many_arguments)]
+pub fn slider_rows(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, caption: Caption, label: &str, value: f32, rows: &[Row]) -> SliderRows {
     let m = &t.m;
     let (card_x, right) = (m.margin, m.w as f32 - m.margin);
-    let below_lay = below.as_ref().map(|r| layout(c, t, f, r));
+    let layouts: Vec<_> = rows.iter().map(|r| layout(c, t, f, r)).collect();
     let slider_top = top + m.dp(55.0);
     let slider_bottom = slider_top + m.slider_h;
     let below_gap = m.dp(16.3);
-    let h = match &below_lay {
-        Some(l) => slider_bottom - top + below_gap + l.h,
-        None => slider_bottom - top + m.dp(18.0),
+    let h = match layouts.is_empty() {
+        false => slider_bottom - top + below_gap + layouts.iter().map(|l| l.h).sum::<f32>(),
+        true => slider_bottom - top + m.dp(18.0),
     };
     c.fill_round_rect(card_x, top, right - card_x, h, m.card_radius, t.pal.card);
 
@@ -1866,13 +1881,14 @@ pub fn slider_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, caption: Capt
     c.text_vc(&f.heading, label, card_x + m.dp(53.7), lcy, m.account_title_px, t.pal.info, None);
     let track = Rect::new(card_x + m.inner, slider_top, right - card_x - m.inner * 2.0, m.slider_h);
     slider(c, t, track.x, track.y, track.w, value);
-    let mut below_rect = None;
-    if let (Some(r), Some(l)) = (below, below_lay) {
-        let y = slider_bottom + below_gap;
-        draw_row(c, t, f, &r, &l, y, &Tone::page(t));
-        below_rect = Some(Rect::new(card_x, y, right - card_x, l.h));
+    let mut row_rects = Vec::with_capacity(rows.len());
+    let mut y = slider_bottom + below_gap;
+    for (row, layout) in rows.iter().zip(&layouts) {
+        draw_row(c, t, f, row, layout, y, &Tone::page(t));
+        row_rects.push(Rect::new(card_x, y, right - card_x, layout.h));
+        y += layout.h;
     }
-    SliderBlock { bottom: top + h, track, below: below_rect }
+    SliderRows { bottom: top + h, track, rows: row_rects }
 }
 
 /// Swipe-to-confirm control in the thick-slider style; `progress` (0 to 1)
@@ -2853,6 +2869,26 @@ fn theme_tile(c: &mut Canvas, t: &Theme, x: f32, y: f32, w: f32, h: f32, dark: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slider_settings_share_one_outline_without_internal_corner_notches() {
+        let f = crate::font::bundled();
+        for t in [Theme::light(1440, 3200, 3.75), Theme::dark(1440, 3200, 3.75)] {
+            let mut c = Canvas::new(1440, 3200);
+            c.clear(t.pal.bg);
+            let rows = [Row::new("Screen timeout"), Row::new("Double-tap to wake").switch(true)];
+            let block = slider_rows(&mut c, &t, &f, 100.0, Caption::Sun, "Brightness", 0.5, &rows);
+            assert_eq!(block.rows.len(), 2);
+            assert_eq!(block.rows[0].y + block.rows[0].h, block.rows[1].y);
+            assert_eq!(block.rows[1].y + block.rows[1].h, block.bottom);
+            let x = t.m.margin.ceil() as usize + 2;
+            let seam = block.rows[1].y.round() as usize;
+            for y in seam - 4..=seam + 4 {
+                let at = (y * c.w as usize + x) * 4;
+                assert_eq!(&c.data[at..at + 4], &[t.pal.card.r, t.pal.card.g, t.pal.card.b, t.pal.card.a]);
+            }
+        }
+    }
 
     /// The battery's pixel at (`x`, `y`) on screen.
     fn pixel(art: &(Canvas, i32, i32), x: f32, y: f32) -> [u8; 4] {
