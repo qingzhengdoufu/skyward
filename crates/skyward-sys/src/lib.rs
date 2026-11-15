@@ -16,6 +16,7 @@ pub mod sleep;
 pub mod uevent;
 pub mod ueventd;
 pub mod usb;
+pub mod worker;
 
 /// A system property, or `None` when it is unset.
 #[cfg(target_os = "android")]
@@ -55,7 +56,7 @@ fn yes_or_no(value: Option<&str>) -> Option<bool> {
 #[cfg(target_os = "android")]
 pub fn props(prefix: &str) -> Vec<(String, String)> {
     use std::ffi::{c_char, c_void, CStr};
-    extern "C" {
+    unsafe extern "C" {
         fn __system_property_read_callback(
             pi: *const libc::prop_info,
             callback: unsafe extern "C" fn(cookie: *mut c_void, name: *const c_char, value: *const c_char, serial: u32),

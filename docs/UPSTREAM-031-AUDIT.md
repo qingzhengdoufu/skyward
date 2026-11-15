@@ -1,5 +1,8 @@
 # Original Skyward 0.3.1 audit and selective backports
 
+Historical record for parent test4. The later integration experiment and
+its explicit exceptions are documented in MIRO-UPSTREAM031-MERGE.md.
+
 Checked on 2026-11-15 against kirklin/skyward, not the haotian fork.
 The GitHub latest release is v0.3.1, published 2026-11-13T23:45:50Z.
 Its release commit is bd34c05; main additionally contains cc68936 and c5e09f6.

@@ -1,5 +1,6 @@
 # Fresh device configuration, verified against the local stock 303 images.
 # Successful haotian flashing baseline with miro peripherals restored.
+configured_keys = true
 [device]
 codename = "miro"
 brand = "Redmi"

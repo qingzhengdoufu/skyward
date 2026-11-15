@@ -58,6 +58,9 @@ pub struct DeviceConfig {
     pub firmware: Option<FirmwarePartition>,
     #[serde(default, rename = "service")]
     pub services: Vec<Service>,
+    /// Use an explicit, device-tested key-service chain rather than discovery.
+    #[serde(default)]
+    pub configured_keys: bool,
     /// The vibration motor's click, on phones that have one.
     #[serde(default)]
     pub haptics: Option<Haptics>,
@@ -1266,6 +1269,7 @@ mod tests {
     fn miro_v1_restores_peripherals_without_replacing_keys_and_touch() {
         let cfg = DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
         assert_eq!(cfg.device.codename, "miro");
+        assert!(cfg.configured_keys, "miro retains its tested key-service startup chain");
         assert!(cfg.touch.keep_panel_on && cfg.touch.double_tap);
         assert!(cfg.modules.load.iter().any(|name| name == "focaltech_touch"));
         assert!(cfg.services.iter().any(|service| service.path == "/system/bin/se_omapi"));

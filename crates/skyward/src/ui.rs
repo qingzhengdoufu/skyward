@@ -1197,7 +1197,10 @@ fn wait(fds: &[i32], timeout_ms: i32) -> Result<()> {
 
 /// Run the pages. What `request`, read from misc, asks for decides the
 /// first of them; asking for nothing, they start at `start`.
-pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, start: Screen, dump: Option<&Path>) -> Result<()> {
+pub fn run(cfg: &DeviceConfig, programs: &[Service], font: &Path, mono: &Path, request: bcb::Request, start: Screen, dump: Option<&Path>) -> Result<()> {
+    let mut runtime = cfg.clone();
+    runtime.services = programs.to_vec();
+    let cfg = &runtime;
     if cfg.display.density == 0 {
         return Err(anyhow!("{}: [display] density is required to lay out the UI", cfg.device.codename));
     }
@@ -1538,12 +1541,11 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     }
     // The port came up with adb alone; at rest it offers file transfer
     // beside it.
-    if transfer.is_some() && !fastboot && !sideloading {
-        if let Err(e) = skyward_sys::usb::switch(skyward_sys::usb::resting(), USB_TIMEOUT) {
+    if transfer.is_some() && !fastboot && !sideloading
+        && let Err(e) = skyward_sys::usb::switch(skyward_sys::usb::resting(), USB_TIMEOUT) {
             skyward_sys::kmsg(&format!("the port did not take file transfer: {e:#}"))?;
             app.report(&format!("{e:#}"), monotonic_ms());
         }
-    }
     // Once the work the system asked for is done, the page shows it for a
     // moment; then the phone starts the system, or powers off where the
     // request says to.
@@ -1677,26 +1679,24 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         asked = None;
                     }
                     untaken(&mut unread.battery, "the battery", battery.as_ref().err());
-                    if let Ok(battery) = battery {
-                        if battery != info.battery {
+                    if let Ok(battery) = battery
+                        && battery != info.battery {
                             plug(&mut app, &info.battery, &battery, now)?;
                             info.battery = battery;
                             app.refresh();
                         }
-                    }
                 }
                 Reading::All(all, at) => {
                     if asked.is_some_and(|asked| at >= asked) {
                         asked = None;
                     }
                     untaken(&mut unread.details, "the phone's details", all.as_ref().as_ref().err());
-                    if let Ok(all) = *all {
-                        if at >= read_at && all != info {
+                    if let Ok(all) = *all
+                        && at >= read_at && all != info {
                             plug(&mut app, &info.battery, &all.battery, now)?;
                             info = all;
                             app.refresh();
                         }
-                    }
                 }
             }
         }
@@ -1719,11 +1719,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         let keeps_touch = app.state.panel_taps && app.state.double_tap && dozes;
         if panel.is_some() {
             // Out of the panel's doze before the page goes over the face.
-            if blanked {
-                if let Some(p) = doze.as_mut() {
+            if blanked
+                && let Some(p) = doze.as_mut() {
                     p.want(Want::Lit);
                 }
-            }
             // A display turned off comes on again with a frame drawn for it.
             if app.take_dirty() || !surface.is_on() || intro.is_some() {
                 let t0 = Instant::now();
@@ -2332,8 +2331,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             || backuper.is_some()
             || part_worker.is_some()
             || systems_worker.as_ref().is_some_and(systems::Worker::busy);
-        if !metadata_busy {
-            if let Some(due) = keeper.due(app.settings(), now) {
+        if !metadata_busy
+            && let Some(due) = keeper.due(app.settings(), now) {
                 match settings::write(&due) {
                     Ok(()) => {
                         skyward_sys::kmsg("the settings are kept")?;
@@ -2345,7 +2344,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                 }
             }
-        }
         let mut checked = false;
         if let Some(c) = &checker {
             for ev in c.events() {
@@ -2471,8 +2469,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     // credential to keep where the owner asked for it to be
                     // kept. A second space's password is not the owner's, and
                     // is not kept.
-                    if let Some((user, code)) = unlock_typed.take() {
-                        if user == 0 && app.state.remember_password && app.state.remembered.as_deref() != Some(code.as_str()) {
+                    if let Some((user, code)) = unlock_typed.take()
+                        && user == 0 && app.state.remember_password && app.state.remembered.as_deref() != Some(code.as_str()) {
                             // Written here rather than queued as an effect:
                             // this is what puts the sealed file on /metadata,
                             // and an effect dropped on the floor is a switch
@@ -2485,7 +2483,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                                 }
                             }
                         }
-                    }
                 }
                 decrypt::Ended::Unlocked(Err(why)) => {
                     // A kept credential the phone will not take is not
@@ -2520,13 +2517,12 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             }
             // Screenshots taken while internal storage was closed go into
             // the gallery's once it opens.
-            if app.state.place_open(Place::Storage) {
-                if let Err(e) = keep_held_screenshots() {
+            if app.state.place_open(Place::Storage)
+                && let Err(e) = keep_held_screenshots() {
                     let why = format!("{e:#}");
                     skyward_sys::kmsg(&format!("the screenshots held did not go into the gallery's: {why}"))?;
                     app.screenshots_not_kept(&why, now);
                 }
-            }
             // The update the system asked for starts once what holds it is
             // open; until the user whose own files hold it unlocks them,
             // its page says to.
@@ -2862,9 +2858,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     // thousand folders, so the page waits a moment and the
                     // run cannot be held by a tree that never ends. Failing
                     // to walk it says so on the page; it does not end the run.
-                    Effect::FindFiles { root, query, gen, sort } => {
+                    Effect::FindFiles { root, query, generation, sort } => {
                         let found = crate::find::find(Path::new(&root), &query, sort).map_err(|e| format!("{e:#}"));
-                        app.found_files(gen, found);
+                        app.found_files(generation, found);
                     }
                     Effect::ReadPlace(place, folder) => list_place(&mut app, place, folder)?,
                     // A name taken where an entry goes is the user's to
@@ -3265,12 +3261,11 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                             (true, None) => match Transfer::start(cfg, &info, app.state.time_zone) {
                                 Ok(t) => {
                                     transfer = Some(t);
-                                    if rests {
-                                        if let Err(e) = skyward_sys::usb::switch(skyward_sys::usb::resting(), USB_TIMEOUT) {
+                                    if rests
+                                        && let Err(e) = skyward_sys::usb::switch(skyward_sys::usb::resting(), USB_TIMEOUT) {
                                             skyward_sys::kmsg(&format!("the port did not take file transfer: {e:#}"))?;
                                             app.report(&format!("{e:#}"), now);
                                         }
-                                    }
                                 }
                                 Err(e) => {
                                     skyward_sys::kmsg(&format!("file transfer did not start: {e:#}"))?;

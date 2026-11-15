@@ -1,5 +1,9 @@
 # Miro 1.0
 
+This is the preserved baseline description. For the separate upstream 0.3.1
+merge experiment, see MIRO-UPSTREAM031-MERGE.md; protected source equality
+claimed below applies to the baseline, not to that merge experiment.
+
 Based on d730dc0, the minimal haotian adaptation that successfully installed
 the user's ROM and booted Android. The original full-feature branch remains
 preserved at 986b9fa; this branch is miro-v1-peripherals.

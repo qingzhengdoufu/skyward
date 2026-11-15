@@ -414,11 +414,10 @@ impl Station {
             Command::Leave => {
                 self.unaddress();
                 self.keep = None;
-                if let Some(r) = &self.running {
-                    if let Err(e) = r.control.order("REMOVE_NETWORK all") {
+                if let Some(r) = &self.running
+                    && let Err(e) = r.control.order("REMOVE_NETWORK all") {
                         self.lost(e);
                     }
-                }
                 self.state.joined = None;
             }
             // Forgetting is not leaving: leaving drops the network this
@@ -613,11 +612,10 @@ impl Station {
                 // The network turned the password down: there is nothing
                 // worth keeping.
                 self.keep = None;
-                if let Some(r) = &self.running {
-                    if let Err(e) = r.control.order("REMOVE_NETWORK all") {
+                if let Some(r) = &self.running
+                    && let Err(e) = r.control.order("REMOVE_NETWORK all") {
                         self.lost(e);
                     }
-                }
             }
         }
     }
@@ -676,8 +674,8 @@ impl Station {
             }
         };
         let same = r.lease.as_ref().is_some_and(|h| (h.lease.address, h.lease.mask, h.lease.router) == (lease.address, lease.mask, lease.router));
-        if !same {
-            if let Err(e) = iface::configure(&self.cfg.interface, lease.address, lease.mask, lease.router) {
+        if !same
+            && let Err(e) = iface::configure(&self.cfg.interface, lease.address, lease.mask, lease.router) {
                 let _ = skyward_sys::kmsg(&format!("{e:#}"));
                 r.retry_at = Some(Instant::now() + RETRY);
                 if let Some(j) = &mut self.state.joined {
@@ -685,7 +683,6 @@ impl Station {
                 }
                 return;
             }
-        }
         let _ = skyward_sys::kmsg(&format!(
             "{} has {} ({}) through {:?} for {} s, kept again after {} s",
             self.cfg.interface, lease.address, lease.mask, lease.router, lease.seconds, lease.renew
@@ -776,11 +773,10 @@ impl Station {
         if let Some((_, stop)) = r.asking.take() {
             stop.store(true, Ordering::Relaxed);
         }
-        if r.lease.take().is_some() {
-            if let Err(e) = iface::unconfigure(&self.cfg.interface) {
+        if r.lease.take().is_some()
+            && let Err(e) = iface::unconfigure(&self.cfg.interface) {
                 let _ = skyward_sys::kmsg(&format!("{e:#}"));
             }
-        }
         // Nothing goes over a network left, and counting starts afresh on
         // the next one.
         if r.counted.take().is_some() {
@@ -796,9 +792,9 @@ impl Station {
             r.retry_at = None;
             return self.ask_address();
         }
-        if r.asking.is_none() {
-            if let Some(h) = &r.lease {
-                if now >= h.due() {
+        if r.asking.is_none()
+            && let Some(h) = &r.lease
+                && now >= h.due() {
                     if h.phase >= 2 {
                         // The lease ran out with no server to keep it.
                         self.unaddress();
@@ -808,16 +804,13 @@ impl Station {
                     }
                     return self.ask_address();
                 }
-            }
-        }
         if now >= r.polled_at + POLL {
             self.poll_link();
         }
-        if let Some(r) = &self.running {
-            if r.lease.is_some() && r.counted.is_none_or(|c| now >= c.at + TRAFFIC) {
+        if let Some(r) = &self.running
+            && r.lease.is_some() && r.counted.is_none_or(|c| now >= c.at + TRAFFIC) {
                 self.count(now);
             }
-        }
     }
 
     /// Read what has gone over the interface, and tell how fast it went

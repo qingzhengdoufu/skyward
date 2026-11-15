@@ -2,6 +2,7 @@
 //! how its answers and events read, and the connection they go over.
 
 use anyhow::{bail, ensure, Context, Result};
+use hex::encode as hex;
 use std::collections::BTreeMap;
 
 /// How a network is protected, as a scan finds it.
@@ -172,12 +173,6 @@ pub fn unescape(text: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Bytes as hex digits, the way a value the supplicant takes as it is,
-/// with nothing to escape, is written.
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// What sets up a network with id `id` to join it: its name, how it is
 /// protected and its password. The name and a WPA3 password go as hex,
 /// which takes any byte; a WPA2 password goes in quotes, which the
@@ -186,7 +181,7 @@ pub fn hex(bytes: &[u8]) -> String {
 /// for by name.
 pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str, hidden: bool) -> Result<Vec<String>> {
     let set = |name: &str, value: String| format!("SET_NETWORK {id} {name} {value}");
-    let mut commands = vec![set("ssid", hex(ssid))];
+    let mut commands = vec![set("ssid", hex::encode(ssid))];
     if hidden {
         commands.push(set("scan_ssid", "1".into()));
     }
@@ -208,13 +203,13 @@ pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str
         Security::Sae => {
             ensure!(!password.is_empty(), "a WPA3 password is not empty");
             commands.push(set("key_mgmt", "SAE".into()));
-            commands.push(set("sae_password", hex(password.as_bytes())));
+            commands.push(set("sae_password", hex::encode(password)));
             commands.push(set("ieee80211w", "2".into()));
         }
         Security::PskSae => {
             commands.push(set("key_mgmt", "WPA-PSK WPA-PSK-SHA256 SAE".into()));
             commands.push(set("psk", psk()?));
-            commands.push(set("sae_password", hex(password.as_bytes())));
+            commands.push(set("sae_password", hex::encode(password)));
             commands.push(set("ieee80211w", "1".into()));
         }
         Security::Wep | Security::Enterprise => bail!("the recovery does not join a network protected so"),
@@ -614,7 +609,6 @@ mod tests {
         assert_eq!(unescape(r"\x00\xff").unwrap(), [0, 255]);
         assert!(unescape(r"\x4").is_err());
         assert!(unescape(r"\q").is_err());
-        assert_eq!(hex(b"ab\x00"), "616200");
     }
 
     #[test]

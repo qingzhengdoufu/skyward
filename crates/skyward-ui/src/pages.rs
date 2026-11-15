@@ -24,7 +24,7 @@ use skyward_install::{Outcome, Reflash, Refusal, Stage};
 use skyward_net::download::Progress;
 use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Bands, Network, Power, Stage as Joining};
-use skyward_systems::Who;
+use skyward_systems::{Held, Who};
 use skyward_vab::{Slot, Standing};
 use std::path::Path;
 
@@ -2244,8 +2244,8 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                 }
                 // The boot partitions' vbmeta checks the system's: one of
                 // another version without the other may not start.
-                if let (Some(was), Some(now)) = (&held.system, &i.os_version) {
-                    if was != now && chosen[0] != chosen[1] {
+                if let (Some(was), Some(now)) = (&held.system, &i.os_version)
+                    && was != now && chosen[0] != chosen[1] {
                         let warn = tr!(
                             l,
                             "该备份来自 {was}，本机当前为 {now}。仅恢复启动分区或系统分区中的一项，可能导致无法开机。",
@@ -2254,7 +2254,6 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                         );
                         y = widgets::footnote(&mut c, t, f, y, &warn);
                     }
-                }
                 let (label, danger) = confirm_label(Confirm::Restore, cx.state);
                 let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
                 out.push(Hit { rect: track, action: Action::Confirm(Confirm::Restore) });
@@ -3442,11 +3441,10 @@ pub fn wlan(cx: &Ctx) -> Frame {
                 out.extend(hits(&joined.rows, &[Action::OpenJoined]));
                 out.push(Hit { rect: widgets::round_button(t, joined.rows[0]), action: Action::OpenJoined });
                 y = joined.bottom;
-                if let Joining::Connected(link) = &j.stage {
-                    if let Some(note) = link.reach.as_ref().and_then(|r| fmt::reach(l, r)) {
+                if let Joining::Connected(link) = &j.stage
+                    && let Some(note) = link.reach.as_ref().and_then(|r| fmt::reach(l, r)) {
                         y = widgets::footnote(&mut c, t, f, y, &note);
                     }
-                }
             }
             let others: Vec<(usize, &Network)> =
                 w.networks.iter().enumerate().filter(|(_, n)| w.joined.as_ref().is_none_or(|j| j.ssid != n.ssid)).collect();
@@ -4381,7 +4379,7 @@ pub fn systems(cx: &Ctx) -> Frame {
         role: l.pick(MAIN_SYSTEM),
         name: &systems.installed.name,
         detail: systems.installed.version.as_deref().unwrap_or_default(),
-        mark: SystemMark::Check(chosen == Who::Installed),
+        mark: SystemMark::Check(chosen == Who::Installed && systems.held != Held::Unrecorded),
     };
     let second = match &systems.other {
         Some(other) => SystemCard { role: second_role, name: &other.name, detail: &other.version, mark: SystemMark::Check(chosen == Who::Other) },
@@ -4420,6 +4418,25 @@ pub fn systems(cx: &Ctx) -> Frame {
         "Tap a card to pick a system. Switching rewrites only the boot and init_boot partitions of the slot that starts next, and leaves the main system's other partitions as they are. The second system's files are kept in the data partition.",
     ]);
     y = widgets::footnote(&mut c, t, f, y, what);
+    match systems.held {
+        Held::Recorded => {}
+        Held::Rewritten => {
+            let note = l.pick([
+                "第二系统的启动分区被外部改写过。选择主系统并滑动确认，才会用保存的启动镜像覆盖当前内容；此前拒绝安装、清除或备份。",
+                "第二系統的啟動分割區被外部改寫過。選擇主系統並滑動確認，才會用儲存的啟動映像檔覆寫目前內容；此前拒絕安裝、清除或備份。",
+                "The second system's boot partitions were rewritten externally. Select the main system and slide to confirm before saved boot images may replace them. Installation, wiping and backup are refused until then.",
+            ]);
+            y = widgets::footnote(&mut c, t, f, y, note);
+        }
+        Held::Unrecorded => {
+            let note = l.pick([
+                "第二系统的启动镜像仍在，但保存的记录已丢失。无法恢复主系统启动镜像，请重新刷入主系统的 boot 和 init_boot。",
+                "第二系統的啟動映像檔仍在，但儲存記錄已遺失。無法還原主系統啟動映像檔，請重新刷入主系統的 boot 和 init_boot。",
+                "Second-system boot images remain, but their records are gone. Flash the main system's boot and init_boot images again.",
+            ]);
+            y = widgets::footnote(&mut c, t, f, y, note);
+        }
+    }
     if systems.other.is_some() && systems.changed {
         let note = l.pick([
             "安装第二系统后，主系统的 vendor_boot 或 dtbo 分区已改变，第二系统可能无法正常启动。",

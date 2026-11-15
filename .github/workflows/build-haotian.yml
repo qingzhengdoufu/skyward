@@ -7,18 +7,6 @@ name: Build haotian
 # checksum so that a phone can be flashed from a link that does not expire.
 on:
   workflow_dispatch:
-  push:
-    branches: ["**"]
-    tags: ["v*"]
-    paths:
-      - "crates/**"
-      - "devices/haotian.toml"
-      - "resources/fonts/**"
-      - "resources/omapi/**"
-      - ".github/workflows/build-haotian.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
 
 permissions:
   contents: read

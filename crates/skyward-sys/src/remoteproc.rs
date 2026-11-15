@@ -10,6 +10,25 @@ pub enum Started {
     Requested,
 }
 
+/// Allow stock init's boot attempt to finish before retrying an offline ADSP.
+pub fn find_and_start_adsp(root: &Path, firmware_dir: &Path) -> Result<()> {
+    use std::time::{Duration, Instant};
+    for entry in fs::read_dir(root).context("read remote processors")? {
+        let at = entry?.path();
+        let name = fs::read_to_string(at.join("name")).unwrap_or_default();
+        if name.trim() != "adsp" && !name.trim().ends_with(".remoteproc-adsp") { continue; }
+        let running = || fs::read_to_string(at.join("state")).map(|s| s.trim() == "running");
+        let until = Instant::now() + Duration::from_secs(3);
+        while !running()? && Instant::now() < until { std::thread::sleep(Duration::from_millis(200)); }
+        start_adsp(&at, firmware_dir)?;
+        let until = Instant::now() + Duration::from_secs(10);
+        while !running()? && Instant::now() < until { std::thread::sleep(Duration::from_millis(200)); }
+        ensure!(running()?, "the ADSP did not become ready");
+        return Ok(());
+    }
+    anyhow::bail!("the kernel names no ADSP")
+}
+
 /// This never stops or restarts a processor, changes its firmware selection,
 /// or writes the audio driver's SSR switch. Firmware must already be mounted.
 pub fn start_adsp(at: &Path, firmware_dir: &Path) -> Result<Started> {
