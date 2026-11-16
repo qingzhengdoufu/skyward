@@ -1105,7 +1105,7 @@ pub fn downloads(cx: &Ctx) -> Frame {
             t,
             f,
             y + m.card_gap,
-            &[Row::new(l.pick(["停止下载", "停止下載", "Stop downloading"]))
+            &[Row::new(l.pick(["暂停下载", "暫停下載", "Pause download"]))
                 .icon(RED, Icon::Wipe)
                 .trail(Trail::None)],
         );
@@ -1128,7 +1128,7 @@ pub fn downloads(cx: &Ctx) -> Frame {
                         _ => fmt::file_size(*done),
                     },
                     BrowserSave::Done => fmt::file_size(d.size.unwrap_or(d.done)),
-                    BrowserSave::Stopped => l.pick(["已停止", "已停止", "Stopped"]).to_string(),
+                    BrowserSave::Stopped => format!("{} · {}", l.pick(["已暂停", "已暫停", "Paused"]), fmt::file_size(d.done)),
                     BrowserSave::Failed(why) => why.clone(),
                 };
                 format!("{state} · {}", d.path)
@@ -1144,6 +1144,10 @@ pub fn downloads(cx: &Ctx) -> Frame {
                 let install = skyward_net::web::installable(name) && matches!(d.state, BrowserSave::Done);
                 Row::new(name).icon(GREEN, Icon::Install).subtitle(sub).trail(if install {
                     Trail::Value(l.pick(["安装", "安裝", "Install"]))
+                } else if matches!(d.state, BrowserSave::Stopped) {
+                    Trail::Value(l.pick(["继续", "繼續", "Resume"]))
+                } else if matches!(d.state, BrowserSave::Failed(_)) {
+                    Trail::Value(l.pick(["重试", "重試", "Retry"]))
                 } else {
                     Trail::None
                 })

@@ -10,6 +10,24 @@ use std::{
 pub const ROOT: &str = "/data/skyward-browser/chromium";
 pub const URL: &str = "https://github.com/Jamvii/skyward-for-aurora/releases/download/browser-v0.3.4-aurora/chromium.zip";
 pub const SHA256: &str = "9e6df85255386eb962bbe6b1ad5e0d2505c7b5ba02a9d7d89d3d20a778f14ea2";
+pub const LAUNCHER: &str = include_str!("chromium-run.sh");
+
+/// Update existing roots too, atomically, without replacing the browser package.
+pub fn refresh_launcher(dir: &Path) -> Result<()> {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new_in(dir)?;
+    file.write_all(LAUNCHER.as_bytes())?;
+    file.as_file().sync_all()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file().set_permissions(fs::Permissions::from_mode(0o755))?;
+    }
+    file.persist(dir.join("run.sh"))
+        .map_err(|e| e.error)
+        .context("update Chromium launcher")?;
+    Ok(())
+}
 
 pub fn install(archive: &Path, dir: &Path) -> Result<()> {
     let mut input = fs::File::open(archive)?;
@@ -33,7 +51,7 @@ pub fn install(archive: &Path, dir: &Path) -> Result<()> {
         "missing Chromium executable"
     );
     // Supply a persistent-session launcher with certificate verification enabled.
-    fs::write(staging.path().join("run.sh"), include_str!("chromium-run.sh"))?;
+    fs::write(staging.path().join("run.sh"), LAUNCHER)?;
     let previous = dir.with_file_name("chromium-previous");
     ensure!(!previous.exists(), "previous Chromium installation is still present");
     let existed = dir.exists();
@@ -131,5 +149,16 @@ mod tests {
         fs::write(&archive, b"not a package").unwrap();
         assert!(install(&archive, &root).is_err());
         assert_eq!(fs::read(root.join("keep")).unwrap(), b"keep");
+    }
+    #[test]
+    fn existing_roots_receive_the_launcher_and_software_vulkan_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("run.sh"), b"old launcher").unwrap();
+        fs::write(dir.path().join("keep"), b"browser files").unwrap();
+        refresh_launcher(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("run.sh")).unwrap(), LAUNCHER);
+        assert_eq!(fs::read(dir.path().join("keep")).unwrap(), b"browser files");
+        assert!(LAUNCHER.contains("VK_DRIVER_FILES=/usr/lib/chromium/vk_swiftshader_icd.json"));
+        assert!(!LAUNCHER.contains("ignore-certificate-errors"));
     }
 }

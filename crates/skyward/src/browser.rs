@@ -136,7 +136,7 @@ fn full_launch_script() -> &'static str {
     include_str!("chromium-launch.sh")
 }
 
-fn start_full(dir: &Path, url: &str) -> Result<()> {
+fn start_full(dir: &Path, url: &str, servers: &Servers) -> Result<()> {
     anyhow::ensure!(dir == Path::new("/data/skyward-browser/chromium"), "unexpected browser directory");
     anyhow::ensure!(dir.join("run.sh").is_file(), "Chromium run.sh is missing");
     let mut slot = full_slot().lock().expect("the full browser slot is not poisoned");
@@ -146,11 +146,22 @@ fn start_full(dir: &Path, url: &str) -> Result<()> {
         }
         slot.take();
     }
+    // Existing installations also receive launcher fixes on the next start.
+    skyward_files::browser_plugin::refresh_launcher(dir)?;
+    let dns = servers.lock().expect("DNS servers are not poisoned").clone();
+    let dns = crate::cdp::resolv_conf(&dns);
     let script = full_launch_script();
     let mut cmd = Command::new("/system/bin/sh");
     cmd.args(["-c", script])
         .env("SKYWARD_URL", url)
         .env("SKYWARD_CHROMIUM_ROOT", dir)
+        .env("SKYWARD_DNS", dns)
+        .env_remove("http_proxy")
+        .env_remove("https_proxy")
+        .env_remove("all_proxy")
+        .env_remove("HTTP_PROXY")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("ALL_PROXY")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -168,8 +179,8 @@ fn start_full(dir: &Path, url: &str) -> Result<()> {
     Ok(())
 }
 
-fn full_started(dir: &Path, url: &str) -> Result<Cdp> {
-    start_full(dir, url)?;
+fn full_started(dir: &Path, url: &str, servers: &Servers) -> Result<Cdp> {
+    start_full(dir, url, servers)?;
     Cdp::connect()
 }
 
@@ -214,7 +225,7 @@ impl Worker {
                     let _ = tx.send(event);
                     unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
                 };
-                let a = http::agent(servers);
+                let a = http::agent(servers.clone());
                 *using.lock().expect("the agent is not held by a thread that panicked") = Some(a.clone());
                 match task {
                     Task::Open { url, cookie } => {
@@ -269,7 +280,7 @@ impl Worker {
                     }
                     Task::FullStream { dir, url } => {
                         let result = (|| -> Result<()> {
-                            let mut cdp = full_started(&dir, &url)?;
+                            let mut cdp = full_started(&dir, &url, &servers)?;
                             cdp.navigate(&url)?;
                             tell(Event::Shot(cdp.screenshot().map_err(|e| format!("{e:#}"))));
                             cdp.start_screencast()?;
@@ -294,7 +305,10 @@ impl Worker {
                                         }
                                         Control::Scroll { dy } => cdp.scroll(dy)?,
                                         Control::Reload => cdp.reload()?,
-                                        Control::Navigate { url } => cdp.navigate(&url)?,
+                                        Control::Navigate { url } => {
+                                            note(&format!("Chromium navigate {url}"));
+                                            cdp.navigate(&url)?;
+                                        }
                                         Control::Viewport { width, height } => {
                                             cdp.viewport(width, height)?;
                                             cdp.start_screencast()?;
@@ -306,12 +320,16 @@ impl Worker {
                                     Some(crate::cdp::Event::Download { url, name }) => tell(Event::Download { url, name }),
                                     Some(crate::cdp::Event::Navigated(url)) => tell(Event::Navigated(url)),
                                     Some(crate::cdp::Event::Open(url)) => cdp.navigate(&url)?,
+                                    Some(crate::cdp::Event::LoadFailed(error)) => {
+                                        note(&format!("Chromium page load failed: {error}"));
+                                    }
                                     None => {}
                                 }
                             }
                             Ok(())
                         })();
                         if let Err(e) = result {
+                            note(&format!("Chromium session failed: {e:#}"));
                             tell(Event::Shot(Err(format!("{e:#}"))));
                         }
                     }
@@ -391,9 +409,11 @@ fn note(line: &str) {
 fn fetch_plugin(agent: &ureq::Agent, url: &str, path: &Path, stop: &AtomicBool, tell: &dyn Fn(Event)) -> Result<(), String> {
     let started = Instant::now();
     let mut last = Instant::now() - Duration::from_secs(1);
+    let mut resumed = None;
     web::save(agent, url, path, stop, &mut |saving| {
+        let resumed = *resumed.get_or_insert(saving.done);
         if last.elapsed() >= PROGRESS_EVERY || saving.total == Some(saving.done) {
-            let speed = (saving.done as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
+            let speed = (saving.done.saturating_sub(resumed) as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
             tell(Event::PluginSaved {
                 done: saving.done,
                 total: saving.total,

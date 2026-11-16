@@ -267,9 +267,13 @@ impl App {
             Action::BrowserStopDownload => return vec![Effect::StopBrowser],
             Action::BrowserOpenDownload(i) => {
                 let download = self.state.browser.downloads.get(i).cloned();
-                if let Some(d) = download
-                    && d.state == BrowserSave::Done
-                {
+                if let Some(d) = download {
+                    if matches!(d.state, BrowserSave::Stopped | BrowserSave::Failed(_)) {
+                        return self.browser_download(d.url, d.name, now);
+                    }
+                    if d.state != BrowserSave::Done {
+                        return Vec::new();
+                    }
                     if [".zip", ".img", ".img.zst"]
                         .iter()
                         .any(|suffix| d.name.to_ascii_lowercase().ends_with(suffix))
@@ -450,7 +454,11 @@ impl App {
             self.refresh();
             return vec![Effect::BrowserPluginText(text)];
         }
-        let url = skyward_net::web::address(input);
+        let url = if self.state.browser.full_active {
+            skyward_net::web::full_address(input)
+        } else {
+            skyward_net::web::address(input)
+        };
         if url.is_empty() {
             return Vec::new();
         }
@@ -529,15 +537,26 @@ impl App {
             .unwrap_or("download.bin")
             .to_string();
         let path = format!("/data/media/0/Download/Skyward/{name}");
-        self.state.browser.downloads.push(BrowserDownload {
+        let index = self.state.browser.downloads.iter().position(|d| d.path == path);
+        let download = BrowserDownload {
             name: name.clone(),
             url: url.clone(),
             path: path.clone(),
             size: None,
             done: 0,
             state: BrowserSave::Downloading { done: 0, total: None },
-        });
-        self.state.browser.saving = Some(self.state.browser.downloads.len() - 1);
+        };
+        let index = match index {
+            Some(index) => {
+                self.state.browser.downloads[index] = download;
+                index
+            }
+            None => {
+                self.state.browser.downloads.push(download);
+                self.state.browser.downloads.len() - 1
+            }
+        };
+        self.state.browser.saving = Some(index);
         self.open(Screen::BrowserDownloads);
         self.refresh();
         vec![Effect::BrowserDownload { url, name, path }]
@@ -600,6 +619,7 @@ impl App {
         let Some(d) = self.state.browser.downloads.get_mut(i) else { return };
         d.state = match ended {
             Ok(()) => BrowserSave::Done,
+            Err(why) if why == "stopped as asked" => BrowserSave::Stopped,
             Err(why) => BrowserSave::Failed(why),
         };
         self.refresh();

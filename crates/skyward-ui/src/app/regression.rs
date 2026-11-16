@@ -254,6 +254,42 @@ fn browser_file_offers_download_to_decrypted_internal_storage_only() {
         vec![Effect::InstallPath("/data/media/0/Download/Skyward/a.zip".into())]
     );
 }
+
+#[test]
+fn paused_browser_downloads_resume_from_one_list_entry_and_failures_can_retry() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.data = Data::Open;
+    app.browser_offered_download("https://example.com/rom.zip".into(), "rom.zip".into(), 0);
+    app.browser_saved(40, Some(100));
+    assert_eq!(app.act(Action::BrowserStopDownload, 1), vec![Effect::StopBrowser]);
+    app.browser_save_ended(Err("stopped as asked".into()), 2);
+    assert_eq!(app.state.browser.downloads[0].state, BrowserSave::Stopped);
+    assert_eq!(app.state.browser.downloads[0].done, 40);
+    assert!(
+        matches!(app.act(Action::BrowserOpenDownload(0), 3).as_slice(), [Effect::BrowserDownload { url, .. }] if url == "https://example.com/rom.zip")
+    );
+    assert_eq!(app.state.browser.downloads.len(), 1);
+    app.browser_saved(40, Some(100));
+    app.browser_save_ended(Err("connection reset".into()), 4);
+    assert!(matches!(
+        app.act(Action::BrowserOpenDownload(0), 5).as_slice(),
+        [Effect::BrowserDownload { .. }]
+    ));
+    assert_eq!(app.state.browser.downloads.len(), 1);
+}
+
+#[test]
+fn full_browser_search_uses_html_instead_of_the_native_rss_reader() {
+    let mut app = App::new(Screen::BrowserAddress, W, H, PPD);
+    app.state.browser.full_active = true;
+    assert!(
+        matches!(app.browser_go("中文搜索", 0).as_slice(), [Effect::BrowserPluginStart { url, .. }] if url.starts_with("https://cn.bing.com/search?q=") && !url.contains("format=rss"))
+    );
+    assert_eq!(
+        skyward_net::web::full_address("https://example.com/page?format=rss"),
+        "https://example.com/page?format=rss"
+    );
+}
 fn fonts() -> Fonts {
     crate::font::bundled()
 }

@@ -4,10 +4,11 @@
 //! the text and links its HTML carries.
 
 use anyhow::{Context, Result, bail};
+#[cfg(test)]
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use ureq::ResponseExt;
 
 /// The most of a page that is read: a phone's recovery has little memory,
@@ -19,7 +20,7 @@ pub const MAX_BLOCKS: usize = 400;
 const MAX_BLOCK_CHARS: usize = 4000;
 
 /// What the browser calls itself where a server asks.
-const USER_AGENT: &str = concat!("Skyward/", env!("CARGO_PKG_VERSION"), " (recovery browser)");
+pub(crate) const USER_AGENT: &str = concat!("Skyward/", env!("CARGO_PKG_VERSION"), " (recovery browser)");
 
 /// How a block is set, from the page's own tags and a small part of CSS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -233,6 +234,16 @@ pub fn address(input: &str) -> String {
         }
     } else {
         search_url(text)
+    }
+}
+
+/// Chromium renders a normal search page, not the native reader's RSS feed.
+pub fn full_address(input: &str) -> String {
+    let url = address(input);
+    if !input.trim().is_empty() && url == search_url(input.trim()) {
+        format!("https://cn.bing.com/search?q={}", percent_encode(input.trim()))
+    } else {
+        url
     }
 }
 
@@ -510,64 +521,14 @@ fn fetch_image(agent: &ureq::Agent, url: &str, limit: usize) -> Option<Vec<u8>> 
 }
 
 /// Save the file at `url` to `path`, telling how far it has come. Returns
-/// the bytes written. A save that stops leaves no part behind.
+/// the final length. Paused or interrupted saves retain a resumable part.
 pub fn save(agent: &ureq::Agent, url: &str, path: &Path, stop: &AtomicBool, progress: &mut dyn FnMut(Saving)) -> Result<u64> {
-    if !readable_url(url) {
-        bail!("{url} is not an http or https address");
-    }
-    let dir = path.parent().context("a download has a folder to go in")?;
-    fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
-    if path.exists() {
-        bail!("{} already exists", path.display());
-    }
-    let response = agent
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "*/*")
-        .call()
-        .with_context(|| format!("start downloading {url}"))?;
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        bail!("the server answered {status} for {url}");
-    }
-    let total = crate::download::content_length(response.headers());
-    let mut response = response;
-    let mut body = response.body_mut().with_config().limit(u64::MAX).reader();
-    let mut file = tempfile::Builder::new().prefix(".skyward-download-").tempfile_in(dir)?;
-    let mut buf = vec![0u8; 64 << 10];
-    let mut done = 0u64;
-    progress(Saving { done, total });
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            bail!(crate::Stopped);
-        }
-        let n = body.read(&mut buf).context("read the download")?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n]).with_context(|| format!("write {}", path.display()))?;
-        done += n as u64;
-        progress(Saving { done, total });
-    }
-    file.as_file()
-        .sync_all()
-        .with_context(|| format!("write {} through", path.display()))?;
-    if let Some(total) = total
-        && done != total
-    {
-        bail!("the server sent {done} of {total} bytes");
-    }
-    file.persist_noclobber(path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("save {}", path.display()))?;
-    Ok(done)
+    crate::web_save::save(agent, url, path, stop, progress)
 }
 
 /// Where a download waits until it is whole.
 pub fn partial(path: &Path) -> PathBuf {
-    let mut name = path.file_name().expect("a download has a name").to_os_string();
-    name.push(".part");
-    path.with_file_name(name)
+    crate::download::partial(path)
 }
 
 fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {

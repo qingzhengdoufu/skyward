@@ -32,6 +32,7 @@ pub enum Event {
     Download { url: String, name: String },
     Navigated(String),
     Open(String),
+    LoadFailed(String),
 }
 
 impl Cdp {
@@ -84,6 +85,7 @@ impl Cdp {
             scale: DEVICE_SCALE,
         };
         cdp.call("Page.enable", json!({}))?;
+        cdp.call("Network.enable", json!({}))?;
         cdp.call("Page.addScriptToEvaluateOnNewDocument",json!({"source":"window.open=(url)=>{location.href=new URL(url,location.href).href;return window};document.addEventListener('click',e=>{const a=e.target.closest?.('a[target]');if(a)a.target='_self'},true)"}))?;
         cdp.call(
             "Emulation.setDeviceMetricsOverride",
@@ -107,7 +109,13 @@ impl Cdp {
             if answer["id"].as_u64() != Some(id) {
                 if matches!(
                     answer["method"].as_str(),
-                    Some("Page.screencastFrame" | "Browser.downloadWillBegin" | "Page.frameNavigated" | "Page.windowOpen")
+                    Some(
+                        "Page.screencastFrame"
+                            | "Browser.downloadWillBegin"
+                            | "Page.frameNavigated"
+                            | "Page.windowOpen"
+                            | "Network.loadingFailed"
+                    )
                 ) && self.pending.len() < 8
                 {
                     self.pending.push_back(answer);
@@ -122,7 +130,13 @@ impl Cdp {
     }
 
     pub fn navigate(&mut self, url: &str) -> Result<()> {
-        self.call("Page.navigate", json!({"url": url}))?;
+        let result = self.call("Page.navigate", json!({"url": url}))?;
+        if result.get("isDownload").and_then(Value::as_bool) != Some(true)
+            && let Some(error) = result.get("errorText").and_then(Value::as_str)
+            && !error.is_empty()
+        {
+            bail!("open {url}: {error}");
+        }
         Ok(())
     }
 
@@ -213,6 +227,11 @@ impl Cdp {
                     url: params["url"].as_str().unwrap_or_default().into(),
                     name: params["suggestedFilename"].as_str().unwrap_or("download.bin").into(),
                 }));
+            }
+            if event["method"] == "Network.loadingFailed" && event["params"]["type"] == "Document" && event["params"]["canceled"] != true {
+                return Ok(Some(Event::LoadFailed(
+                    event["params"]["errorText"].as_str().unwrap_or("page load failed").into(),
+                )));
             }
             if event["method"] == "Page.windowOpen"
                 && let Some(url) = event["params"]["url"].as_str()
@@ -410,6 +429,15 @@ fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
 
 pub const WIDTH: u32 = VIEW_W;
 
+pub fn resolv_conf(servers: &[std::net::Ipv4Addr]) -> String {
+    let servers = if servers.is_empty() {
+        &[std::net::Ipv4Addr::new(223, 5, 5, 5), std::net::Ipv4Addr::new(1, 1, 1, 1)][..]
+    } else {
+        servers
+    };
+    servers.iter().take(3).map(|ip| format!("nameserver {ip}\n")).collect()
+}
+
 fn accept_for(key: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(key.as_bytes());
@@ -443,6 +471,48 @@ mod tests {
     #[test]
     fn websocket_handshake_matches_the_rfc_example() {
         assert_eq!(accept_for("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+    #[test]
+    fn chromium_dns_uses_the_network_lease_and_a_valid_fallback() {
+        use std::net::Ipv4Addr;
+        assert_eq!(resolv_conf(&[Ipv4Addr::new(192, 168, 0, 1)]), "nameserver 192.168.0.1\n");
+        assert_eq!(resolv_conf(&[]), "nameserver 223.5.5.5\nnameserver 1.1.1.1\n");
+        let config = resolv_conf(&[Ipv4Addr::LOCALHOST; 4]);
+        assert_eq!(config.lines().count(), 3);
+        assert!(!config.contains("\\n"));
+        let launcher = include_str!("chromium-launch.sh");
+        assert!(launcher.contains("printf '%s'"));
+        assert!(!launcher.contains("net.dns1"));
+    }
+
+    #[test]
+    fn a_navigation_error_is_not_reported_as_a_successful_page() {
+        let (client, mut server) = pair();
+        let worker = std::thread::spawn(move || {
+            let call: Value = serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
+            write_frame(
+                &mut server,
+                json!({"id":call["id"],"result":{"errorText":"net::ERR_CONNECTION_RESET"}})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        });
+        let mut cdp = Cdp {
+            stream: client,
+            next: 1,
+            pending: VecDeque::new(),
+            width: VIEW_W,
+            height: VIEW_H,
+            scale: DEVICE_SCALE,
+        };
+        assert!(
+            cdp.navigate("https://example.com/")
+                .unwrap_err()
+                .to_string()
+                .contains("ERR_CONNECTION_RESET")
+        );
+        worker.join().unwrap();
     }
     #[test]
     fn fragmented_frames_are_joined_and_oversized_frames_are_refused() {
