@@ -4,7 +4,7 @@ use crate::{
     color::Rgba,
     icons::Icon,
     pages::{Band, Ctx},
-    widgets::{self, Caption, Row, Trail},
+    widgets::{self, Row, Trail},
 };
 
 fn canvas(cx: &Ctx, height: u32) -> Canvas {
@@ -16,6 +16,33 @@ fn canvas(cx: &Ctx, height: u32) -> Canvas {
 }
 fn hits(rects: &[crate::geom::Rect], actions: &[Action]) -> Vec<Hit> {
     rects.iter().zip(actions).map(|(&rect, &action)| Hit { rect, action }).collect()
+}
+
+pub fn tasks(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let top = t.m.content_top;
+    let mut c = canvas(cx, t.m.h * 2);
+    let mut rows = vec![
+        Row::new(l.pick(["返回上一任务", "返回上一工作", "Resume previous task"])).icon(Rgba::rgb(52, 130, 255), Icon::Restore),
+        Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(Rgba::rgb(0, 160, 160), Icon::Globe),
+    ];
+    let mut actions = vec![Action::ResumeTask, Action::Open(Screen::Browser)];
+    if !matches!(s.install, Install::Idle) {
+        rows.push(Row::new(l.pick(["安装任务", "安裝工作", "Installation"])).icon(Rgba::rgb(29, 205, 58), Icon::Install));
+        actions.push(Action::Open(Screen::Installing));
+    }
+    rows.push(Row::new(l.pick(["浏览器下载", "瀏覽器下載", "Browser downloads"])).icon(Rgba::rgb(29, 205, 58), Icon::Folder));
+    actions.push(Action::Open(Screen::BrowserDownloads));
+    rows.push(Row::new(l.pick(["系统下载", "系統下載", "System download"])).icon(Rgba::rgb(52, 130, 255), Icon::Phone));
+    actions.push(Action::Open(Screen::Update));
+    let list = widgets::list(&mut c, t, f, top, &rows);
+    Frame::new(
+        t,
+        c.crop_height((list.bottom + t.m.dp(24.0)) as u32),
+        hits(&list.rows, &actions),
+        l.pick(["任务", "工作", "Tasks"]),
+        top,
+    )
 }
 
 pub fn modules(cx: &Ctx) -> Frame {
@@ -129,12 +156,51 @@ pub fn partitions(cx: &Ctx) -> Frame {
 
 pub fn control(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
-    let top = t.m.content_top;
-    let mut c = canvas(cx, t.m.h * 3);
+    let m = &t.m;
+    let mut c = canvas(cx, m.h * 3);
+    let background = Rgba::rgb(38, 38, 40);
+    let panel = Rgba::rgb(29, 29, 31);
+    let inactive = Rgba::rgb(53, 53, 55);
+    let blue = Rgba::rgb(0, 132, 216);
+    c.clear(background);
     let mut out = Vec::new();
-    let on = s.wlan.as_ref().is_some_and(|w| w.power == skyward_net::wlan::Power::On);
+    let x = m.dp(16.0);
+    let width = m.w as f32 - x * 2.0;
+    c.text_top(&f.body, &s.control_clock, x, m.dp(28.0), m.dp(44.0), t.pal.text, None);
+    c.text_top(
+        &f.body,
+        &s.control_date,
+        x,
+        m.dp(80.0),
+        m.dp(13.0),
+        t.pal.text,
+        Some(width - m.dp(44.0)),
+    );
+    let network = s
+        .wlan
+        .as_ref()
+        .and_then(|w| w.joined.as_ref())
+        .map(|j| j.name.as_str())
+        .unwrap_or("WiFi");
+    c.text_top(
+        &f.body,
+        network,
+        x,
+        m.dp(102.0),
+        m.dp(12.0),
+        t.pal.subtitle,
+        Some(width - m.dp(60.0)),
+    );
+    let settings = crate::geom::Rect::new(m.w as f32 - x - m.dp(40.0), m.dp(70.0), m.dp(40.0), m.dp(40.0));
+    let (sx, sy) = settings.centre();
+    crate::icons::glyph(&mut c, Icon::Gear, sx, sy, m.dp(22.0), t.pal.text);
+    out.push(Hit {
+        rect: settings,
+        action: Action::Open(Screen::Settings),
+    });
+    let wifi = s.wlan.as_ref().is_some_and(|w| w.power == skyward_net::wlan::Power::On);
     let mut controls = vec![
-        ("WiFi", Icon::Wlan, on, s.wlan.is_some(), Action::Toggle(Switch::Wlan)),
+        (network, Icon::Wlan, wifi, s.wlan.is_some(), Action::Toggle(Switch::Wlan)),
         (
             l.pick(["震动", "震動", "Haptics"]),
             Icon::Phone,
@@ -143,90 +209,191 @@ pub fn control(cx: &Ctx) -> Frame {
             Action::Toggle(Switch::Vibrate),
         ),
         ("MTP", Icon::Usb, s.file_transfer, true, Action::Toggle(Switch::FileTransfer)),
-    ];
-    if s.double_tap_supported {
-        controls.push((
+        (
             l.pick(["双击唤醒", "點兩下喚醒", "Tap to wake"]),
             Icon::Power,
             s.double_tap,
-            true,
+            s.double_tap_supported,
             Action::Toggle(Switch::DoubleTap),
-        ));
+        ),
+        (
+            l.pick(["浏览器", "瀏覽器", "Browser"]),
+            Icon::Globe,
+            false,
+            true,
+            Action::Open(Screen::Browser),
+        ),
+        (
+            l.pick(["下载", "下載", "Downloads"]),
+            Icon::Folder,
+            false,
+            true,
+            Action::Open(Screen::BrowserDownloads),
+        ),
+        (
+            l.pick(["文件管理", "檔案管理", "Files"]),
+            Icon::Folder,
+            false,
+            true,
+            Action::Open(Screen::Files),
+        ),
+        (
+            l.pick(["终端", "終端機", "Terminal"]),
+            Icon::Terminal,
+            false,
+            true,
+            Action::Open(Screen::Terminal),
+        ),
+        (
+            l.pick(["Root 模块", "Root 模組", "Modules"]),
+            Icon::Layers,
+            false,
+            true,
+            Action::Open(Screen::RootModules),
+        ),
+        (
+            l.pick(["分区管理", "分割區管理", "Partitions"]),
+            Icon::Mount,
+            false,
+            true,
+            Action::Open(Screen::Partitions),
+        ),
+        (l.pick(["任务", "工作", "Tasks"]), Icon::More, false, true, Action::NavTasks),
+        (
+            l.pick(["设置", "設定", "Settings"]),
+            Icon::Gear,
+            false,
+            true,
+            Action::Open(Screen::Settings),
+        ),
+    ];
+    if !s.double_tap_supported {
+        controls[3] = (
+            l.pick(["网络", "網路", "Network"]),
+            Icon::Wlan,
+            false,
+            s.wlan.is_some(),
+            Action::Open(Screen::Wlan),
+        );
     }
-    let cell = (t.m.w as f32 - t.m.margin * 2.0) / controls.len() as f32;
-    let side = t.m.dp(54.0).min(cell - t.m.dp(12.0));
+    let top = m.dp(132.0);
+    let pad = m.dp(12.0);
+    let cell = (width - pad * 2.0) / 4.0;
+    let pitch = m.dp(88.0);
+    let side = m.dp(48.0).min(cell - m.dp(14.0));
+    let grid_h = pad * 2.0 + pitch * 3.0;
+    c.fill_round_rect(x, top, width, grid_h, m.dp(8.0), panel);
     for (index, (label, icon, enabled, available, action)) in controls.iter().enumerate() {
-        let x = t.m.margin + cell * (index as f32 + 0.5);
-        let cy = top + side / 2.0;
-        let color = if *enabled && *available {
-            Rgba::rgb(52, 130, 255)
-        } else {
-            t.pal.search
-        };
-        c.fill_round_rect(x - side / 2.0, top, side, side, side / 2.0, color);
+        let cx = x + pad + cell * (index % 4) as f32 + cell / 2.0;
+        let y = top + pad + pitch * (index / 4) as f32;
+        let color = if *enabled && *available { blue } else { inactive };
+        c.fill_circle(cx, y + side / 2.0, side / 2.0, color);
         crate::icons::glyph(
             &mut c,
             *icon,
-            x,
-            cy,
-            t.m.dp(26.0),
-            if *enabled && *available {
-                Rgba::rgb(255, 255, 255)
-            } else {
-                t.pal.subtitle
-            },
+            cx,
+            y + side / 2.0,
+            m.dp(22.0),
+            if *available { t.pal.text } else { t.pal.subtitle },
         );
-        let size = t.m.dp(11.0);
-        let width = c.text_width(&f.label, label, size);
+        let max = cell - m.dp(4.0);
+        let normal = m.dp(11.5);
+        let measured = c.text_width(&f.label, label, normal);
+        let size = if measured > max {
+            normal * (max / measured).max(0.72)
+        } else {
+            normal
+        };
+        let tw = c.text_width(&f.label, label, size).min(max);
         c.text_top(
             &f.label,
             label,
-            x - width / 2.0,
-            top + side + t.m.dp(9.0),
+            cx - tw / 2.0,
+            y + side + m.dp(8.0),
             size,
-            t.pal.text,
-            Some(cell),
+            if *available { t.pal.text } else { t.pal.subtitle },
+            Some(max),
         );
         if *available {
             out.push(Hit {
-                rect: crate::geom::Rect::new(x - cell / 2.0, top, cell, side + t.m.dp(36.0)),
+                rect: crate::geom::Rect::new(cx - cell / 2.0, y, cell, pitch),
                 action: *action,
             });
         }
     }
-    let y = widgets::section(&mut c, t, f, top + side + t.m.dp(40.0), l.pick(["亮度", "亮度", "Brightness"]));
-    let slider = widgets::slider_card(
-        &mut c,
-        t,
-        f,
-        y,
-        Caption::Sun,
-        l.pick(["屏幕亮度", "螢幕亮度", "Screen brightness"]),
-        s.brightness,
-        None,
-    );
+    let slider = crate::geom::Rect::new(x, top + grid_h + m.dp(12.0), width, m.dp(42.0));
+    c.fill_round_rect(slider.x, slider.y, slider.w, slider.h, m.dp(8.0), panel);
+    let filled = (slider.w * s.brightness.clamp(0.0, 1.0)).max(m.dp(8.0));
+    c.fill_round_rect(slider.x, slider.y, filled, slider.h, m.dp(8.0), Rgba::rgb(158, 158, 160));
+    let (sunx, suny) = (slider.x + m.dp(22.0), slider.y + slider.h / 2.0);
+    c.fill_circle(sunx, suny, m.dp(4.0), t.pal.text);
+    for k in 0..8 {
+        let a = k as f32 * std::f32::consts::FRAC_PI_4;
+        let (dx, dy) = (a.cos(), a.sin());
+        c.line(
+            sunx + dx * m.dp(7.0),
+            suny + dy * m.dp(7.0),
+            sunx + dx * m.dp(9.0),
+            suny + dy * m.dp(9.0),
+            m.dp(1.5),
+            t.pal.text,
+        );
+    }
     out.push(Hit {
-        rect: slider.track,
+        rect: slider,
         action: Action::Slider(Slider::Brightness),
     });
-    let mut y = slider.bottom + t.m.card_gap;
-    let data = crate::fmt::data(l, &s.data);
-    let slot = cx.info.slot.map(|s| s.letter().to_string()).unwrap_or_default();
-    let battery = cx.info.battery.as_ref().map(|b| format!("{}%", b.level)).unwrap_or_default();
-    y = widgets::info_card(
+    let handle = crate::geom::Rect::new(
+        m.w as f32 / 2.0 - m.dp(18.0),
+        slider.y + slider.h + m.dp(10.0),
+        m.dp(36.0),
+        m.dp(4.0),
+    );
+    c.fill_round_rect(handle.x, handle.y, handle.w, handle.h, handle.h / 2.0, t.pal.subtitle);
+    out.push(Hit {
+        rect: crate::geom::Rect::new(handle.x - m.dp(24.0), handle.y - m.dp(5.0), handle.w + m.dp(48.0), m.dp(18.0)),
+        action: Action::CloseControlCenter,
+    });
+    let mut y = handle.y + m.dp(20.0);
+    let battery = cx
+        .info
+        .battery
+        .as_ref()
+        .map(|b| {
+            format!(
+                "{}%{}",
+                b.level,
+                b.temp.map(|v| format!("  {:.1} C", v as f32 / 10.0)).unwrap_or_default()
+            )
+        })
+        .unwrap_or_default();
+    let slot = cx
+        .info
+        .slot
+        .map(|slot| format!("{} {}", l.pick(["槽位", "槽位", "Slot"]), slot.letter()))
+        .unwrap_or_default();
+    let detail = format!("{}  {}  {}", crate::fmt::data(l, &s.data), slot, battery);
+    let row = widgets::list(
         &mut c,
         t,
         f,
         y,
-        &[
-            ("Data", data.to_string()),
-            (l.pick(["槽位", "槽位", "Slot"]), slot),
-            (l.pick(["电量", "電量", "Battery"]), battery),
-        ],
+        &[Row::new(l.pick(["设备状态", "裝置狀態", "Device status"]))
+            .icon(blue, Icon::Phone)
+            .subtitle(&detail)
+            .trail(Trail::None)],
     );
+    y = row.bottom;
     if let Some((title, detail, share)) = task(s) {
-        y = widgets::progress_card(&mut c, t, f, y + t.m.card_gap, &title, &detail, share);
+        y = widgets::progress_card(&mut c, t, f, y + m.dp(12.0), &title, &detail, share);
     }
+    let green = crate::theme::Theme {
+        pal: crate::theme::Palette {
+            accent: Rgba::rgb(29, 205, 58),
+            ..t.pal
+        },
+        ..*t
+    };
     for d in &s.browser.downloads {
         if let BrowserSave::Downloading { done, total } = d.state {
             let detail = format!(
@@ -236,41 +403,26 @@ pub fn control(cx: &Ctx) -> Frame {
             );
             y = widgets::progress_card(
                 &mut c,
-                &crate::theme::Theme {
-                    pal: crate::theme::Palette {
-                        accent: Rgba::rgb(29, 205, 58),
-                        ..t.pal
-                    },
-                    ..*t
-                },
+                &green,
                 f,
-                y + t.m.card_gap,
+                y + m.dp(12.0),
                 &d.name,
                 &detail,
                 total.filter(|n| *n > 0).map(|n| done as f32 / n as f32),
             );
         }
     }
-    let browser = widgets::list(
-        &mut c,
+    let mut frame = Frame::new(
         t,
-        f,
-        y + t.m.card_gap,
-        &[Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(Rgba::rgb(52, 130, 255), Icon::Globe)],
-    );
-    out.extend(hits(&browser.rows, &[Action::Open(Screen::Browser)]));
-    let close = widgets::button(&mut c, t, f, browser.bottom + t.m.card_gap, l.pick(["收起", "收起", "Close"]));
-    out.push(Hit {
-        rect: close,
-        action: Action::CloseControlCenter,
-    });
-    Frame::new(
-        t,
-        c.crop_height((close.y + close.h + t.m.dp(24.0)) as u32),
+        c.crop_height((y + m.dp(24.0)).max(m.h as f32) as u32),
         out,
         l.pick(["控制中心", "控制中心", "Control center"]),
-        top,
-    )
+        0.0,
+    );
+    frame.header = false;
+    frame.back = false;
+    frame.bg = background;
+    frame
 }
 
 fn task(s: &State) -> Option<(String, String, Option<f32>)> {

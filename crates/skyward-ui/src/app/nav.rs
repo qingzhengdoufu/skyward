@@ -10,6 +10,21 @@ pub(super) const WAIT_OR_STOP: Text = [
 impl App {
     /// Open `screen` over the page shown, sliding in over it.
     pub(super) fn open(&mut self, screen: Screen) {
+        if self.shade.is_some() {
+            self.dismiss_shade();
+        }
+        if screen == Screen::Browser {
+            if let Some(index) = self.stack.iter().rposition(|(page, ..)| *page == Screen::Browser) {
+                self.end_turn();
+                self.stack.truncate(index + 1);
+                self.settle_page();
+                self.refresh();
+                return;
+            }
+        } else if self.screen() == screen {
+            self.refresh();
+            return;
+        }
         self.leave(false);
         self.push(screen);
     }
@@ -87,6 +102,10 @@ impl App {
     /// In the file manager, back climbs a folder until it reaches the root,
     /// and in a place, until it reaches the place's top.
     pub(super) fn back(&mut self, now: u64) -> Vec<Effect> {
+        if self.shade.is_some() && self.screen() == Screen::ControlCenter {
+            self.settle_shade(false, now, 0.0);
+            return Vec::new();
+        }
         let (l, mut fx) = (self.state.lang, Vec::new());
         if self.stack.len() <= 1 {
             return fx;

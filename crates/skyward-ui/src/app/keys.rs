@@ -283,7 +283,7 @@ impl App {
             Group::Fixed => 0.0,
             Group::Strip => pinned_top(&self.theme(), fr.pinned.as_ref().expect("the strip holds its controls"), offset),
             Group::Page => return fr.shown(s.rect, offset),
-            Group::Dock => self.h as f32 - fr.dock.as_ref().expect("the dock holds its controls").canvas.h as f32,
+            Group::Dock => self.theme().m.h as f32 - fr.dock.as_ref().expect("the dock holds its controls").canvas.h as f32,
         };
         Some(Rect {
             y: s.rect.y + dy,
@@ -303,7 +303,7 @@ impl App {
             Some(p) => pinned_top(&t, p, scroll) + p.canvas.h as f32,
             None => widgets::bar_bottom(&t),
         };
-        (top, self.h as f32 - fr.dock.as_ref().map_or(0.0, |d| d.canvas.h as f32))
+        (top, t.m.h as f32 - fr.dock.as_ref().map_or(0.0, |d| d.canvas.h as f32))
     }
 }
 

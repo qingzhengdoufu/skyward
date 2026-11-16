@@ -130,6 +130,7 @@ impl App {
         };
         *value = level.clamp(if which == Slider::Brightness { MIN_BRIGHTNESS } else { 0.0 }, 1.0);
         let value = *value;
+        if self.screen()==Screen::ControlCenter {self.refresh();return;}
         if let Some(fr) = self.frame.as_mut() {
             fr.canvas.fill_rect(track.x, track.y, track.w, track.h, t.pal.card);
             widgets::slider(&mut fr.canvas, t, track.x, track.y, track.w, value);

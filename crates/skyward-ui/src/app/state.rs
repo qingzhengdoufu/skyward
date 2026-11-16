@@ -4,6 +4,8 @@ use super::*;
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
+    pub control_clock: String,
+    pub control_date: String,
     pub image_only: bool,
     pub browser: super::Browser,
     pub root_modules: Option<Result<(String, Vec<skyward_files::root_modules::Module>), String>>,
@@ -289,6 +291,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
+            control_clock: "00:00".into(),
+            control_date: String::new(),
             image_only: false,
             browser: super::Browser::default(),
             root_modules: None,

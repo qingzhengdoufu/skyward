@@ -10,6 +10,7 @@ pub struct Hit {
 /// left empty, and the `<`, the titles and the bar are laid over the page
 /// as it scrolls.
 pub struct Frame {
+    pub browser_area: Option<Rect>,
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
     pub title: &'static str,
@@ -182,6 +183,7 @@ impl Frame {
     /// large type and goes back with `<`.
     pub fn new(t: &Theme, canvas: Canvas, hits: Vec<Hit>, title: &'static str, content_top: f32) -> Frame {
         Frame {
+            browser_area: None,
             canvas,
             hits,
             title,

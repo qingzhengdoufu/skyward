@@ -50,11 +50,13 @@ mod keys;
 mod manager;
 mod mount;
 mod nav;
+mod navigation;
 mod power;
 mod prefs;
 mod reboot;
 mod relabel;
 mod scroll;
+mod shade;
 mod skyward;
 mod state;
 mod systems;
@@ -100,6 +102,7 @@ pub enum Screen {
     RootModules,
     Partitions,
     ControlCenter,
+    Tasks,
     Decrypt,
     Home,
     Settings,
@@ -272,6 +275,10 @@ pub enum Confirm {
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    NavBack,
+    NavHome,
+    NavTasks,
+    ResumeTask,
     ReadRootModules,
     RootModule(usize, u8),
     OpenControlCenter,
@@ -606,6 +613,11 @@ pub enum Effect {
         x: u16,
         y: u16,
     },
+    BrowserPluginTouch {
+        phase: u8,
+        x: u16,
+        y: u16,
+    },
     BrowserPluginPinch {
         scale: f64,
     },
@@ -908,6 +920,10 @@ pub enum Effect {
 
 pub(super) enum Drag {
     Idle,
+    BrowserTouch {
+        rect: Rect,
+        last: (u16, u16),
+    },
     /// Finger down and not yet past the touch slop. `edge` is set when the
     /// press began at a screen edge (true for the left one).
     /// `at` is when it came down: held long enough over an entry of the file
@@ -1450,7 +1466,11 @@ pub(super) fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
-    shade_pull: Option<(f32, f32)>,
+    shade_pull: Option<shade::ShadePull>,
+    shade: Option<shade::Shade>,
+    parked: Option<Vec<(Screen, f32, Focus)>>,
+    nav_press: Option<u8>,
+    navigation: bool,
     pub state: State,
     /// The pages open, the one shown last: each with how far it is
     /// scrolled and where the keys are on it.
@@ -1604,6 +1624,10 @@ impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
             shade_pull: None,
+            shade: None,
+            parked: None,
+            nav_press: None,
+            navigation: false,
             state: State::default(),
             stack: vec![(start, 0.0, Focus::Unset)],
             frame: None,
@@ -1678,10 +1702,11 @@ impl App {
 
 impl App {
     pub fn theme(&self) -> Theme {
-        if self.state.dark {
-            Theme::dark(self.w, self.h, self.px_per_dp)
+        let height = self.h.saturating_sub(self.nav_height());
+        if self.state.dark || self.screen() == Screen::ControlCenter {
+            Theme::dark(self.w, height, self.px_per_dp)
         } else {
-            Theme::light(self.w, self.h, self.px_per_dp)
+            Theme::light(self.w, height, self.px_per_dp)
         }
     }
 }
@@ -1729,6 +1754,7 @@ impl App {
                 || self.bar.moving(now)
                 || self.morph.is_some()
                 || self.turn.is_some()
+                || self.shade.as_ref().is_some_and(|s| s.spring.is_some())
                 || self.row_press.is_some_and(|p| p.changing(now) || p.gone(now))
                 || self.glowing());
         let lit = self.panel(now).is_some();
@@ -1810,6 +1836,7 @@ impl App {
     /// the bar and its title follow the scroll, and a message past its
     /// deadline goes away.
     pub fn tick(&mut self, now: u64) -> Vec<Effect> {
+        self.tick_shade(now);
         let mut fx = Vec::new();
         if self.chord.is_some_and(|(_, at)| now >= at + CHORD_MS) {
             fx.extend(self.let_chord_go(now));

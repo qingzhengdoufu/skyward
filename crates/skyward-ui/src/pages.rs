@@ -65,6 +65,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::RootModules => crate::tools::modules(cx),
         Screen::Partitions => crate::tools::partitions(cx),
         Screen::ControlCenter => crate::tools::control(cx),
+        Screen::Tasks => crate::tools::tasks(cx),
         Screen::Browser => crate::browser::screen(cx),
         Screen::BrowserAddress => crate::browser::address(cx),
         Screen::BrowserDownloads => crate::browser::downloads(cx),

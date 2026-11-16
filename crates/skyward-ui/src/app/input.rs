@@ -20,27 +20,44 @@ impl App {
             self.drag = Drag::Waking;
             return Vec::new();
         }
-        if self.screen() != Screen::Fastboot {
-            let t = self.theme();
-            match ev {
-                Touch::Down(_, y) if y < t.m.dp(48.0) => {
-                    self.shade_pull = Some((y, y));
-                    return Vec::new();
+        if let Some(effects) = self.navigation_touch(ev, now) {
+            return effects;
+        }
+        if self.shade_touch(ev, now) {
+            return Vec::new();
+        }
+        if let Touch::Down(x, y) = ev
+            && self.state.browser.full_active
+            && let Some(area) = self.frame.as_ref().and_then(|f| f.browser_area)
+            && area.contains(x, y + self.top().1)
+        {
+            let (px, py) = browser_point(area, x, y + self.top().1);
+            self.drag = Drag::BrowserTouch {
+                rect: area,
+                last: (px, py),
+            };
+            self.stir(now);
+            return vec![Effect::BrowserPluginTouch { phase: 0, x: px, y: py }];
+        }
+        if let Drag::BrowserTouch { rect, last } = self.drag {
+            let effect = match ev {
+                Touch::Move(x, y) => {
+                    let (x, y) = browser_point(rect, x, y + self.top().1);
+                    self.drag = Drag::BrowserTouch { rect, last: (x, y) };
+                    Some(Effect::BrowserPluginTouch { phase: 1, x, y })
                 }
-                Touch::Move(_, y) if self.shade_pull.is_some() => {
-                    let start = self.shade_pull.unwrap().0;
-                    self.shade_pull = Some((start, y));
-                    return Vec::new();
+                Touch::Up => {
+                    self.drag = Drag::Idle;
+                    Some(Effect::BrowserPluginTouch {
+                        phase: 2,
+                        x: last.0,
+                        y: last.1,
+                    })
                 }
-                Touch::Up if self.shade_pull.is_some() => {
-                    let (start, last) = self.shade_pull.take().unwrap();
-                    if last - start > t.m.dp(40.0) {
-                        return self.act(Action::OpenControlCenter, now);
-                    }
-                    return Vec::new();
-                }
-                _ => {}
-            }
+                _ => None,
+            };
+            self.stir(now);
+            return effect.into_iter().collect();
         }
         if matches!(ev, Touch::Down(..)) {
             if self.keys {
@@ -109,7 +126,7 @@ impl App {
                     .frame
                     .as_ref()
                     .and_then(|fr| fr.dock.as_ref())
-                    .map(|d| (d, self.h as f32 - d.canvas.h as f32));
+                    .map(|d| (d, t.m.h as f32 - d.canvas.h as f32));
                 let on_dock = dock.filter(|&(_, top)| y >= top);
                 let button = self
                     .frame
@@ -308,6 +325,7 @@ impl App {
                 Drag::Waking => self.drag = Drag::Waking,
                 Drag::Held => self.drag = Drag::Held,
                 Drag::Idle => {}
+                Drag::BrowserTouch { .. } => {}
             },
             Touch::Up => match std::mem::replace(&mut self.drag, Drag::Idle) {
                 Drag::Press { action: Some(a), .. } => {
@@ -396,6 +414,13 @@ impl App {
         }
         fx
     }
+}
+
+fn browser_point(rect: Rect, x: f32, y: f32) -> (u16, u16) {
+    (
+        ((x - rect.x) / rect.w * 1000.0).clamp(0.0, 999.0) as u16,
+        ((y - rect.y) / rect.h * 1000.0).clamp(0.0, 999.0) as u16,
+    )
 }
 
 impl App {

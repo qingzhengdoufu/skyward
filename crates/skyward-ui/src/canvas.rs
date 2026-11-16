@@ -1,4 +1,4 @@
-use crate::color::{blend_over, blend_px, Rgba};
+use crate::color::{Rgba, blend_over, blend_px};
 use crate::font::{Face, SUBPIXELS};
 use ab_glyph::{Font, GlyphId, PxScale, ScaleFont};
 
@@ -54,7 +54,11 @@ fn kept(n: usize) -> Vec<u8> {
     let kept = if n >= KEEP_BYTES {
         let mut kept = KEPT.lock().expect("no one panics holding the kept memory");
         let best = |fits: &dyn Fn(&Vec<u8>) -> bool| {
-            kept.iter().enumerate().filter(|(_, v)| fits(v)).min_by_key(|(_, v)| v.capacity()).map(|(i, _)| i)
+            kept.iter()
+                .enumerate()
+                .filter(|(_, v)| fits(v))
+                .min_by_key(|(_, v)| v.capacity())
+                .map(|(i, _)| i)
         };
         let best = best(&|v| v.len() >= n).or_else(|| best(&|v| v.capacity() >= n));
         best.map(|i| kept.swap_remove(i))
@@ -67,6 +71,24 @@ fn kept(n: usize) -> Vec<u8> {
 // Drawing primitives take geometry plus style as plain arguments.
 #[allow(clippy::too_many_arguments)]
 impl Canvas {
+    pub fn blit_rgba(&mut self, pixels: &[u8], width: u32, height: u32, x: i32, y: i32) {
+        if pixels.len() != width as usize * height as usize * 4 {
+            return;
+        }
+        let left = x.max(self.left as i32).max(0);
+        let right = (x + width as i32).min((self.left + self.span) as i32).min(self.w as i32);
+        if left >= right {
+            return;
+        }
+        let top = y.max(self.top as i32).max(0);
+        let bottom = (y + height as i32).min(self.bottom as i32).min(self.h as i32);
+        for row in top..bottom {
+            let source = ((row - y) as usize * width as usize + (left - x) as usize) * 4;
+            let destination = ((row - self.top as i32) as usize * self.span as usize + (left - self.left as i32) as usize) * 4;
+            let count = (right - left) as usize * 4;
+            self.data[destination..destination + count].copy_from_slice(&pixels[source..source + count]);
+        }
+    }
     pub fn new(w: u32, h: u32) -> Self {
         Self::filled(w, h, Rgba { r: 0, g: 0, b: 0, a: 0 })
     }
@@ -92,7 +114,15 @@ impl Canvas {
                 data.extend_from_within(..data.len().min(n - data.len()));
             }
         }
-        Self { w, h, data, top, bottom, left, span }
+        Self {
+            w,
+            h,
+            data,
+            top,
+            bottom,
+            left,
+            span,
+        }
     }
 
     /// A canvas `w` × `h` that holds rows `rows` of it whole, as whatever
@@ -107,7 +137,15 @@ impl Canvas {
         } else {
             data.resize(n, 0);
         }
-        Self { w, h, data, top, bottom, left: 0, span: w }
+        Self {
+            w,
+            h,
+            data,
+            top,
+            bottom,
+            left: 0,
+            span: w,
+        }
     }
 
     /// Keep memory for `n` canvases `w` × `h`, written to once, for the
@@ -152,7 +190,11 @@ impl Canvas {
     /// canvas holds, which run on from this canvas's last row or up to its
     /// first.
     pub fn join(&mut self, band: &Canvas) {
-        assert_eq!((band.w, band.h, band.cols()), (self.w, self.h, self.cols()), "a band joins a canvas of its size, in its columns");
+        assert_eq!(
+            (band.w, band.h, band.cols()),
+            (self.w, self.h, self.cols()),
+            "a band joins a canvas of its size, in its columns"
+        );
         let (mine, theirs) = (self.held(), band.held());
         if theirs.start == mine.end {
             self.data.extend_from_slice(&band.data);
@@ -168,7 +210,10 @@ impl Canvas {
     /// the same.
     pub fn replace(&mut self, band: &Canvas) {
         assert_eq!((band.w, band.h), (self.w, self.h), "a band replaces part of a canvas of its size");
-        let (rows, cols) = (self.rows(band.top as i32, band.held().end as i32), self.columns(band.left as i32, (band.left + band.span) as i32));
+        let (rows, cols) = (
+            self.rows(band.top as i32, band.held().end as i32),
+            self.columns(band.left as i32, (band.left + band.span) as i32),
+        );
         if cols.0 >= cols.1 {
             return;
         }
@@ -323,7 +368,10 @@ impl Canvas {
     /// wholly wherever `layer` does.
     pub fn relay(&mut self, layer: &Canvas, now: &Canvas, x: i32, y: i32, level: f32) {
         assert_eq!((layer.w, layer.h), (now.w, now.h), "the two layers are one size");
-        assert!(self.whole() && layer.whole() && now.whole(), "layers are laid again whole on a whole canvas");
+        assert!(
+            self.whole() && layer.whole() && now.whole(),
+            "layers are laid again whole on a whole canvas"
+        );
         if level <= 0.0 {
             return;
         }
@@ -381,7 +429,10 @@ impl Canvas {
     /// pages are as big as this canvas, and each of its pixels is written
     /// once.
     pub fn slide(&mut self, front: &Canvas, behind: &Canvas, at: i32, shift: i32, dim: f32, radius: f32) {
-        assert!((front.w, front.h) == (self.w, self.h) && (behind.w, behind.h) == (self.w, self.h), "the pages are one size");
+        assert!(
+            (front.w, front.h) == (self.w, self.h) && (behind.w, behind.h) == (self.w, self.h),
+            "the pages are one size"
+        );
         assert!(self.whole() && front.whole() && behind.whole(), "pages slide whole");
         let (w, h) = (self.w as i32, self.h as i32);
         let (at, shift) = (at.clamp(0, w), shift.clamp(0, w));
@@ -409,7 +460,11 @@ impl Canvas {
                     break;
                 }
                 let k = x as usize;
-                let under = if k >= reach { [0, 0, 0, 255] } else { darken(back[k + shift as usize], keep) };
+                let under = if k >= reach {
+                    [0, 0, 0, 255]
+                } else {
+                    darken(back[k + shift as usize], keep)
+                };
                 // A pixel the front page covers at all lies right of its
                 // edge.
                 line[k] = if cover <= 0.0 {
@@ -432,7 +487,10 @@ impl Canvas {
     /// this canvas holds.
     pub fn crop(&self, x: u32, y: u32, w: u32, h: u32) -> Canvas {
         let (held, cols) = (self.held(), self.cols());
-        assert!(cols.start <= x && x + w <= cols.end && held.start <= y && y + h <= held.end, "the part cropped lies in what is held");
+        assert!(
+            cols.start <= x && x + w <= cols.end && held.start <= y && y + h <= held.end,
+            "the part cropped lies in what is held"
+        );
         let mut out = Canvas::new(w, h);
         let part = w as usize * 4;
         for (k, dst) in out.data.chunks_exact_mut(part).enumerate() {
@@ -476,7 +534,10 @@ impl Canvas {
             return;
         }
         let held = src.held();
-        assert!(held.start as i32 <= from + first && from + last <= held.end as i32, "the rows put are held");
+        assert!(
+            held.start as i32 <= from + first && from + last <= held.end as i32,
+            "the rows put are held"
+        );
         assert_eq!(src.cols(), 0..src.w, "the rows put are held whole");
         let row = self.w as usize * 4;
         let (dst, at) = ((y + first) as usize * row, src.at(0, from + first));
@@ -517,12 +578,20 @@ impl Canvas {
                     }
                     let c = cover(px[x][3]);
                     if c != now {
-                        runs.push(Run { x0: start as u16, x1: x as u16, cover: now });
+                        runs.push(Run {
+                            x0: start as u16,
+                            x1: x as u16,
+                            cover: now,
+                        });
                         (start, now) = (x, c);
                     }
                     x += 1;
                 }
-                runs.push(Run { x0: start as u16, x1: w as u16, cover: now });
+                runs.push(Run {
+                    x0: start as u16,
+                    x1: w as u16,
+                    cover: now,
+                });
                 runs
             })
             .collect()
@@ -532,7 +601,8 @@ impl Canvas {
     pub fn crop_height(mut self, h: u32) -> Canvas {
         let h = h.min(self.h);
         let held = self.held();
-        self.data.truncate((self.span * (h.clamp(held.start, held.end) - held.start) * 4) as usize);
+        self.data
+            .truncate((self.span * (h.clamp(held.start, held.end) - held.start) * 4) as usize);
         self.top = self.top.min(h);
         self.bottom = self.bottom.min(h);
         self.h = h;
@@ -754,7 +824,10 @@ impl Canvas {
             let clear = hole * hole - dy * dy;
             let (a, b) = if hole > 0.0 && clear > 0.0 {
                 let half = clear.sqrt();
-                (((cx - half).ceil() as i32).clamp(x0, x1), ((cx + half).floor() as i32).clamp(x0, x1))
+                (
+                    ((cx - half).ceil() as i32).clamp(x0, x1),
+                    ((cx + half).floor() as i32).clamp(x0, x1),
+                )
             } else {
                 (x1, x1)
             };
@@ -855,7 +928,9 @@ impl Canvas {
         let (top, bottom) = self.rows((y0.min(y1) - outer).floor() as i32, (y0.max(y1) + outer).ceil() as i32);
         for py in top..bottom {
             let fy = py as f32 + 0.5;
-            let Some((lo, hi)) = near_segment(x0, y0, x1, y1, fy, outer) else { continue };
+            let Some((lo, hi)) = near_segment(x0, y0, x1, y1, fy, outer) else {
+                continue;
+            };
             let (lo, hi) = self.columns((lo - 0.5).ceil() as i32, ((hi - 0.5).floor() as i32) + 1);
             if lo >= hi {
                 continue;
@@ -941,16 +1016,7 @@ impl Canvas {
 
     /// Draw a run of text with its baseline at `(x, baseline)`. `px` is the em
     /// size. Returns the advance width; truncates with an ellipsis past `max_w`.
-    pub fn text(
-        &mut self,
-        face: &Face,
-        text: &str,
-        x: f32,
-        baseline: f32,
-        px: f32,
-        color: Rgba,
-        max_w: Option<f32>,
-    ) -> f32 {
+    pub fn text(&mut self, face: &Face, text: &str, x: f32, baseline: f32, px: f32, color: Rgba, max_w: Option<f32>) -> f32 {
         self.text_with(face, text, x, baseline, px, Ink::Solid(color), max_w)
     }
 
@@ -1066,7 +1132,11 @@ impl Drop for Canvas {
             let mut kept = KEPT.lock().expect("no one panics holding the kept memory");
             if kept.len() < KEEP {
                 kept.push(data);
-            } else if let Some(least) = kept.iter_mut().min_by_key(|v| v.capacity()).filter(|v| v.capacity() < data.capacity()) {
+            } else if let Some(least) = kept
+                .iter_mut()
+                .min_by_key(|v| v.capacity())
+                .filter(|v| v.capacity() < data.capacity())
+            {
                 *least = data;
             }
         }
@@ -1100,7 +1170,11 @@ fn front_cover(x: i32, y: i32, front: i32, h: i32, radius: f32) -> f32 {
     let (px, py, half) = (x as f32 + 0.5, y as f32 + 0.5, h as f32 / 2.0);
     let qx = front as f32 + radius - px;
     let qy = (py - half).abs() - (half - radius);
-    let d = if qx > 0.0 && qy > 0.0 { qx.hypot(qy) - radius } else { qx.max(qy) - radius };
+    let d = if qx > 0.0 && qy > 0.0 {
+        qx.hypot(qy) - radius
+    } else {
+        qx.max(qy) - radius
+    };
     (0.5 - d).clamp(0.0, 1.0)
 }
 
@@ -1165,7 +1239,10 @@ fn near_segment(x0: f32, y0: f32, x1: f32, y1: f32, y: f32, reach: f32) -> Optio
             (lo <= hi).then_some((x0 + lo, x0 + hi))
         })
         .flatten();
-    [end(x0, y0), end(x1, y1), side].into_iter().flatten().reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+    [end(x0, y0), end(x1, y1), side]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
 }
 
 /// How many deviations out a shadow reaches: beyond, under a 255th of its
@@ -1223,7 +1300,11 @@ mod tests {
             assert!((got - want).abs() <= 1.5, "{} px out: {got}, the stock list {want}", 10 * k);
         }
         assert_eq!(c.px(150, 150).expect("on the canvas")[0], 243, "inside is left for the rectangle");
-        assert_eq!(c.px(360, 150).expect("on the canvas")[0], 243, "it reaches no further than three deviations");
+        assert_eq!(
+            c.px(360, 150).expect("on the canvas")[0],
+            243,
+            "it reaches no further than three deviations"
+        );
     }
 
     /// A canvas two pixels wide whose row k is grey k.
@@ -1337,4 +1418,3 @@ mod tests {
         assert_eq!(part.data.chunks(4).map(|p| p[0]).collect::<Vec<_>>(), [2, 3, 4]);
     }
 }
-

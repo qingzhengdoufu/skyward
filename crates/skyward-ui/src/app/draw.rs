@@ -83,7 +83,7 @@ impl App {
                 whole.replace(&frame.canvas);
                 frame.canvas = whole;
             }
-            self.height = frame.height(&t);
+            self.height = frame.height(&t) + self.nav_height() as f32;
             self.frame = Some(frame);
             self.clamp_scroll();
             if std::mem::take(&mut self.snap) {
@@ -217,12 +217,36 @@ impl App {
     /// while a cable has just gone in, both as dark as the content stands
     /// as the panel goes off or comes up.
     pub fn compose(&mut self, out: &mut Canvas, f: &Fonts, info: &DeviceInfo, clock: &str, now: u64) {
+        if self.screen() == Screen::ControlCenter && self.state.control_clock != clock {
+            self.state.control_clock = clock.into();
+            if let Ok(time) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                self.state.control_date = fmt::date(self.state.lang, time.as_secs() as i64, self.state.time_zone);
+            }
+            self.refresh();
+        }
         let charge = self.charging.as_ref().map_or(0.0, |c| c.shown.level(now));
         if charge < 1.0 {
-            self.compose_page(out, f, info, clock, now);
+            if self.shade.is_some() && self.screen() == Screen::ControlCenter {
+                let mut sheet = Canvas::new(out.w, out.h);
+                self.compose_page(&mut sheet, f, info, clock, now);
+                let shade = self.shade.as_ref().expect("shade remains while drawing");
+                let extent = shade.extent(now, self.h as f32);
+                out.put(&shade.under, 0);
+                out.dim(1.0 - 0.28 * extent / self.h as f32);
+                out.put_rows(&sheet, 0, extent.round() as i32, 0);
+                let t = self.theme();
+                if extent < widgets::bar_bottom(&t) {
+                    widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+                }
+            } else {
+                self.compose_page(out, f, info, clock, now);
+            }
         }
         if charge > 0.0 {
             self.compose_charging(out, f, info, charge, now);
+        }
+        if charge < 1.0 {
+            self.draw_navigation(out);
         }
         out.dim(self.curtain.level(now));
     }
@@ -375,7 +399,9 @@ impl App {
             }
         }
         self.shown = Some(view);
-        widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        if screen != Screen::ControlCenter {
+            widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        }
         if let Some((text, _)) = &self.toast {
             widgets::toast(out, &t, f, text);
         }
@@ -551,7 +577,7 @@ impl App {
             shine(out, Group::Strip);
         }
         if let Some(d) = &frame.dock {
-            out.put(&d.canvas, (out.h - d.canvas.h) as i32);
+            out.put(&d.canvas, t.m.h as i32 - d.canvas.h as i32);
             shine(out, Group::Dock);
         }
         if frame.back {

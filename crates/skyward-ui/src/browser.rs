@@ -338,7 +338,7 @@ fn home(cx: &Ctx) -> Frame {
 fn full_page(cx: &Ctx) -> Frame {
     let (t, l) = (cx.t, cx.state.lang);
     let m = &t.m;
-    let mut c = long_page(cx);
+    let mut c = page(cx);
     let top = widgets::bar_bottom(t) + m.dp(8.0);
     let mut out = Vec::new();
     let back = Rect::new(m.margin, top, m.dp(44.0), m.dp(44.0));
@@ -362,33 +362,12 @@ fn full_page(cx: &Ctx) -> Frame {
         action: Action::BrowserAddress,
     });
     let mut y = top + back.h + m.dp(8.0);
-    let max_w = (m.w as f32 - m.margin * 2.0).max(m.dp(80.0)) as u32;
+    let area = full_viewport(t);
     if let Some(shot) = &cx.state.browser.full_shot {
-        if let Some((w, h, rgba)) = decode_picture(shot, max_w).and_then(|picture| resize_picture(picture, max_w)) {
+        if let Some(picture) = cx.state.browser.picture.clone().or_else(|| picture(shot)) {
+            let (w, h) = (picture.width, picture.height);
             let x = (m.w as f32 - w as f32) / 2.0;
-            let picture = {
-                let mut cv = Canvas::new(w, h);
-                cv.data = rgba;
-                cv
-            };
-            c.lay(&picture, x.round() as i32, y.round() as i32, 1.0);
-            let (cols, rows) = (12, 24);
-            for gy in 0..rows {
-                for gx in 0..cols {
-                    let rect = Rect::new(
-                        x + gx as f32 * w as f32 / cols as f32,
-                        y + gy as f32 * h as f32 / rows as f32,
-                        w as f32 / cols as f32,
-                        h as f32 / rows as f32,
-                    );
-                    let px = ((gx * 1000 + 500) / cols) as u16;
-                    let py = ((gy * 1000 + 500) / rows) as u16;
-                    out.push(Hit {
-                        rect,
-                        action: Action::BrowserPluginTap(px, py),
-                    });
-                }
-            }
+            c.blit_rgba(&picture.pixels, w, h, x.round() as i32, y.round() as i32);
             if let Some(progress) = cx.state.browser.full_progress.filter(|p| *p < 1.0) {
                 let progress = progress.clamp(0.0, 1.0);
                 c.fill_round_rect(
@@ -433,8 +412,29 @@ fn full_page(cx: &Ctx) -> Frame {
     let mut frame = Frame::new(t, fit(c, t, y), out, l.pick(BROWSER), top);
     frame.header = false;
     frame.back = false;
+    frame.browser_area = Some(area);
     frame.dock = Some(full_dock(cx));
     frame
+}
+
+pub fn full_viewport(t: &Theme) -> Rect {
+    let m = &t.m;
+    let y = widgets::bar_bottom(t) + m.dp(60.0);
+    Rect::new(
+        m.margin,
+        y,
+        m.w as f32 - m.margin * 2.0,
+        (m.h as f32 - y - m.dp(86.0)).max(m.dp(100.0)),
+    )
+}
+
+pub(crate) fn picture(bytes: &[u8]) -> Option<crate::app::BrowserPicture> {
+    let (width, height, pixels) = decode_png(bytes).or_else(|| decode_jpeg(bytes))?;
+    Some(crate::app::BrowserPicture {
+        width,
+        height,
+        pixels: std::sync::Arc::new(pixels),
+    })
 }
 
 fn loading(cx: &Ctx, url: &str) -> Frame {
@@ -656,7 +656,7 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     let (t, l) = (cx.t, cx.state.lang);
     let m = &t.m;
     let mut c = page(cx);
-    let top = m.content_top;
+    let top = widgets::bar_bottom(t) + m.dp(8.0);
     let mut out = Vec::new();
     let bar = address_bar(&mut c, cx, top, &article.url);
     out.push(Hit {
@@ -664,7 +664,7 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
         action: Action::BrowserAddress,
     });
     let header = article_head(&mut c, cx, article, bar + m.dp(12.0));
-    let header = if article.scripts {
+    let header = if article.scripts && article.blocks.is_empty() {
         let row = Row::new(l.pick(["此页面含 JavaScript", "此頁面含 JavaScript", "This page uses JavaScript"]))
             .subtitle(l.pick(["使用完整模式加载脚本页面", "使用完整模式載入指令碼頁面", "Open it in full mode"]))
             .icon(PURPLE, Icon::Layers)
@@ -711,6 +711,8 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     }
     out.extend(rows);
     let mut frame = Frame::new(t, c, out, l.pick(BROWSER), top);
+    frame.header = false;
+    frame.back = false;
     frame.rows = Some(Rows { edges, action: None });
     if cx.state.browser.field.is_some() {
         let (sheet, caret) = form_sheet(cx);
@@ -725,22 +727,11 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
 fn article_head(c: &mut Canvas, cx: &Ctx, page: &WebPage, top: f32) -> f32 {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
     let m = &t.m;
-    let x = m.margin;
-    let w = m.w as f32 - m.margin * 2.0;
-    let pad = m.inner + m.dp(4.0);
-    let max = w - pad * 2.0;
-    let mut title_lines = widgets::wrap(c, &f.heading, &page.title, m.dp(23.0), max);
-    if title_lines.len() > 3 {
-        title_lines.truncate(3);
-        if let Some(last) = title_lines.last_mut() {
-            last.push('…');
-        }
-    }
+    let x = m.title_x;
+    let max = m.w as f32 - x * 2.0;
+    let title_lines = widgets::wrap(c, &f.heading, &page.title, m.dp(20.0), max);
     let desc = page.description.as_deref().filter(|d| !d.trim().is_empty());
-    let mut desc_lines = desc.map(|d| widgets::wrap(c, &f.body, d, m.sub_px, max)).unwrap_or_default();
-    if desc_lines.len() > 2 {
-        desc_lines.truncate(2);
-    }
+    let desc_lines = desc.map(|d| widgets::wrap(c, &f.body, d, m.sub_px, max)).unwrap_or_default();
     let note = page.truncated.then(|| {
         l.pick([
             "页面较长，只显示了前面一部分。",
@@ -748,40 +739,43 @@ fn article_head(c: &mut Canvas, cx: &Ctx, page: &WebPage, top: f32) -> f32 {
             "The page is long, so only its start shows.",
         ])
     });
-    let h = pad * 2.0
-        + m.dp(16.0)
-        + m.dp(6.0)
-        + title_lines.len() as f32 * m.dp(30.0)
-        + if desc_lines.is_empty() {
-            0.0
-        } else {
-            m.dp(8.0) + desc_lines.len() as f32 * m.dp(19.0)
-        }
-        + m.dp(8.0)
-        + m.dp(16.0)
-        + if note.is_some() { m.dp(20.0) } else { 0.0 };
-    c.fill_round_rect(x, top, w, h, m.card_radius, t.pal.card);
-    let mut y = top + pad;
-    c.text_top(&f.label, &page.site, x + pad, y, m.dp(13.0), t.pal.accent, Some(max));
-    y += m.dp(16.0) + m.dp(6.0);
+    let mut y = top + m.dp(12.0);
     for line in &title_lines {
-        c.text_top(&f.heading, line, x + pad, y, m.dp(23.0), t.pal.text, Some(max));
-        y += m.dp(30.0);
+        c.text_top(&f.heading, line, x, y, m.dp(20.0), t.pal.text, Some(max));
+        y += m.dp(27.0);
     }
     if !desc_lines.is_empty() {
         y += m.dp(8.0);
         for line in &desc_lines {
-            c.text_top(&f.body, line, x + pad, y, m.sub_px, t.pal.subtitle, Some(max));
+            c.text_top(&f.body, line, x, y, m.sub_px, t.pal.subtitle, Some(max));
             y += m.dp(19.0);
         }
     }
-    y += m.dp(8.0);
-    c.text_top(&f.value, &page.url, x + pad, y, m.dp(12.0), t.pal.value, Some(max));
-    y += m.dp(16.0);
     if let Some(note) = note {
-        c.text_top(&f.value, note, x + pad, y, m.dp(12.0), ORANGE, Some(max));
+        y = widgets::footnote(c, t, f, y, note);
     }
-    top + h
+    y + m.dp(12.0)
+}
+
+fn text_style<'a>(cx: &'a Ctx, style: &web::Style, heading: Option<u8>) -> (&'a crate::font::Face, f32, f32) {
+    let m = &cx.t.m;
+    let font = if style.bold {
+        &cx.f.strong
+    } else if heading.is_some() {
+        &cx.f.heading
+    } else {
+        &cx.f.body
+    };
+    let px = style
+        .size
+        .map(|s| m.dp(s as f32).clamp(m.dp(12.0), m.dp(32.0)))
+        .unwrap_or_else(|| heading.map_or(m.dp(15.0), |level| heading_px(level, cx.t)));
+    let pitch = if let Some(level) = heading {
+        (px * 1.3).max(heading_pitch(level, cx.t))
+    } else {
+        (px * 1.45).max(m.dp(20.0))
+    };
+    (font, px, pitch)
 }
 
 fn block_height(c: &Canvas, cx: &Ctx, block: &WebBlock) -> f32 {
@@ -790,14 +784,15 @@ fn block_height(c: &Canvas, cx: &Ctx, block: &WebBlock) -> f32 {
     let x = m.title_x;
     let w = m.w as f32 - x * 2.0;
     match block {
-        WebBlock::Heading { level, text, .. } => {
-            let px = heading_px(*level, t);
-            let lines = widgets::wrap(c, &f.heading, text, px, w);
-            m.dp(20.0) + lines.len() as f32 * heading_pitch(*level, t) + m.dp(8.0)
+        WebBlock::Heading { level, text, style } => {
+            let (font, px, pitch) = text_style(cx, style, Some(*level));
+            let lines = widgets::wrap(c, font, text, px, w);
+            m.dp(20.0) + lines.len() as f32 * pitch + m.dp(8.0)
         }
-        WebBlock::Paragraph { text, .. } => {
-            let lines = widgets::wrap(c, &f.body, text, m.dp(15.0), w);
-            m.dp(10.0) + lines.len() as f32 * m.dp(23.0) + m.dp(10.0)
+        WebBlock::Paragraph { text, style } => {
+            let (font, px, pitch) = text_style(cx, style, None);
+            let lines = widgets::wrap(c, font, text, px, w);
+            m.dp(10.0) + lines.len() as f32 * pitch + m.dp(10.0)
         }
         WebBlock::Bullet { text, .. } => {
             let lines = widgets::wrap(c, &f.body, text, m.dp(15.0), w - m.dp(22.0));
@@ -840,7 +835,7 @@ fn heading_pitch(level: u8, t: &Theme) -> f32 {
     })
 }
 
-fn link_height(c: &Canvas, t: &Theme, f: &Fonts, l: Lang, _label: &str, url: &str, download: bool) -> f32 {
+fn link_height(c: &Canvas, t: &Theme, f: &Fonts, l: Lang, label: &str, url: &str, download: bool) -> f32 {
     let m = &t.m;
     let card_w = m.w as f32 - m.margin * 2.0;
     let text_x = m.inner + m.icon + m.icon_gap;
@@ -851,9 +846,14 @@ fn link_height(c: &Canvas, t: &Theme, f: &Fonts, l: Lang, _label: &str, url: &st
     let text_max = (card_w - text_x - trail_w).max(m.dp(40.0));
     let sub = web::host_of(url);
     let sub_lines = widgets::wrap(c, &f.body, &sub, m.sub_px, text_max);
+    let titles = widgets::wrap(c, &f.heading, label, m.row_title_px, text_max);
     let (tt, tb) = f.heading.ink(m.row_title_px);
     let (st, sb) = f.body.ink(m.sub_px);
-    let block = (tb - tt) + m.sub_gap + (sub_lines.len() as f32 - 1.0) * m.sub_pitch + (sb - st);
+    let block = (tb - tt)
+        + (titles.len().saturating_sub(1) as f32) * m.dp(24.0)
+        + m.sub_gap
+        + (sub_lines.len() as f32 - 1.0) * m.sub_pitch
+        + (sb - st);
     let h = (block + m.row_pad_v * 2.0).max(m.row_h) + m.dp(10.0);
     h.ceil()
 }
@@ -866,8 +866,7 @@ fn draw_block(c: &mut Canvas, cx: &Ctx, block: &WebBlock) {
     let w = m.w as f32 - x * 2.0;
     match block {
         WebBlock::Heading { level, text, style } => {
-            let px = style.size.map(|s| m.dp(s as f32)).unwrap_or_else(|| heading_px(*level, t));
-            let font = if style.bold { &f.strong } else { &f.heading };
+            let (font, px, pitch) = text_style(cx, style, Some(*level));
             let color = style.color.map(rgba).unwrap_or(t.pal.text);
             let mut y = m.dp(20.0);
             for line in widgets::wrap(c, font, text, px, w) {
@@ -876,15 +875,11 @@ fn draw_block(c: &mut Canvas, cx: &Ctx, block: &WebBlock) {
                 if style.underline {
                     c.fill_rect(lx, y + px + m.dp(2.0), c.text_width(font, &line, px), m.dp(1.0), color);
                 }
-                y += (px * 1.3).max(heading_pitch(*level, t));
+                y += pitch;
             }
         }
         WebBlock::Paragraph { text, style } => {
-            let px = style
-                .size
-                .map(|s| m.dp(s as f32).clamp(m.dp(12.0), m.dp(24.0)))
-                .unwrap_or(m.dp(15.0));
-            let font = if style.bold { &f.strong } else { &f.body };
+            let (font, px, pitch) = text_style(cx, style, None);
             let color = style.color.map(rgba).unwrap_or(t.pal.text);
             let mut y = m.dp(10.0);
             if let Some(bg) = style.background {
@@ -903,7 +898,7 @@ fn draw_block(c: &mut Canvas, cx: &Ctx, block: &WebBlock) {
                 if style.underline {
                     c.fill_rect(lx, y + px + m.dp(2.0), c.text_width(font, &line, px), m.dp(1.0), color);
                 }
-                y += (px * 1.45).max(m.dp(20.0));
+                y += pitch;
             }
         }
         WebBlock::Bullet { text, .. } => {
@@ -938,7 +933,7 @@ fn draw_block(c: &mut Canvas, cx: &Ctx, block: &WebBlock) {
                 t.pal.card,
             );
             let mut y = m.dp(16.0);
-            for line in text.lines().take(40) {
+            for line in text.lines() {
                 for wrapped in widgets::wrap(c, &f.body, line, m.dp(13.0), w - m.dp(24.0)) {
                     c.text_top(&f.body, &wrapped, x + m.dp(12.0), y, m.dp(13.0), t.pal.info, None);
                     y += m.dp(20.0);
@@ -956,8 +951,29 @@ fn draw_block(c: &mut Canvas, cx: &Ctx, block: &WebBlock) {
                 false => (BLUE, Icon::Globe),
             };
             let host = web::host_of(url);
-            let row = Row::new(label).icon(color, icon).subtitle(&host).trail(trail);
+            let text_x = m.margin + m.inner + m.icon + m.icon_gap;
+            let trailing = m.chevron_inset
+                + m.chevron_w
+                + m.value_gap * 2.0
+                + if *download {
+                    c.text_width(&f.value, trail_label, m.sub_px)
+                } else {
+                    0.0
+                };
+            let width = (m.w as f32 - m.margin - text_x - trailing).max(m.dp(40.0));
+            let lines = widgets::wrap(c, &f.heading, label, m.row_title_px, width);
+            let title = lines.first().cloned().unwrap_or_default();
+            let row = Row::new(&title).icon(color, icon).subtitle(&host).trail(trail);
             let _ = widgets::list(c, t, f, m.dp(5.0), &[row]);
+            if lines.len() > 1 {
+                c.fill_rect(text_x, m.dp(10.0), width, c.h as f32 - m.dp(14.0), t.pal.card);
+                let mut y = m.dp(16.0);
+                for line in lines {
+                    c.text_top(&f.heading, &line, text_x, y, m.row_title_px, t.pal.text, Some(width));
+                    y += m.dp(24.0);
+                }
+                c.text_top(&f.body, &host, text_x, y + m.dp(4.0), m.sub_px, t.pal.subtitle, Some(width));
+            }
         }
         WebBlock::Image { alt, data, .. } => {
             if data.is_some() {
@@ -1061,6 +1077,10 @@ fn full_input(cx: &Ctx) -> Frame {
         action: Action::Type(cap),
     }));
     frame.canvas = frame.canvas.crop_height(m.h);
+    frame.browser_area = frame.browser_area.map(|r| Rect {
+        h: (field_top - r.y).max(1.0),
+        ..r
+    });
     frame.dock = None;
     frame.caret = Some(caret);
     frame
@@ -1742,7 +1762,7 @@ fn decode_picture(bytes: &[u8], max_w: u32) -> Option<(u32, u32, Vec<u8>)> {
 
 fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::EXPAND);
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
     let (w, h) = (reader.info().width, reader.info().height);
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > 8_000_000 {

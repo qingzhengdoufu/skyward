@@ -11,6 +11,144 @@ const H: u32 = 3200;
 const PPD: f32 = 3.5;
 
 #[test]
+fn browser_address_changes_reuse_one_browser_page() {
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.act(Action::Open(Screen::Browser), 0);
+    for n in 0..10 {
+        app.act(Action::BrowserAddress, 0);
+        app.state.browser.address = format!("https://example.com/{n}");
+        app.act(Action::Type(Cap::Enter), 0);
+        assert_eq!(app.screen(), Screen::Browser);
+        assert_eq!(app.stack.len(), 2);
+    }
+    app.act(Action::NavHome, 0);
+    assert_eq!(app.screen(), Screen::Home);
+}
+
+#[test]
+fn a_partial_shade_reveals_its_header_immediately() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.set_navigation(true);
+    let mut c = Canvas::new(W, H);
+    app.compose(&mut c, &f, &i, "12:34", 0);
+    app.touch(Touch::Down(500.0, 10.0), &f, 1000);
+    app.touch(Touch::Move(500.0, 600.0), &f, 1100);
+    app.compose(&mut c, &f, &i, "12:34", 1100);
+    assert_eq!(app.shade.as_ref().unwrap().extent, 590.0);
+    let header = c.crop(60, 110, 800, 160);
+    assert!(
+        header.data.as_chunks::<4>().0.iter().any(|p| p[0] > 180 && p[1] > 180 && p[2] > 180),
+        "the large clock is visible during the pull"
+    );
+}
+
+#[test]
+fn navigation_home_parks_the_page_without_cancelling_an_installer() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Installing, W, H, PPD);
+    app.set_navigation(true);
+    app.state.install = Install::Scripting {
+        stage: None,
+        running: true,
+    };
+    let job = app.state.install.clone();
+    assert!(app.act(Action::NavHome, 1000).is_empty());
+    assert_eq!(app.screen(), Screen::Home);
+    assert_eq!(app.state.install, job);
+    assert!(app.act(Action::NavTasks, 1100).is_empty());
+    assert_eq!(app.screen(), Screen::Tasks);
+    assert!(app.act(Action::ResumeTask, 1200).is_empty());
+    assert_eq!(app.screen(), Screen::Installing);
+    assert_eq!(app.state.install, job);
+    app.frame(&f, &i);
+    let y = H as f32 - app.nav_height() as f32 / 2.0;
+    app.touch(Touch::Down(W as f32 / 2.0, y), &f, 2000);
+    assert!(app.touch(Touch::Up, &f, 2010).is_empty());
+    assert_eq!(app.screen(), Screen::Home);
+    assert_eq!(app.state.install, job);
+}
+
+#[test]
+fn shade_tracks_the_finger_then_dismisses_to_the_previous_scroll_position() {
+    let (f, i) = (fonts(), info());
+    let mut app = opened(Screen::Settings, &f, &i);
+    app.set_navigation(true);
+    app.frame(&f, &i);
+    app.top_mut().1 = 200.0;
+    app.touch(Touch::Down(500.0, 10.0), &f, 1000);
+    app.touch(Touch::Move(500.0, 400.0), &f, 1100);
+    assert_eq!(app.screen(), Screen::ControlCenter);
+    assert_eq!(app.shade.as_ref().unwrap().extent, 390.0);
+    app.touch(Touch::Up, &f, 1120);
+    app.tick(2200);
+    assert_eq!(app.shade.as_ref().unwrap().extent, H as f32);
+    app.frame(&f, &i);
+    let track = app
+        .frame(&f, &i)
+        .hits
+        .iter()
+        .find(|h| h.action == Action::Slider(Slider::Brightness))
+        .unwrap()
+        .rect;
+    app.touch(Touch::Down(track.x + track.w * 0.5, track.centre().1), &f, 2300);
+    app.touch(Touch::Move(track.x + track.w * 0.8, track.centre().1 - 10.0), &f, 2340);
+    app.touch(Touch::Up, &f, 2360);
+    assert!(app.shade.is_some());
+    app.touch(Touch::Down(500.0, 60.0), &f, 2500);
+    app.touch(Touch::Move(500.0, -500.0), &f, 2580);
+    app.touch(Touch::Up, &f, 2590);
+    app.tick(3700);
+    assert!(app.shade.is_none());
+    assert_eq!(app.screen(), Screen::Settings);
+    assert_eq!(app.top().1, 200.0);
+}
+
+#[test]
+fn browser_touch_forwards_down_move_and_up_without_waiting_for_release() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    let area = app.frame(&f, &i).browser_area.unwrap();
+    let (x, y) = area.centre();
+    assert!(matches!(
+        app.touch(Touch::Down(x, y), &f, 1000).as_slice(),
+        [Effect::BrowserPluginTouch { phase: 0, x: 500, y: 500 }]
+    ));
+    assert!(matches!(
+        app.touch(Touch::Move(x, y - 200.0), &f, 1030).as_slice(),
+        [Effect::BrowserPluginTouch { phase: 1, .. }]
+    ));
+    assert!(matches!(
+        app.touch(Touch::Up, &f, 1040).as_slice(),
+        [Effect::BrowserPluginTouch { phase: 2, .. }]
+    ));
+    assert!(matches!(app.drag, Drag::Idle));
+}
+
+#[test]
+fn navigation_leaves_keyboard_and_browser_tools_above_its_reserved_strip() {
+    let (f, i) = (fonts(), info());
+    for screen in [Screen::BrowserAddress, Screen::Terminal, Screen::WlanPassword, Screen::Search] {
+        let mut app = App::new(screen, W, H, PPD);
+        app.set_navigation(true);
+        let theme = app.theme();
+        if screen == Screen::WlanPassword {
+            continue;
+        }
+        let fr = app.frame(&f, &i);
+        for hit in fr.hits.iter().filter(|h| matches!(h.action, Action::Type(_))) {
+            assert!(hit.rect.y + hit.rect.h <= theme.m.h as f32 + 1.0);
+        }
+        if let Some(dock) = &fr.dock {
+            assert!(dock.canvas.h < theme.m.h);
+        }
+    }
+}
+
+#[test]
 fn aurora_tabs_keep_the_previous_page_and_navigation_stays_in_the_selected_engine() {
     let mut app = App::new(Screen::Browser, W, H, PPD);
     app.browser_read("https://example.com/one".into());

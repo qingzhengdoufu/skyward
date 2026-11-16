@@ -1,6 +1,23 @@
 use super::*;
 impl Pages<'_> {
     pub(super) fn browser_told(&mut self, now: u64) {
+        if let Some(worker) = &self.browser_stream {
+            let theme = self.app.theme();
+            let area = skyward_ui::browser::full_viewport(&theme);
+            let height = if self.app.screen() == Screen::BrowserAddress {
+                (theme.m.h as f32 - skyward_ui::widgets::keyboard_height(&theme) - theme.m.dp(64.0) - area.y).max(300.0)
+            } else {
+                area.h
+            };
+            let size = (area.w.round() as u32, height.round() as u32);
+            if self.browser_viewport != Some(size) {
+                worker.command(crate::browser::Control::Viewport {
+                    width: size.0,
+                    height: size.1,
+                });
+                self.browser_viewport = Some(size);
+            }
+        }
         let mut downloads = Vec::new();
         let mut stream_dead = false;
         if let Some(worker) = &self.browser_stream {

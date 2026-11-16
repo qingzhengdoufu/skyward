@@ -620,12 +620,16 @@ fn sanitize_name(name: &str) -> String {
 
 /// A page for what a server gives as plain text: blank lines divide
 /// paragraphs, and an address on a line of its own is a link.
-fn plain_page(url: &str, text: &str, truncated: bool) -> Page {
+fn plain_page(url: &str, text: &str, mut truncated: bool) -> Page {
     let mut blocks = Vec::new();
-    for para in text.split("\n\n").take(MAX_BLOCKS) {
+    for para in text.split("\n\n") {
         let para = para.trim();
         if para.is_empty() {
             continue;
+        }
+        if blocks.len() >= MAX_BLOCKS {
+            truncated = true;
+            break;
         }
         if readable_url(para) && !para.contains(char::is_whitespace) {
             blocks.push(Block::Link {
@@ -635,10 +639,17 @@ fn plain_page(url: &str, text: &str, truncated: bool) -> Page {
                 style: Style::default(),
             });
         } else {
-            blocks.push(Block::Paragraph {
-                text: para.chars().take(MAX_BLOCK_CHARS).collect(),
-                style: Style::default(),
-            });
+            let mut chars = para.chars().peekable();
+            while chars.peek().is_some() {
+                if blocks.len() >= MAX_BLOCKS {
+                    truncated = true;
+                    break;
+                }
+                blocks.push(Block::Paragraph {
+                    text: chars.by_ref().take(MAX_BLOCK_CHARS).collect(),
+                    style: Style::default(),
+                });
+            }
         }
     }
     let title = blocks
@@ -763,7 +774,7 @@ pub const FOLDER: &str = "Download/Skyward";
 
 /// Read an HTML page's text, headings, lists and links.
 pub fn parse(url: &str, html: &str, truncated: bool) -> Page {
-    let content = body_of(html);
+    let content = html;
     let mut p = Parser::new(url);
     p.rules = css_rules(html);
     if let Some(href) = base_href(html)
@@ -787,6 +798,7 @@ pub fn parse(url: &str, html: &str, truncated: bool) -> Page {
             continue;
         }
         if p.too_long() {
+            p.truncated = true;
             break;
         }
         let Some(at) = rest.find('<') else {
@@ -801,7 +813,7 @@ pub fn parse(url: &str, html: &str, truncated: bool) -> Page {
             }
             continue;
         }
-        let Some(end) = rest[at..].find('>') else {
+        let Some(end) = tag_end(&rest[at..]) else {
             break;
         };
         let tag = rest[at + 1..at + end].to_string();
@@ -809,6 +821,19 @@ pub fn parse(url: &str, html: &str, truncated: bool) -> Page {
         p.tag(&tag);
     }
     p.finish(truncated)
+}
+
+fn tag_end(tag: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, ch) in tag.char_indices() {
+        match ch {
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            '>' if quote.is_none() => return Some(index),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The address a page's `<base href>` gives its relative links, where it
@@ -822,31 +847,6 @@ fn base_href(html: &str) -> Option<String> {
     let end = html[at..].find('>')?;
     let tag = &html[at + 1..at + end];
     attr(&attributes(tag), "href")
-}
-
-/// The part of `html` a page keeps its own text in: from its `<main>` or
-/// `<article>` on, where it has one, and the whole page otherwise. What is
-/// outside is the site's menus, which a reader does not need.
-fn body_of(html: &str) -> &str {
-    for tag in ["main", "article"] {
-        let open = format!("<{tag}");
-        let Some(at) = find_ci(html, &open) else { continue };
-        let after = &html[at + open.len()..];
-        let next = after.chars().next();
-        if !matches!(next, Some('>' | ' ' | '\t' | '\n' | '\r')) {
-            continue;
-        }
-        let Some(start) = after.find('>').map(|i| at + open.len() + i + 1) else {
-            continue;
-        };
-        let close = format!("</{tag}");
-        let end = find_ci(&html[start..], &close).map_or(html.len(), |i| start + i);
-        let body = &html[start..end];
-        if !body.trim().is_empty() {
-            return body;
-        }
-    }
-    html
 }
 
 struct Parser {
@@ -980,8 +980,7 @@ impl Parser {
                 self.scripts = true;
                 self.skip = Some(name.to_string());
             }
-            "style" | "noscript" | "template" | "svg" | "iframe" | "canvas" | "nav" | "footer" | "aside" | "select" | "option"
-            | "textarea" => {
+            "style" | "template" | "svg" | "iframe" | "canvas" | "select" | "option" | "textarea" => {
                 self.skip = Some(name.to_string());
             }
             "title" => self.title_tag = true,
@@ -1250,7 +1249,11 @@ impl Parser {
                 });
             }
         }
-        let text = collapse(&self.text);
+        let text = if self.mode == Mode::Code {
+            self.text.clone()
+        } else {
+            collapse(&self.text)
+        };
         self.text.clear();
         if text.is_empty() {
             return;
@@ -1259,16 +1262,23 @@ impl Parser {
             self.truncated = true;
             return;
         }
-        let text: String = text.chars().take(MAX_BLOCK_CHARS).collect();
         let style = self.style;
-        let block = match self.mode {
-            Mode::Para => Block::Paragraph { text, style },
-            Mode::Heading(level) => Block::Heading { level, text, style },
-            Mode::Bullet => Block::Bullet { text, style },
-            Mode::Quote => Block::Quote { text, style },
-            Mode::Code => Block::Code { text, style },
-        };
-        self.blocks.push(block);
+        let mut chars = text.chars().peekable();
+        while chars.peek().is_some() {
+            if self.blocks.len() >= MAX_BLOCKS {
+                self.truncated = true;
+                break;
+            }
+            let text = chars.by_ref().take(MAX_BLOCK_CHARS).collect();
+            let block = match self.mode {
+                Mode::Para => Block::Paragraph { text, style },
+                Mode::Heading(level) => Block::Heading { level, text, style },
+                Mode::Bullet => Block::Bullet { text, style },
+                Mode::Quote => Block::Quote { text, style },
+                Mode::Code => Block::Code { text, style },
+            };
+            self.blocks.push(block);
+        }
     }
 
     fn finish(&mut self, cut: bool) -> Page {
@@ -1917,6 +1927,73 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), body);
         assert_eq!(seen.last().unwrap().done, body.len() as u64);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_paragraphs_and_code_keep_all_characters() {
+        let text = "中".repeat(9000);
+        let page = parse("https://example.com/", &format!("<title>Title</title><p>{text}</p>"), false);
+        let joined: String = page
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let Block::Paragraph { text, .. } = b {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(joined, text);
+        assert!(!page.truncated);
+        let code = "    example();\n".repeat(80);
+        let page = parse("https://example.com/", &format!("<pre>{code}</pre>"), false);
+        assert!(matches!(&page.blocks[0],Block::Code{text,..} if text==&code));
+    }
+
+    #[test]
+    fn plain_text_and_quoted_attributes_do_not_drop_content() {
+        let text = "正文".repeat(6000);
+        let page = plain_page("https://example.com/", &text, false);
+        let joined: String = page
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let Block::Paragraph { text, .. } = b {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(joined, text);
+        let page = parse("https://example.com/", "<p title='a > b'>前文</p><p>后文</p>", false);
+        let joined: String = page
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let Block::Paragraph { text, .. } = b {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(joined, "前文后文");
+    }
+
+    #[test]
+    fn native_reader_preserves_headers_sidebars_fallbacks_and_the_document_title() {
+        let page = parse(
+            "https://example.com/",
+            "<title>Actual title</title><header>Header text</header><main><p>Main text</p></main><aside>Related text</aside><noscript>Fallback text</noscript>",
+            false,
+        );
+        assert_eq!(page.title, "Actual title");
+        let text = format!("{:?}", page.blocks);
+        for expected in ["Header text", "Main text", "Related text", "Fallback text"] {
+            assert!(text.contains(expected), "{expected}");
+        }
     }
 
     #[test]

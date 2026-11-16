@@ -112,6 +112,7 @@ pub struct PluginDownload {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Browser {
+    pub picture: Option<BrowserPicture>,
     pub address: String,
     pub url: String,
     pub view: BrowserView,
@@ -140,6 +141,7 @@ pub struct Browser {
 impl Default for Browser {
     fn default() -> Self {
         Browser {
+            picture: None,
             address: String::new(),
             url: String::new(),
             view: BrowserView::Home,
@@ -690,6 +692,7 @@ impl App {
         }
         match shot {
             Ok(shot) => {
+                self.state.browser.picture = crate::browser::picture(&shot);
                 self.state.browser.full_shot = Some(shot);
                 self.state.browser.full_progress = Some(1.0);
                 self.state.browser.view = BrowserView::Full;
@@ -763,6 +766,13 @@ impl App {
             self.refresh();
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BrowserPicture {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: std::sync::Arc<Vec<u8>>,
 }
 
 fn cookie_header(cookies: &[Cookie], url: &str) -> Option<String> {

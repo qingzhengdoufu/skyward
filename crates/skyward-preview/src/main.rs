@@ -10,10 +10,10 @@ use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Bands, Joined, Link, Network, Power, Stage as Joining, Traffic, Wlan};
 use skyward_systems::{Named, Other, Overview, Who};
 use skyward_ui::app::{
-    Action, Adding, App, Asked, BackupAt, BackupEnd, BackupEntry, BackupJob, BackupRefusal, BrowserDownload, BrowserSave, BrowserView, Choice, Clip,
-    Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have, Held, Install,
-    ItemEnd, JobEnd, Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, SCREEN_OFF, Screen, SkywardEnd, SkywardJob,
-    SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
+    Action, Adding, App, Asked, BackupAt, BackupEnd, BackupEntry, BackupJob, BackupRefusal, BrowserDownload, BrowserSave, BrowserView,
+    Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have,
+    Held, Install, ItemEnd, JobEnd, Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, SCREEN_OFF, Screen,
+    SkywardEnd, SkywardJob, SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
 };
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
 use skyward_ui::{Canvas, Ctx, Fonts, Lang, Theme, editor, fmt, pages};
@@ -209,6 +209,7 @@ fn main() -> Result<()> {
                     ("control", Screen::ControlCenter),
                 ] {
                     let mut app = App::new(screen, w, h, ppd);
+                    app.set_navigation(true);
                     app.state.lang = lang;
                     app.state.dark = dark;
                     app.state.data = Data::Open;
@@ -244,11 +245,14 @@ fn main() -> Result<()> {
                     if name == "browser-keys" {
                         app.state.browser.address = "https://github.com/qingzhengdoufu/skyward".into();
                     }
-                    if name.starts_with("browser-full-") && name!="browser-full-plugin" && let Some(path)=std::env::var_os("SKYWARD_BROWSER_SHOT") {
-                            app.state.browser.full_active=true;
-                            app.state.browser.url="https://example.com/".into();
-                            app.state.browser.full_shot=Some(std::fs::read(path)?);
-                            app.state.browser.view=BrowserView::Full;
+                    if name.starts_with("browser-full-")
+                        && name != "browser-full-plugin"
+                        && let Some(path) = std::env::var_os("SKYWARD_BROWSER_SHOT")
+                    {
+                        app.state.browser.full_active = true;
+                        app.state.browser.url = "https://example.com/".into();
+                        app.state.browser.full_shot = Some(std::fs::read(path)?);
+                        app.state.browser.view = BrowserView::Full;
                     }
                     if name == "root-modules" {
                         app.state.root_modules = Some(Ok((
@@ -279,10 +283,15 @@ fn main() -> Result<()> {
                         app.state.browser.saving = Some(0);
                     }
 
+                    app.state.control_clock = CLOCK.into();
+                    app.state.control_date = "2026年11月16日".into();
                     write_png(
                         &out.join(format!("v1-{name}-{}-{dark}.png", lang.tag())),
                         &whole_page(&mut app, &fonts, &info),
                     )?;
+                    let mut screen_canvas = Canvas::new(w, h);
+                    app.compose(&mut screen_canvas, &fonts, &info, CLOCK, 0);
+                    write_png(&out.join(format!("screen-{name}-{}-{dark}.png", lang.tag())), &screen_canvas)?;
                 }
             }
         }
@@ -2511,7 +2520,9 @@ fn whole_page(app: &mut App, f: &Fonts, info: &DeviceInfo) -> Canvas {
     if let Some(d) = &frame.dock {
         c.put(&d.canvas, (c.h - d.canvas.h) as i32);
     }
-    widgets::status_bar(&mut c, &t, f, &app.bar(CLOCK, info), t.pal.status);
+    if screen != Screen::ControlCenter {
+        widgets::status_bar(&mut c, &t, f, &app.bar(CLOCK, info), t.pal.status);
+    }
     c
 }
 

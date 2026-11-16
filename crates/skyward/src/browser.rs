@@ -5,6 +5,7 @@ use crate::cdp::Cdp;
 use anyhow::{Context, Result};
 use skyward_net::http::{self, Servers};
 use skyward_net::web::{self, Opened, Saving};
+use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -52,29 +53,23 @@ pub enum Task {
         dir: PathBuf,
         url: String,
     },
-    FullTap {
-        x: u16,
-        y: u16,
-    },
-    FullPinch {
-        scale: f64,
-    },
-    FullText {
-        text: String,
-    },
-    FullScroll {
-        dy: i64,
-    },
-    FullReload,
-    FullNavigate {
-        url: String,
-    },
     FullStop,
     /// Fetch the plugin package from a release URL.
     PluginDownload {
         url: String,
         path: PathBuf,
     },
+}
+
+pub enum Control {
+    Tap { x: u16, y: u16 },
+    Touch { phase: u8, x: u16, y: u16 },
+    Viewport { width: u32, height: u32 },
+    Pinch { scale: f64 },
+    Text { text: String },
+    Scroll { dy: i64 },
+    Reload,
+    Navigate { url: String },
 }
 
 pub enum Event {
@@ -178,17 +173,10 @@ fn full_started(dir: &Path, url: &str) -> Result<Cdp> {
     Cdp::connect()
 }
 
-fn full_page_shot(cdp: &mut Cdp) -> Result<Vec<u8>> {
-    cdp.screenshot()
-}
-
-fn full_result(cdp: &mut Cdp) -> (Result<Vec<u8>, String>, bool) {
-    let focus = cdp.focus_is_text();
-    (full_page_shot(cdp).map_err(|e| format!("{e:#}")), focus)
-}
-
 pub struct Worker {
     events: Receiver<Event>,
+    commands: Arc<Mutex<VecDeque<Control>>>,
+    latest: Arc<Mutex<Option<Vec<u8>>>>,
     /// Readable while events wait.
     wake: OwnedFd,
     stop: Arc<AtomicBool>,
@@ -205,6 +193,10 @@ impl Worker {
         }
         let (wake, signal) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         let (tx, events) = mpsc::sync_channel(4);
+        let commands = Arc::new(Mutex::new(VecDeque::new()));
+        let inputs = commands.clone();
+        let latest = Arc::new(Mutex::new(None));
+        let newest = latest.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let agent: Arc<Mutex<Option<ureq::Agent>>> = Arc::new(Mutex::new(None));
         let (stopping, using) = (stop.clone(), agent.clone());
@@ -212,6 +204,13 @@ impl Worker {
             .name("browser".into())
             .spawn(move || {
                 let tell = |event: Event| {
+                    if let Event::Shot(Ok(frame)) = event {
+                        if let Ok(mut latest) = newest.lock() {
+                            *latest = Some(frame);
+                        }
+                        unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
+                        return;
+                    }
                     let _ = tx.send(event);
                     unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
                 };
@@ -275,6 +274,33 @@ impl Worker {
                             tell(Event::Shot(cdp.screenshot().map_err(|e| format!("{e:#}"))));
                             cdp.start_screencast()?;
                             while !stopping.load(Ordering::Relaxed) {
+                                let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
+                                for command in commands {
+                                    match command {
+                                        Control::Touch { phase, x, y } => {
+                                            cdp.touch_event(phase, x, y)?;
+                                            if phase == 2 {
+                                                tell(Event::Focus(cdp.focus_is_text()));
+                                            }
+                                        }
+                                        Control::Tap { x, y } => {
+                                            cdp.touch(crate::cdp::WIDTH * u32::from(x) / 1000, cdp.height() * u32::from(y) / 1000)?;
+                                            tell(Event::Focus(cdp.focus_is_text()));
+                                        }
+                                        Control::Pinch { scale } => cdp.pinch(crate::cdp::WIDTH / 2, cdp.height() / 2, scale)?,
+                                        Control::Text { text } => {
+                                            cdp.insert_text(&text)?;
+                                            tell(Event::Focus(false));
+                                        }
+                                        Control::Scroll { dy } => cdp.scroll(dy)?,
+                                        Control::Reload => cdp.reload()?,
+                                        Control::Navigate { url } => cdp.navigate(&url)?,
+                                        Control::Viewport { width, height } => {
+                                            cdp.viewport(width, height)?;
+                                            cdp.start_screencast()?;
+                                        }
+                                    }
+                                }
                                 match cdp.next_event()? {
                                     Some(crate::cdp::Event::Frame(frame)) => tell(Event::Shot(Ok(frame))),
                                     Some(crate::cdp::Event::Download { url, name }) => tell(Event::Download { url, name }),
@@ -289,100 +315,9 @@ impl Worker {
                             tell(Event::Shot(Err(format!("{e:#}"))));
                         }
                     }
-                    Task::FullTap { x, y } => {
-                        let result = Cdp::connect().and_then(|mut cdp| {
-                            let cx = (x as u32 * crate::cdp::WIDTH / 1000).min(crate::cdp::WIDTH - 1);
-                            let cy = (y as u32 * crate::cdp::HEIGHT / 1000).min(crate::cdp::HEIGHT - 1);
-                            cdp.touch(cx, cy)?;
-                            Ok(full_result(&mut cdp))
-                        });
-                        match result {
-                            Ok((png, focus)) => {
-                                tell(Event::Shot(png));
-                                tell(Event::Focus(focus));
-                            }
-                            Err(e) => {
-                                stop_full();
-                                tell(Event::Shot(Err(format!("{e:#}"))));
-                            }
-                        }
-                    }
-                    Task::FullPinch { scale } => {
-                        let result = Cdp::connect().and_then(|mut cdp| {
-                            cdp.pinch(crate::cdp::WIDTH / 2, crate::cdp::HEIGHT / 2, scale)?;
-                            Ok(full_result(&mut cdp))
-                        });
-                        match result {
-                            Ok((png, focus)) => {
-                                tell(Event::Shot(png));
-                                tell(Event::Focus(focus));
-                            }
-                            Err(e) => {
-                                stop_full();
-                                tell(Event::Shot(Err(format!("{e:#}"))));
-                            }
-                        }
-                    }
-                    Task::FullText { text } => {
-                        let result = Cdp::connect().and_then(|mut cdp| {
-                            cdp.insert_text(&text)?;
-                            Ok(full_result(&mut cdp))
-                        });
-                        match result {
-                            Ok((png, _focus)) => {
-                                tell(Event::Shot(png));
-                                tell(Event::Focus(false));
-                            }
-                            Err(e) => {
-                                stop_full();
-                                tell(Event::Shot(Err(format!("{e:#}"))));
-                            }
-                        }
-                    }
-                    Task::FullScroll { dy } => {
-                        let result = Cdp::connect().and_then(|mut cdp| {
-                            cdp.scroll(dy)?;
-                            Ok(full_result(&mut cdp))
-                        });
-                        match result {
-                            Ok((png, focus)) => {
-                                tell(Event::Shot(png));
-                                tell(Event::Focus(focus));
-                            }
-                            Err(e) => {
-                                stop_full();
-                                tell(Event::Shot(Err(format!("{e:#}"))));
-                            }
-                        }
-                    }
-                    Task::FullReload => {
-                        let result = Cdp::connect().and_then(|mut cdp| {
-                            cdp.reload()?;
-                            Ok(full_result(&mut cdp))
-                        });
-                        match result {
-                            Ok((png, focus)) => {
-                                tell(Event::Shot(png));
-                                tell(Event::Focus(focus));
-                            }
-                            Err(e) => {
-                                stop_full();
-                                tell(Event::Shot(Err(format!("{e:#}"))));
-                            }
-                        }
-                    }
                     Task::PluginDownload { url, path } => {
                         let ended = fetch_plugin(&a, &url, &path, &stopping, &tell);
                         tell(Event::PluginEnded(ended));
-                    }
-                    Task::FullNavigate { url } => {
-                        let result = Cdp::connect()
-                            .and_then(|mut cdp| {
-                                cdp.navigate(&url)?;
-                                cdp.screenshot()
-                            })
-                            .map_err(|e| format!("{e:#}"));
-                        tell(Event::Shot(result));
                     }
                     Task::FullStop => stop_full(),
                 }
@@ -390,6 +325,8 @@ impl Worker {
             .map_err(|e| anyhow::anyhow!("start the browser's worker: {e}"))?;
         Ok(Worker {
             events,
+            commands,
+            latest,
             wake,
             stop,
             agent,
@@ -401,11 +338,25 @@ impl Worker {
         self.wake.as_raw_fd()
     }
 
+    pub fn command(&self, command: Control) {
+        let mut queue = self.commands.lock().expect("browser controls are not poisoned");
+        if matches!(command, Control::Touch { phase: 1, .. }) && matches!(queue.back(), Some(Control::Touch { phase: 1, .. })) {
+            queue.pop_back();
+        }
+        queue.push_back(command);
+    }
+
     /// The events since the last call.
     pub fn events(&self) -> Vec<Event> {
         let mut drain = [0u8; 64];
         while unsafe { libc::read(self.wake.as_raw_fd(), drain.as_mut_ptr().cast(), drain.len()) } > 0 {}
-        self.events.try_iter().collect()
+        let mut events: Vec<_> = self.events.try_iter().collect();
+        if let Ok(mut latest) = self.latest.lock()
+            && let Some(frame) = latest.take()
+        {
+            events.push(Event::Shot(Ok(frame)));
+        }
+        events
     }
 
     /// Stop at once, cutting the connection in use.

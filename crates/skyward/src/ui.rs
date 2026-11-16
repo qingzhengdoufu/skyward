@@ -1352,6 +1352,7 @@ pub(super) struct Pages<'a> {
     was_dark: bool,
     browser: Option<crate::browser::Worker>,
     browser_stream: Option<crate::browser::Worker>,
+    browser_viewport: Option<(u32, u32)>,
     browser_download: Option<crate::browser::Worker>,
 }
 
@@ -1413,6 +1414,7 @@ impl<'a> Pages<'a> {
             | Work::SystemStopped => start,
         };
         let mut app = App::new(first, w, h, cfg.display.density as f32 / 160.0);
+        app.set_navigation(true);
         app.set_screen_corners(cfg.display.corner_radius as f32);
         let kept = settings::read()?;
         let locale = request.locale.as_deref().or(info.locale.as_deref());
@@ -1577,6 +1579,7 @@ impl<'a> Pages<'a> {
             was_dark: false,
             browser: None,
             browser_stream: None,
+            browser_viewport: None,
             browser_download: None,
         })
     }
@@ -2816,14 +2819,9 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginStart { dir, url, out } => {
-                if self.browser_stream.is_some() {
-                    if let Some(worker) = self.browser.take() {
-                        worker.stop();
-                    }
-                    match crate::browser::Worker::start(crate::browser::Task::FullNavigate { url }, self.servers.clone()) {
-                        Ok(worker) => self.browser = Some(worker),
-                        Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
-                    }
+                self.browser_viewport = None;
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Navigate { url });
                     return Ok(Vec::new());
                 }
                 if let Some(worker) = self.browser_stream.take() {
@@ -2839,49 +2837,34 @@ impl Pages<'_> {
                     Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
                 }
             }
-            Effect::BrowserPluginTap { x, y } => {
-                if let Some(worker) = self.browser.take() {
-                    worker.stop();
+            Effect::BrowserPluginTouch { phase, x, y } => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Touch { phase, x, y });
                 }
-                match crate::browser::Worker::start(crate::browser::Task::FullTap { x, y }, self.servers.clone()) {
-                    Ok(worker) => self.browser = Some(worker),
-                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+            }
+            Effect::BrowserPluginTap { x, y } => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Tap { x, y });
                 }
             }
             Effect::BrowserPluginPinch { scale } => {
-                if let Some(worker) = self.browser.take() {
-                    worker.stop();
-                }
-                match crate::browser::Worker::start(crate::browser::Task::FullPinch { scale }, self.servers.clone()) {
-                    Ok(worker) => self.browser = Some(worker),
-                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Pinch { scale });
                 }
             }
             Effect::BrowserPluginText(text) => {
-                if let Some(worker) = self.browser.take() {
-                    worker.stop();
-                }
-                match crate::browser::Worker::start(crate::browser::Task::FullText { text }, self.servers.clone()) {
-                    Ok(worker) => self.browser = Some(worker),
-                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Text { text });
                 }
             }
             Effect::BrowserPluginScroll { dy } => {
-                if let Some(worker) = self.browser.take() {
-                    worker.stop();
-                }
-                match crate::browser::Worker::start(crate::browser::Task::FullScroll { dy }, self.servers.clone()) {
-                    Ok(worker) => self.browser = Some(worker),
-                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Scroll { dy });
                 }
             }
             Effect::BrowserPluginReload => {
-                if let Some(worker) = self.browser.take() {
-                    worker.stop();
-                }
-                match crate::browser::Worker::start(crate::browser::Task::FullReload, self.servers.clone()) {
-                    Ok(worker) => self.browser = Some(worker),
-                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Reload);
                 }
             }
             Effect::BrowserPluginDownload { url, path } => {
@@ -2898,6 +2881,7 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginStop => {
+                self.browser_viewport = None;
                 if let Some(worker) = &self.browser {
                     worker.stop();
                 }

@@ -17,11 +17,14 @@ const VIEW_W: u32 = 412;
 const VIEW_H: u32 = 915;
 /// Render at a phone density; a whole-page frame is kept small enough to
 /// decode comfortably in recovery memory.
-const DEVICE_SCALE: f64 = 2.0;
+const DEVICE_SCALE: f64 = 3.3;
 pub struct Cdp {
     stream: TcpStream,
     next: u64,
     pending: VecDeque<Value>,
+    width: u32,
+    height: u32,
+    scale: f64,
 }
 
 pub enum Event {
@@ -76,6 +79,9 @@ impl Cdp {
             stream,
             next: 1,
             pending: VecDeque::new(),
+            width: VIEW_W,
+            height: VIEW_H,
+            scale: DEVICE_SCALE,
         };
         cdp.call("Page.enable", json!({}))?;
         cdp.call("Page.addScriptToEvaluateOnNewDocument",json!({"source":"window.open=(url)=>{location.href=new URL(url,location.href).href;return window};document.addEventListener('click',e=>{const a=e.target.closest?.('a[target]');if(a)a.target='_self'},true)"}))?;
@@ -117,22 +123,18 @@ impl Cdp {
 
     pub fn navigate(&mut self, url: &str) -> Result<()> {
         self.call("Page.navigate", json!({"url": url}))?;
-        std::thread::sleep(Duration::from_millis(1200));
         Ok(())
     }
 
     pub fn reload(&mut self) -> Result<()> {
         self.call("Page.reload", json!({}))?;
-        std::thread::sleep(Duration::from_millis(900));
         Ok(())
     }
 
     pub fn touch(&mut self, x: u32, y: u32) -> Result<()> {
         let point = json!([{"x": x, "y": y, "id": 1, "radiusX": 2, "radiusY": 2, "force": 1.0}]);
         self.call("Input.dispatchTouchEvent", json!({"type": "touchStart", "touchPoints": point}))?;
-        std::thread::sleep(Duration::from_millis(60));
         self.call("Input.dispatchTouchEvent", json!({"type": "touchEnd", "touchPoints": []}))?;
-        std::thread::sleep(Duration::from_millis(500));
         Ok(())
     }
 
@@ -141,13 +143,11 @@ impl Cdp {
             "Input.synthesizePinchGesture",
             json!({"x": x, "y": y, "scaleFactor": scale, "relativeSpeed": 800}),
         )?;
-        std::thread::sleep(Duration::from_millis(600));
         Ok(())
     }
 
     pub fn insert_text(&mut self, text: &str) -> Result<()> {
         self.call("Input.insertText", json!({"text": text}))?;
-        std::thread::sleep(Duration::from_millis(300));
         Ok(())
     }
 
@@ -162,10 +162,7 @@ impl Cdp {
     }
 
     pub fn screenshot(&mut self) -> Result<Vec<u8>> {
-        let answer = self.call(
-            "Page.captureScreenshot",
-            json!({"format": "jpeg", "quality": 82, "fromSurface": true}),
-        )?;
+        let answer = self.call("Page.captureScreenshot", json!({"format": "png", "fromSurface": true}))?;
         let data = answer["data"].as_str().context("screenshot holds no data")?;
         base64::engine::general_purpose::STANDARD.decode(data).context("decode screenshot")
     }
@@ -178,9 +175,9 @@ impl Cdp {
             "Page.startScreencast",
             json!({
                 "format": "jpeg",
-                "quality": 72,
-                "maxWidth": VIEW_W * 2,
-                "maxHeight": VIEW_H * 2,
+                "quality": 10,
+                "maxWidth": self.width,
+                "maxHeight": self.height,
                 "everyNthFrame": 1
             }),
         )?;
@@ -197,7 +194,7 @@ impl Cdp {
                     events: libc::POLLIN,
                     revents: 0,
                 };
-                let ready = unsafe { libc::poll(&mut fd, 1, 500) };
+                let ready = unsafe { libc::poll(&mut fd, 1, 8) };
                 if ready == 0 {
                     return Ok(None);
                 }
@@ -238,10 +235,9 @@ impl Cdp {
             let ack = json!({"id": self.next, "method": "Page.screencastFrameAck", "params": {"sessionId": session}});
             self.next += 1;
             write_frame(&mut self.stream, ack.to_string().as_bytes())?;
-            let data = params["data"].as_str().context("frame holds no data")?;
-            return Ok(Some(Event::Frame(
-                base64::engine::general_purpose::STANDARD.decode(data).context("decode frame")?,
-            )));
+            // Chromium screencast uses CSS pixels even on a high-density display.
+            // Treat it as invalidation, then capture the surface at device density.
+            return Ok(Some(Event::Frame(self.screenshot()?)));
         }
     }
 
@@ -250,14 +246,46 @@ impl Cdp {
             "Input.synthesizeScrollGesture",
             json!({
                 "x": VIEW_W / 2,
-                "y": VIEW_H / 2,
+                "y": self.height / 2,
                 "xDistance": 0,
                 "yDistance": dy,
                 "speed": 900,
                 "gestureSourceType": "touch"
             }),
         )?;
-        std::thread::sleep(Duration::from_millis(500));
+        Ok(())
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn viewport(&mut self, width: u32, height: u32) -> Result<()> {
+        let scale = f64::from(width.clamp(412, 1440)) / f64::from(VIEW_W);
+        let css_height = (f64::from(height.clamp(300, 3200)) / scale).round() as u32;
+        self.call(
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width":VIEW_W,"height":css_height,"deviceScaleFactor":scale,"mobile":true}),
+        )?;
+        self.width = VIEW_W;
+        self.height = css_height;
+        self.scale = scale;
+        Ok(())
+    }
+
+    pub fn touch_event(&mut self, phase: u8, x: u16, y: u16) -> Result<()> {
+        let kind = match phase {
+            0 => "touchStart",
+            1 => "touchMove",
+            2 => "touchEnd",
+            _ => "touchCancel",
+        };
+        let points = if phase < 2 {
+            json!([{"x":u32::from(x)*self.width/1000,"y":u32::from(y)*self.height/1000,"id":1,"radiusX":1,"radiusY":1,"force":1.0}])
+        } else {
+            json!([])
+        };
+        self.call("Input.dispatchTouchEvent", json!({"type":kind,"touchPoints":points}))?;
         Ok(())
     }
 }
@@ -381,7 +409,6 @@ fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
 }
 
 pub const WIDTH: u32 = VIEW_W;
-pub const HEIGHT: u32 = VIEW_H;
 
 fn accept_for(key: &str) -> String {
     let mut hasher = Sha1::new();
@@ -399,6 +426,19 @@ mod tests {
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let server = listener.accept().unwrap().0;
         (client, server)
+    }
+    fn wait_title(cdp: &mut Cdp, title: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let got = cdp
+                .call("Runtime.evaluate", json!({"expression":"document.title","returnByValue":true}))
+                .unwrap();
+            if got["result"]["value"] == title {
+                return;
+            }
+            assert!(Instant::now() < deadline, "page title did not change");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
     #[test]
     fn websocket_handshake_matches_the_rfc_example() {
@@ -426,6 +466,9 @@ mod tests {
             stream: client,
             next: 1,
             pending: VecDeque::new(),
+            width: VIEW_W,
+            height: VIEW_H,
+            scale: DEVICE_SCALE,
         };
         let start = Instant::now();
         assert!(cdp.next_event().unwrap().is_none());
@@ -446,11 +489,21 @@ mod tests {
             write_frame(&mut server, json!({"id":call["id"],"result":{}}).to_string().as_bytes()).unwrap();
             let ack: Value = serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
             assert_eq!(ack["method"], "Page.screencastFrameAck");
+            let shot: Value = serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
+            assert_eq!(shot["method"], "Page.captureScreenshot");
+            write_frame(
+                &mut server,
+                json!({"id":shot["id"],"result":{"data":"dGVzdA=="}}).to_string().as_bytes(),
+            )
+            .unwrap();
         });
         let mut cdp = Cdp {
             stream: client,
             next: 1,
             pending: VecDeque::new(),
+            width: VIEW_W,
+            height: VIEW_H,
+            scale: DEVICE_SCALE,
         };
         cdp.call("Page.startScreencast", json!({})).unwrap();
         assert!(matches!(cdp.next_event().unwrap(),Some(Event::Frame(data)) if data==b"test"));
@@ -491,9 +544,18 @@ mod tests {
                 .unwrap(),
         );
         let mut cdp = Cdp::connect().unwrap();
+        cdp.viewport(1350, 2400).unwrap();
         cdp.navigate("data:text/html,<title>One</title><h1>Skyward browser</h1><input id='q' style='position:absolute;left:10px;top:100px;width:300px;height:50px'>").unwrap();
+        wait_title(&mut cdp, "One");
         let shot = cdp.screenshot().unwrap();
-        assert!(shot.starts_with(&[0xff, 0xd8]));
+        assert!(shot.starts_with(b"\x89PNG"));
+        let png_size = |png: &[u8]| {
+            (
+                u32::from_be_bytes(png[16..20].try_into().unwrap()),
+                u32::from_be_bytes(png[20..24].try_into().unwrap()),
+            )
+        };
+        assert_eq!(png_size(&shot).0, 1350, "screenshot must match the display's pixel width");
         cdp.touch(30, 120).unwrap();
         assert!(cdp.focus_is_text());
         cdp.insert_text("recovery test").unwrap();
@@ -505,6 +567,7 @@ mod tests {
             .unwrap();
         assert_eq!(value["result"]["value"], "recovery test");
         cdp.navigate("data:text/html,<title>Two</title><h1>Navigation passed</h1>").unwrap();
+        wait_title(&mut cdp, "Two");
         let title = cdp
             .call("Runtime.evaluate", json!({"expression":"document.title","returnByValue":true}))
             .unwrap();
@@ -513,7 +576,8 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(Event::Frame(frame)) = cdp.next_event().unwrap() {
-                assert!(frame.starts_with(&[0xff, 0xd8]));
+                assert!(frame.starts_with(b"\x89PNG"));
+                assert_eq!(png_size(&frame).0, 1350, "stream must not downsample the page");
                 if let Ok(path) = std::env::var("SKYWARD_BROWSER_SHOT") {
                     std::fs::write(path, frame).unwrap();
                 }

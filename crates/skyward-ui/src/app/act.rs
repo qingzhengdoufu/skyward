@@ -8,6 +8,32 @@ impl App {
             return self.browser_act(action, now);
         }
         match action {
+            Action::NavHome => {
+                self.home();
+                return Vec::new();
+            }
+            Action::NavTasks => {
+                if self.shade.is_some() {
+                    self.dismiss_shade();
+                }
+                if self.screen() != Screen::Home && self.screen() != Screen::Tasks {
+                    self.parked = Some(self.stack.clone());
+                }
+                if self.screen() != Screen::Tasks {
+                    self.open(Screen::Tasks);
+                }
+                return Vec::new();
+            }
+            Action::ResumeTask => {
+                self.resume();
+                return Vec::new();
+            }
+            Action::NavBack => {
+                if self.screen() == Screen::Browser && self.state.browser.at > 0 {
+                    return self.browser_act(Action::BrowserBack, now);
+                }
+                return self.back(now);
+            }
             Action::FlashPartitionImage => {
                 self.state.image_only = true;
                 let place = if self.state.data.storage_open() {
@@ -22,12 +48,13 @@ impl App {
                 return self.arrive_at(Screen::Choose(place));
             }
             Action::OpenControlCenter => {
-                if self.screen() != Screen::ControlCenter {
-                    self.open(Screen::ControlCenter);
-                }
+                self.open_shade(now, true);
                 return Vec::new();
             }
-            Action::CloseControlCenter => return self.back(now),
+            Action::CloseControlCenter => {
+                self.settle_shade(false, now, 0.0);
+                return Vec::new();
+            }
             Action::ReadRootModules => return vec![Effect::ReadRootModules],
             Action::RootModule(index, op) => {
                 if let Some(Ok((_, modules))) = &self.state.root_modules
