@@ -191,13 +191,6 @@ pub fn control(cx: &Ctx) -> Frame {
         t.pal.subtitle,
         Some(width - m.dp(60.0)),
     );
-    let settings = crate::geom::Rect::new(m.w as f32 - x - m.dp(40.0), m.dp(70.0), m.dp(40.0), m.dp(40.0));
-    let (sx, sy) = settings.centre();
-    crate::icons::glyph(&mut c, Icon::Gear, sx, sy, m.dp(22.0), t.pal.text);
-    out.push(Hit {
-        rect: settings,
-        action: Action::Open(Screen::Settings),
-    });
     let wifi = s.wlan.as_ref().is_some_and(|w| w.power == skyward_net::wlan::Power::On);
     let mut controls = vec![
         (network, Icon::Wlan, wifi, s.wlan.is_some(), Action::Toggle(Switch::Wlan)),

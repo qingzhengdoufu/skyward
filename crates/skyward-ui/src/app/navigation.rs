@@ -1,6 +1,6 @@
 use super::*;
 
-pub const NAV_DP: f32 = 44.0;
+pub const NAV_DP: f32 = 36.0;
 
 impl App {
     pub(super) fn nav_height(&self) -> u32 {
@@ -51,11 +51,16 @@ impl App {
         if let Touch::Down(x, y) = ev
             && y >= top
         {
+            let first_press = self.nav_press.is_none();
             self.nav_press = Some((x / (self.w as f32 / 3.0)).floor().clamp(0.0, 2.0) as u8);
             self.drag = Drag::Idle;
             self.stir(now);
             self.dirty = true;
-            return Some(Vec::new());
+            return Some(if first_press && self.state.vibrate {
+                vec![Effect::Haptic]
+            } else {
+                Vec::new()
+            });
         }
         if let Some(button) = self.nav_press {
             match ev {
@@ -94,8 +99,8 @@ impl App {
         for index in 0..3 {
             let x = self.w as f32 * (index as f32 + 0.5) / 3.0;
             let ink = if self.nav_press == Some(index) { t.pal.accent } else { t.pal.text };
-            let size = t.m.dp(8.0);
-            let stroke = t.m.dp(1.8);
+            let size = t.m.dp(6.0);
+            let stroke = t.m.dp(1.5);
             match index {
                 0 => {
                     out.line(x + size / 2.0, cy - size, x - size / 2.0, cy, stroke, ink);

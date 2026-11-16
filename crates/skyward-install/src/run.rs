@@ -1012,11 +1012,15 @@ fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done>
         }
     }
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    let modem = crate::modem::in_package(BufReader::new(File::open(mount.path()).context("open the package")?))?;
     extract_script(mount)?;
     shell_at_sbin()?;
     let kept = hold(ctx, slot)?;
     installed_boot_set()?;
     detach_once(ctx)?;
+    // Scripts may stream modem images with unzip/dd themselves. Release their
+    // firmware aliases and BLKRO flag before handing control to the script.
+    let _modem = if modem { Some(crate::modem::prepare(Path::new(skyward_block::BY_NAME), &[Slot::A, Slot::B])?) } else { None };
     // While an update is in flight, the slot's partitions in super are its
     // and stay unmapped.
     let mapped = match skyward_vab::snapshot_state()? {

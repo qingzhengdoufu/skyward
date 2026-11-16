@@ -11,6 +11,48 @@ const H: u32 = 3200;
 const PPD: f32 = 3.5;
 
 #[test]
+fn smaller_navigation_buttons_vibrate_once_and_obey_the_touch_preference() {
+    let (f, i) = (fonts(), info());
+    for enabled in [true, false] {
+        for button in 0..3 {
+            let mut app = App::new(Screen::Home, W, H, PPD);
+            app.set_navigation(true);
+            app.state.vibrate = enabled;
+            app.frame(&f, &i);
+            assert_eq!(app.nav_height(), (PPD * 36.0) as u32);
+            let x = W as f32 * (button as f32 + 0.5) / 3.0;
+            let y = H as f32 - app.nav_height() as f32 / 2.0;
+            let expected = if enabled { vec![Effect::Haptic] } else { Vec::new() };
+            assert_eq!(app.touch(Touch::Down(x, y), &f, 1000), expected);
+            assert!(
+                app.touch(Touch::Down(x, y), &f, 1001).is_empty(),
+                "duplicate down does not vibrate twice"
+            );
+            assert!(
+                app.touch(Touch::Up, &f, 1010).is_empty(),
+                "release performs navigation without another haptic"
+            );
+            assert_eq!(app.screen(), if button == 2 { Screen::Tasks } else { Screen::Home });
+        }
+    }
+}
+
+#[test]
+fn control_center_has_no_header_settings_shortcut() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::ControlCenter, W, H, PPD);
+    let top = app.theme().m.dp(132.0);
+    let frame = app.frame(&f, &i);
+    let settings: Vec<_> = frame
+        .hits
+        .iter()
+        .filter(|hit| hit.action == Action::Open(Screen::Settings))
+        .collect();
+    assert_eq!(settings.len(), 1, "the grid settings shortcut is retained");
+    assert!(settings[0].rect.y >= top, "no upper-right header shortcut remains");
+}
+
+#[test]
 fn browser_address_changes_reuse_one_browser_page() {
     let mut app = App::new(Screen::Home, W, H, PPD);
     app.act(Action::Open(Screen::Browser), 0);
@@ -38,7 +80,12 @@ fn a_partial_shade_reveals_its_header_immediately() {
     assert_eq!(app.shade.as_ref().unwrap().extent, 590.0);
     let header = c.crop(60, 110, 800, 160);
     assert!(
-        header.data.as_chunks::<4>().0.iter().any(|p| p[0] > 180 && p[1] > 180 && p[2] > 180),
+        header
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[0] > 180 && p[1] > 180 && p[2] > 180),
         "the large clock is visible during the pull"
     );
 }

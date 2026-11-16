@@ -1498,7 +1498,8 @@ fn entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        let Some(end) = rest[..rest.len().min(34)].find(';') else {
+        // Search bytes for an ASCII delimiter without slicing a UTF-8 character.
+        let Some(end) = rest.as_bytes().iter().take(34).position(|&byte| byte == b';') else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -1862,6 +1863,63 @@ mod tests {
     #[test]
     fn entities_become_their_characters() {
         assert_eq!(entities("a&amp;b &#65; &#x4e2d; &unknown;"), "a&b A 中 &unknown;");
+    }
+
+    #[test]
+    fn entity_scan_never_slices_through_chinese_search_results() {
+        let tail = "中文搜索结果".repeat(10);
+        for prefix in ["&amp;", "&#x4e2d;", "&unknown;", "&"] {
+            let input = format!("{prefix}{tail}");
+            let expected = match prefix {
+                "&amp;" => format!("&{tail}"),
+                "&#x4e2d;" => format!("中{tail}"),
+                _ => input.clone(),
+            };
+            assert_eq!(entities(&input), expected);
+        }
+    }
+
+    #[test]
+    fn entity_scan_preserves_unicode_at_every_prefix_alignment() {
+        for text in ["中文", "é", "界", "😀"] {
+            for padding in 0..40 {
+                let tail = format!("{}{text}", "x".repeat(padding)).repeat(40);
+                for prefix in ["&amp;", "&unknown;", "&"] {
+                    let input = format!("{prefix}{tail}");
+                    let expected = if prefix == "&amp;" { format!("&{tail}") } else { input.clone() };
+                    assert_eq!(entities(&input), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn served_chinese_search_results_decode_entities_without_panicking() {
+        let body = format!(
+            "<?xml version='1.0'?><rss><channel><item><title>结果 &amp; {}</title><link>https://example.com/?a=1&amp;b=2</link><description>说明 -&gt; {}</description></item></channel></rss>",
+            "中文".repeat(30),
+            "搜索结果".repeat(30)
+        );
+        let url = serve("application/rss+xml; charset=utf-8", body.as_bytes());
+        let Opened::Page(page) = open(&ureq::Agent::new_with_defaults(), &url).unwrap() else {
+            panic!("RSS is a page")
+        };
+        assert!(matches!(&page.blocks[0],Block::Link{label,url,..} if label.starts_with("结果 & 中文") && url.ends_with("?a=1&b=2")));
+        assert!(matches!(&page.blocks[1],Block::Paragraph{text,..} if text.starts_with("说明 -> 搜索结果")));
+    }
+
+    #[test]
+    #[ignore = "requires a captured search response"]
+    fn captured_search_response_parses_without_panicking() {
+        let path = std::env::var("SKYWARD_SEARCH_FIXTURE").unwrap();
+        let body = std::fs::read(path).unwrap();
+        let url = serve("application/rss+xml; charset=utf-8", &body);
+        let Opened::Page(page) = open(&ureq::Agent::new_with_defaults(), &url).unwrap() else {
+            panic!("RSS is a page")
+        };
+        let results = page.blocks.iter().filter(|block| matches!(block, Block::Link { .. })).count();
+        assert!(results > 0);
+        println!("Parsed {results} search results, {} blocks", page.blocks.len());
     }
 
     fn serve(content_type: &str, body: &[u8]) -> String {
