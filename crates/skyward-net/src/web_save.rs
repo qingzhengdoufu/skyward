@@ -61,6 +61,32 @@ fn metadata_path(part: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+pub(crate) fn discard(path: &Path) -> Result<()> {
+    let part = crate::download::partial(path);
+    match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&part)
+    {
+        Ok(file) => {
+            ensure!(file.metadata()?.is_file(), "partial download is not a regular file");
+            ensure!(
+                unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+                "download is still running"
+            );
+            fs::remove_file(&part)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    match fs::remove_file(metadata_path(&part)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn read_resume(path: &Path) -> Option<Resume> {
     let file = OpenOptions::new()
         .read(true)
@@ -434,5 +460,23 @@ mod tests {
         );
         assert!(content_range("bytes 10-9/20").is_none());
         assert!(content_range("bytes 1-20/20").is_none());
+    }
+
+    #[test]
+    fn discarding_a_transfer_removes_only_its_unfinished_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rom.zip");
+        interrupted(&path, "https://example.com/rom.zip", 10);
+        fs::write(&path, b"finished file").unwrap();
+        let part = crate::download::partial(&path);
+        let writer = OpenOptions::new().write(true).open(&part).unwrap();
+        assert_eq!(unsafe { libc::flock(writer.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0);
+        assert!(discard(&path).is_err());
+        assert!(part.exists());
+        drop(writer);
+        discard(&path).unwrap();
+        assert!(!part.exists() && !metadata_path(&part).exists());
+        assert_eq!(fs::read(&path).unwrap(), b"finished file");
+        discard(&path).unwrap();
     }
 }

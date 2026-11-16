@@ -1354,6 +1354,7 @@ pub(super) struct Pages<'a> {
     browser_stream: Option<crate::browser::Worker>,
     browser_viewport: Option<(u32, u32)>,
     browser_download: Option<crate::browser::Worker>,
+    browser_removal: Option<String>,
 }
 
 impl<'a> Pages<'a> {
@@ -1581,6 +1582,7 @@ impl<'a> Pages<'a> {
             browser_stream: None,
             browser_viewport: None,
             browser_download: None,
+            browser_removal: None,
         })
     }
     /// Start the work the request in misc asks for, take up what an earlier
@@ -2795,6 +2797,21 @@ impl Pages<'_> {
                     worker.stop();
                 }
             }
+            Effect::RemoveBrowserDownload { path } => {
+                let target = Path::new(&path);
+                if target.parent() != Some(Path::new("/data/media/0/Download/Skyward")) || target.file_name().is_none() {
+                    self.app.browser_download_removed(&path, Err("Invalid download path".into()), now);
+                } else {
+                    let active = self.app.state.browser.saving.and_then(|index| self.app.state.browser.downloads.get(index)).is_some_and(|download| download.path == path);
+                    if active && self.browser_download.is_some() {
+                        if let Some(worker) = &self.browser_download { worker.stop(); }
+                        self.browser_removal = Some(path);
+                    } else {
+                        let result = skyward_net::web::discard_partial(target).map_err(|error| format!("{error:#}"));
+                        self.app.browser_download_removed(&path, result, now);
+                    }
+                }
+            }
             Effect::BrowserPluginInstall { archive, dir } => {
                 if dir != skyward_files::browser_plugin::ROOT
                     || !self.app.state.data.storage_open()
@@ -2868,6 +2885,10 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginDownload { url, path } => {
+                if self.browser_download.as_ref().is_some_and(|worker| !worker.ended()) || self.browser_removal.is_some() {
+                    self.app.plugin_downloaded(Err("Finish or pause the current download first".into()));
+                    return Ok(Vec::new());
+                }
                 if let Some(worker) = self.browser_download.take() {
                     worker.stop();
                 }

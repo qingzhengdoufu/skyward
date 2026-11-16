@@ -26,6 +26,9 @@ impl App {
         if self.shade_touch(ev, now) {
             return Vec::new();
         }
+        if self.browser_address_touch(ev, f, now) {
+            return Vec::new();
+        }
         if let Touch::Down(x, y) = ev
             && self.state.browser.full_active
             && let Some(area) = self.frame.as_ref().and_then(|f| f.browser_area)
@@ -325,7 +328,7 @@ impl App {
                 Drag::Waking => self.drag = Drag::Waking,
                 Drag::Held => self.drag = Drag::Held,
                 Drag::Idle => {}
-                Drag::BrowserTouch { .. } => {}
+                Drag::BrowserTouch { .. } | Drag::BrowserCaret => {}
             },
             Touch::Up => match std::mem::replace(&mut self.drag, Drag::Idle) {
                 Drag::Press { action: Some(a), .. } => {

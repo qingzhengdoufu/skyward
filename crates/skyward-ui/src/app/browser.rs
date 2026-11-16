@@ -108,18 +108,23 @@ pub struct PluginDownload {
     pub total: Option<u64>,
     pub speed: u64,
     pub error: Option<String>,
+    pub finished: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Browser {
     pub picture: Option<BrowserPicture>,
     pub address: String,
+    pub address_cursor: usize,
+    pub address_start: usize,
     pub url: String,
     pub view: BrowserView,
     pub history: Vec<String>,
     pub at: usize,
     pub downloads: Vec<BrowserDownload>,
     pub saving: Option<usize>,
+    pub remove_download: Option<usize>,
+    pub removing_download: Option<String>,
     pub form: Vec<Vec<String>>,
     pub field: Option<(usize, usize)>,
     pub cookies: Vec<Cookie>,
@@ -143,12 +148,16 @@ impl Default for Browser {
         Browser {
             picture: None,
             address: String::new(),
+            address_cursor: usize::MAX,
+            address_start: 0,
             url: String::new(),
             view: BrowserView::Home,
             history: Vec::new(),
             at: 0,
             downloads: Vec::new(),
             saving: None,
+            remove_download: None,
+            removing_download: None,
             form: Vec::new(),
             field: None,
             cookies: Vec::new(),
@@ -183,12 +192,88 @@ impl Default for Browser {
 }
 
 impl App {
+    pub(super) fn browser_edit_key(&mut self, cap: Cap) {
+        let shifted = self.state.layer == Layer::Shifted;
+        let b = &mut self.state.browser;
+        let at = widgets::text_boundary(&b.address, b.address_cursor);
+        match cap {
+            Cap::Char(ch) => {
+                let ch = if shifted { ch.to_ascii_uppercase() } else { ch };
+                b.address.insert(at, ch);
+                b.address_cursor = at + ch.len_utf8();
+                if shifted {
+                    self.state.layer = Layer::Letters;
+                }
+            }
+            Cap::Space => {
+                b.address.insert(at, ' ');
+                b.address_cursor = at + 1;
+            }
+            Cap::Backspace if at > 0 => {
+                let previous = b.address[..at].char_indices().last().map_or(0, |(i, _)| i);
+                b.address.replace_range(previous..at, "");
+                b.address_cursor = previous;
+            }
+            _ => {}
+        }
+        b.address_start = widgets::text_boundary(&b.address, b.address_start).min(b.address_cursor);
+        self.edits += 1;
+        self.refresh();
+    }
+
+    pub(super) fn browser_address_touch(&mut self, ev: Touch, f: &Fonts, now: u64) -> bool {
+        if self.screen() != Screen::BrowserAddress {
+            return false;
+        }
+        let t = self.theme();
+        let top = if self.state.browser.full_active {
+            t.m.h as f32 - widgets::keyboard_height(&t) - t.m.dp(64.0)
+        } else {
+            t.m.content_top + t.m.dp(36.0)
+        };
+        // Read the native field's exact top from its hit rectangle, avoiding
+        // a duplicate section-height assumption.
+        let top = if !self.state.browser.full_active {
+            self.frame
+                .as_ref()
+                .and_then(|fr| fr.hits.iter().find(|hit| hit.action == Action::BrowserAddress))
+                .map_or(top, |hit| hit.rect.y)
+        } else {
+            top
+        };
+        let area = Rect::new(t.m.margin, top, t.m.w as f32 - 2.0 * t.m.margin, t.m.dp(56.0));
+        let x = match ev {
+            Touch::Down(x, y) if area.contains(x, y + self.top().1) => {
+                self.drop_button();
+                self.end_turn();
+                self.drag = Drag::BrowserCaret;
+                x
+            }
+            Touch::Move(x, _) if matches!(self.drag, Drag::BrowserCaret) => x,
+            Touch::Up if matches!(self.drag, Drag::BrowserCaret) => {
+                self.drag = Drag::Idle;
+                return true;
+            }
+            _ => return false,
+        };
+        let b = &mut self.state.browser;
+        let (position, start) = widgets::text_field_position(&t, f, &b.address, b.address_cursor, b.address_start, x);
+        b.address_cursor = position;
+        b.address_start = start;
+        self.edits += 1;
+        self.stir(now);
+        self.refresh();
+        true
+    }
+
     pub(super) fn browser_act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
             Action::BrowserAddress => {
                 self.state.browser.full_text = false;
                 self.state.browser.address = self.state.browser.url.clone();
+                self.state.browser.address_cursor = self.state.browser.address.len();
+                self.state.browser.address_start = 0;
                 self.state.layer = Layer::Letters;
                 self.open(Screen::BrowserAddress);
             }
@@ -265,6 +350,26 @@ impl App {
                 return vec![Effect::StopBrowser];
             }
             Action::BrowserStopDownload => return vec![Effect::StopBrowser],
+            Action::BrowserAskRemoveDownload(index) => {
+                if self.state.browser.downloads.get(index).is_some() && self.state.browser.removing_download.is_none() {
+                    self.state.browser.remove_download = Some(index);
+                    self.refresh();
+                }
+            }
+            Action::BrowserCancelRemoveDownload => {
+                self.state.browser.remove_download = None;
+                self.refresh();
+            }
+            Action::BrowserConfirmRemoveDownload => {
+                if let Some(index) = self.state.browser.remove_download.take()
+                    && let Some(download) = self.state.browser.downloads.get(index)
+                {
+                    let path = download.path.clone();
+                    self.state.browser.removing_download = Some(path.clone());
+                    self.refresh();
+                    return vec![Effect::RemoveBrowserDownload { path }];
+                }
+            }
             Action::BrowserOpenDownload(i) => {
                 let download = self.state.browser.downloads.get(i).cloned();
                 if let Some(d) = download {
@@ -295,6 +400,8 @@ impl App {
             }
             Action::BrowserClearAddress => {
                 self.state.browser.address.clear();
+                self.state.browser.address_cursor = 0;
+                self.state.browser.address_start = 0;
                 self.refresh();
             }
             Action::BrowserMenu => self.open(Screen::BrowserMenu),
@@ -408,6 +515,7 @@ impl App {
                     total: None,
                     speed: 0,
                     error: None,
+                    finished: false,
                 });
                 return vec![Effect::BrowserPluginDownload {
                     url: "https://github.com/Jamvii/skyward-for-aurora/releases/download/browser-v0.3.4-aurora/chromium.zip".into(),
@@ -428,6 +536,8 @@ impl App {
                 self.state.layer = Layer::Letters;
                 self.state.browser.full_text = true;
                 self.state.browser.address.clear();
+                self.state.browser.address_cursor = 0;
+                self.state.browser.address_start = 0;
                 self.open(Screen::BrowserAddress);
             }
             Action::BrowserPluginTap(x, y) => return vec![Effect::BrowserPluginTap { x, y }],
@@ -466,6 +576,11 @@ impl App {
     }
 
     pub(super) fn browser_read(&mut self, url: String) -> Vec<Effect> {
+        let url = if self.state.browser.full_active {
+            skyward_net::web::full_url(&url)
+        } else {
+            url
+        };
         let b = &mut self.state.browser;
         if b.history.is_empty() {
             b.history.push(url.clone());
@@ -508,7 +623,12 @@ impl App {
             return Vec::new();
         }
         b.at = at as usize;
-        let url = b.history[b.at].clone();
+        let url = if b.full_active {
+            skyward_net::web::full_url(&b.history[b.at])
+        } else {
+            b.history[b.at].clone()
+        };
+        b.history[b.at] = url.clone();
         b.url = url.clone();
         b.address = url.clone();
         b.view = BrowserView::Loading(url.clone());
@@ -527,7 +647,7 @@ impl App {
     }
 
     fn browser_download(&mut self, url: String, name: String, _now: u64) -> Vec<Effect> {
-        if !self.state.data.storage_open() || self.state.browser.downloading() {
+        if !self.state.data.storage_open() || self.state.browser.downloading() || self.state.browser.removing_download.is_some() {
             return Vec::new();
         }
         let name = std::path::Path::new(&name)
@@ -625,6 +745,30 @@ impl App {
         self.refresh();
     }
 
+    pub fn browser_download_removed(&mut self, path: &str, result: Result<(), String>, now: u64) {
+        if self.state.browser.removing_download.as_deref() != Some(path) {
+            return;
+        }
+        self.state.browser.removing_download = None;
+        if let Err(error) = result {
+            self.say(&error, now);
+            self.refresh();
+            return;
+        }
+        let b = &mut self.state.browser;
+        if let Some(index) = b.downloads.iter().position(|download| download.path == path) {
+            b.downloads.remove(index);
+            b.saving = b.saving.and_then(|saving| {
+                if saving == index {
+                    None
+                } else {
+                    Some(saving - usize::from(saving > index))
+                }
+            });
+        }
+        self.refresh();
+    }
+
     fn browser_submit(&mut self, form: usize) -> Vec<Effect> {
         let Some(page) = self.state.browser.page() else { return Vec::new() };
         let Some(f) = page.forms.get(form) else { return Vec::new() };
@@ -685,7 +829,11 @@ impl App {
         if !self.state.data.storage_open() {
             return Vec::new();
         }
-        let url = if url.is_empty() { "https://cn.bing.com".to_string() } else { url };
+        let url = if url.is_empty() {
+            "https://cn.bing.com".to_string()
+        } else {
+            skyward_net::web::full_url(&url)
+        };
         let dir = "/data/skyward-browser/chromium".to_string();
         if !std::path::Path::new(&dir).is_dir() {
             self.state.browser.full = BrowserFull::Absent("插件未安装".into());
@@ -732,6 +880,8 @@ impl App {
         self.state.browser.full_text = focus;
         if focus {
             self.state.browser.address.clear();
+            self.state.browser.address_cursor = 0;
+            self.state.browser.address_start = 0;
             self.state.layer = Layer::Letters;
             if self.screen() == Screen::Browser {
                 self.open(Screen::BrowserAddress);
@@ -780,9 +930,8 @@ impl App {
 
     pub fn plugin_downloaded(&mut self, ended: Result<(), String>) {
         if let Some(d) = self.state.browser.plugin_download.as_mut() {
-            if let Err(why) = ended {
-                d.error = Some(why);
-            }
+            d.finished = ended.is_ok();
+            d.error = ended.err();
             self.refresh();
         }
     }
@@ -830,6 +979,9 @@ fn is_browser_action(action: Action) -> bool {
             | Action::BrowserStop
             | Action::BrowserStopDownload
             | Action::BrowserOpenDownload(_)
+            | Action::BrowserAskRemoveDownload(_)
+            | Action::BrowserConfirmRemoveDownload
+            | Action::BrowserCancelRemoveDownload
             | Action::BrowserClearAddress
             | Action::BrowserTabs
             | Action::BrowserNewTab

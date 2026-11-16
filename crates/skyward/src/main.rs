@@ -13,6 +13,8 @@ mod browser;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod cdp;
+#[cfg(any(target_os = "android", test))]
+mod browser_events;
 #[cfg(target_os = "android")]
 mod find;
 #[cfg(target_os = "android")]

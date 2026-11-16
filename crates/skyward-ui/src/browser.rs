@@ -1012,7 +1012,15 @@ pub fn address(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = m.content_top;
     let y = widgets::section_first(&mut c, t, f, top, l.pick(["网址", "網址", "Address"]));
-    let (below, caret) = widgets::text_field(&mut c, t, f, y, &s.browser.address);
+    let (below, caret) = widgets::text_field_at(
+        &mut c,
+        t,
+        f,
+        y,
+        &s.browser.address,
+        s.browser.address_cursor,
+        s.browser.address_start,
+    );
     if s.browser.address.trim().is_empty() {
         let hint = l.pick(HINT);
         c.text_top(
@@ -1070,7 +1078,15 @@ fn full_input(cx: &Ctx) -> Frame {
     let field_top = keys_top - m.dp(64.0);
     frame.canvas.fill_rect(0.0, field_top, m.w as f32, m.h as f32 - field_top, t.pal.bg);
     frame.hits.retain(|hit| hit.rect.y + hit.rect.h <= field_top);
-    let (_, caret) = widgets::text_field(&mut frame.canvas, t, f, field_top, &s.browser.address);
+    let (_, caret) = widgets::text_field_at(
+        &mut frame.canvas,
+        t,
+        f,
+        field_top,
+        &s.browser.address,
+        s.browser.address_cursor,
+        s.browser.address_start,
+    );
     let keys = widgets::keyboard(&mut frame.canvas, t, f, l, keys_top, s.layer, s.key_held(), l.pick(GO));
     frame.hits.extend(keys.into_iter().map(|(rect, cap)| Hit {
         rect,
@@ -1094,6 +1110,37 @@ pub fn downloads(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = m.content_top;
     let mut y = top;
+    if let Some(index) = s.browser.remove_download
+        && let Some(download) = s.browser.downloads.get(index)
+    {
+        y = widgets::footnote(&mut c, t, f, y, &download.name);
+        let confirm = widgets::list(
+            &mut c,
+            t,
+            f,
+            y,
+            &[
+                Row::new(l.pick(["删除任务和未完成文件", "刪除工作與未完成檔案", "Delete task and partial file"]))
+                    .icon(RED, Icon::Wipe)
+                    .trail(Trail::None),
+                Row::new(l.pick(["取消", "取消", "Cancel"])).trail(Trail::None),
+            ],
+        );
+        out.extend(hits(
+            &confirm.rows,
+            &[Action::BrowserConfirmRemoveDownload, Action::BrowserCancelRemoveDownload],
+        ));
+        y = confirm.bottom + m.card_gap;
+    }
+    if s.browser.removing_download.is_some() {
+        y = widgets::footnote(
+            &mut c,
+            t,
+            f,
+            y,
+            l.pick(["正在停止并删除任务", "正在停止並刪除工作", "Stopping and deleting task"]),
+        );
+    }
     if let Some(i) = s.browser.saving
         && let Some(d) = s.browser.downloads.get(i)
         && let BrowserSave::Downloading { done, total } = d.state
@@ -1142,20 +1189,37 @@ pub fn downloads(cx: &Ctx) -> Frame {
             .zip(&subs)
             .map(|((d, name), sub)| {
                 let install = skyward_net::web::installable(name) && matches!(d.state, BrowserSave::Done);
-                Row::new(name).icon(GREEN, Icon::Install).subtitle(sub).trail(if install {
-                    Trail::Value(l.pick(["安装", "安裝", "Install"]))
-                } else if matches!(d.state, BrowserSave::Stopped) {
-                    Trail::Value(l.pick(["继续", "繼續", "Resume"]))
-                } else if matches!(d.state, BrowserSave::Failed(_)) {
-                    Trail::Value(l.pick(["重试", "重試", "Retry"]))
-                } else {
-                    Trail::None
-                })
+                Row::new(name)
+                    .icon(GREEN, Icon::Install)
+                    .subtitle(sub)
+                    .trail(Trail::DeleteTask(if install {
+                        l.pick(["安装", "安裝", "Install"])
+                    } else if matches!(d.state, BrowserSave::Stopped) {
+                        l.pick(["继续", "繼續", "Resume"])
+                    } else if matches!(d.state, BrowserSave::Failed(_)) {
+                        l.pick(["重试", "重試", "Retry"])
+                    } else {
+                        ""
+                    }))
             })
             .collect();
         let list = widgets::list(&mut c, t, f, y, &rows);
-        let actions: Vec<Action> = (0..rows.len()).map(Action::BrowserOpenDownload).collect();
-        out.extend(hits(&list.rows, &actions));
+        for (index, rect) in list.rows.iter().enumerate() {
+            let width = m.dp(44.0);
+            out.push(Hit {
+                rect: Rect {
+                    w: rect.w - width,
+                    ..*rect
+                },
+                action: Action::BrowserOpenDownload(index),
+            });
+            if s.browser.removing_download.is_none() {
+                out.push(Hit {
+                    rect: Rect::new(rect.x + rect.w - width, rect.y, width, rect.h),
+                    action: Action::BrowserAskRemoveDownload(index),
+                });
+            }
+        }
         y = list.bottom;
     }
     let note = l.pick(["Download/Skyward", "Download/Skyward", "Download/Skyward"]);
@@ -1326,7 +1390,7 @@ pub fn full(cx: &Ctx) -> Frame {
     if let Some(d) = &s.browser.plugin_download {
         if let Some(why) = &d.error {
             y = widgets::footnote(&mut c, t, f, y + m.card_gap, why);
-        } else if d.total.is_some_and(|t| d.done >= t) {
+        } else if d.finished {
             y = widgets::footnote(
                 &mut c,
                 t,

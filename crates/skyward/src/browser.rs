@@ -178,10 +178,12 @@ pub struct Worker {
     /// The connection in use, which stopping cuts at once.
     agent: Arc<Mutex<Option<ureq::Agent>>>,
     thread: Option<JoinHandle<()>>,
+    plugin_download: bool,
 }
 
 impl Worker {
     pub fn start(task: Task, servers: Servers) -> Result<Worker> {
+        let plugin_download = matches!(task, Task::PluginDownload { .. });
         let mut fds = [0; 2];
         if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
             return Err(anyhow::anyhow!("make the browser's wake pipe: {}", std::io::Error::last_os_error()));
@@ -206,7 +208,7 @@ impl Worker {
                         unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
                         return;
                     }
-                    let _ = tx.send(event);
+                    let _ = crate::browser_events::send(&tx, event, &stopping);
                     unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
                 };
                 let a = http::agent(servers.clone());
@@ -263,6 +265,7 @@ impl Worker {
                         tell(Event::Installed(ended));
                     }
                     Task::FullStream { dir, url } => {
+                        let url = web::full_url(&url);
                         // One owner from connect through stop: a quick close/reopen
                         // cannot let an old worker kill or attach to the new page.
                         static SESSION: Mutex<()> = Mutex::new(());
@@ -302,6 +305,7 @@ impl Worker {
                                         Control::Scroll { dy } => cdp.scroll(dy)?,
                                         Control::Reload => cdp.reload()?,
                                         Control::Navigate { url } => {
+                                            let url = web::full_url(&url);
                                             note(&format!("Chromium navigate {url}"));
                                             cdp.navigate(&url)?;
                                         }
@@ -313,7 +317,7 @@ impl Worker {
                                 match cdp.next_event()? {
                                     Some(crate::cdp::Event::Download { url, name }) => tell(Event::Download { url, name }),
                                     Some(crate::cdp::Event::Navigated(url)) => tell(Event::Navigated(url)),
-                                    Some(crate::cdp::Event::Open(url)) => cdp.navigate(&url)?,
+                                    Some(crate::cdp::Event::Open(url)) => cdp.navigate(&web::full_url(&url))?,
                                     Some(crate::cdp::Event::LoadFailed(error)) => {
                                         note(&format!("Chromium page load failed: {error}"));
                                     }
@@ -365,11 +369,24 @@ impl Worker {
             stop,
             agent,
             thread: Some(thread),
+            plugin_download,
         })
     }
 
     pub fn fd(&self) -> RawFd {
         self.wake.as_raw_fd()
+    }
+
+    pub fn ended(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    pub fn plugin_download(&self) -> bool {
+        self.plugin_download
     }
 
     pub fn command(&self, command: Control) {
@@ -423,10 +440,29 @@ fn note(line: &str) {
 }
 
 fn fetch_plugin(agent: &ureq::Agent, url: &str, path: &Path, stop: &AtomicBool, tell: &dyn Fn(Event)) -> Result<(), String> {
+    use skyward_net::download::{self, Progress, Sum};
+    if url != skyward_files::browser_plugin::URL {
+        return Err("Unexpected Chromium release URL".into());
+    }
+    if path.exists() {
+        skyward_files::browser_plugin::verify_archive(path).map_err(|error| format!("{error:#}"))?;
+        let size = path.metadata().map_err(|error| error.to_string())?.len();
+        tell(Event::PluginSaved {
+            done: size,
+            total: Some(size),
+            speed: 0,
+        });
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
     let started = Instant::now();
     let mut last = Instant::now() - Duration::from_secs(1);
     let mut resumed = None;
-    web::save(agent, url, path, stop, &mut |saving| {
+    let mut progress = |progress| {
+        let Progress::Downloading { done, total } = progress else { return };
+        let saving = Saving { done, total: Some(total) };
         let resumed = *resumed.get_or_insert(saving.done);
         if last.elapsed() >= PROGRESS_EVERY || saving.total == Some(saving.done) {
             let speed = (saving.done.saturating_sub(resumed) as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
@@ -437,7 +473,31 @@ fn fetch_plugin(agent: &ureq::Agent, url: &str, path: &Path, stop: &AtomicBool, 
             });
             last = Instant::now();
         }
-    })
-    .map(|_| ())
-    .map_err(|e| format!("{e:#}"))
+    };
+    let mut errors = Vec::new();
+    for source in skyward_net::mirror::candidates(url) {
+        if stop.load(Ordering::Relaxed) {
+            return Err("stopped as asked".into());
+        }
+        note(&format!("Chromium package source {source}"));
+        match download::fetch(
+            agent,
+            &source,
+            path,
+            &Sum::Sha256(skyward_files::browser_plugin::SHA256.into()),
+            stop,
+            &mut progress,
+        ) {
+            Ok(()) => return skyward_files::browser_plugin::verify_archive(path).map_err(|error| format!("{error:#}")),
+            Err(error) if stop.load(Ordering::Relaxed) => {
+                let _ = error;
+                return Err("stopped as asked".into());
+            }
+            Err(error) => {
+                note(&format!("Chromium source failed: {error:#}"));
+                errors.push(format!("{error:#}"));
+            }
+        }
+    }
+    Err(errors.join("; "))
 }

@@ -29,7 +29,7 @@ pub fn refresh_launcher(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn install(archive: &Path, dir: &Path) -> Result<()> {
+pub fn verify_archive(archive: &Path) -> Result<()> {
     let mut input = fs::File::open(archive)?;
     let mut digest = Sha256::new();
     let mut chunk = [0u8; 128 * 1024];
@@ -41,6 +41,11 @@ pub fn install(archive: &Path, dir: &Path) -> Result<()> {
         digest.update(&chunk[..count]);
     }
     ensure!(format!("{:x}", digest.finalize()) == SHA256, "Chromium package SHA-256 mismatch");
+    Ok(())
+}
+
+pub fn install(archive: &Path, dir: &Path) -> Result<()> {
+    verify_archive(archive)?;
     let parent = dir.parent().context("browser directory has no parent")?;
     fs::create_dir_all(parent)?;
     let staging = tempfile::Builder::new().prefix("chromium-install-").tempdir_in(parent)?;

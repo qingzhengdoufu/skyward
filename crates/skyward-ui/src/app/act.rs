@@ -1005,6 +1005,10 @@ impl App {
     /// A key of the on-screen keyboard. A capital lasts one letter; return
     /// opens the first result of a search, and runs a terminal's command.
     pub(super) fn type_key(&mut self, cap: Cap, now: u64) -> Vec<Effect> {
+        if self.screen() == Screen::BrowserAddress && matches!(cap, Cap::Char(_) | Cap::Space | Cap::Backspace) {
+            self.browser_edit_key(cap);
+            return Vec::new();
+        }
         let (l, layer) = (self.state.lang, self.state.layer);
         match cap {
             Cap::Char(ch) => {

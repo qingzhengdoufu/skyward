@@ -1338,32 +1338,98 @@ pub fn chosen_bar(t: &Theme, f: &Fonts, bg: Rgba, labels: &[&str], chosen: Optio
 /// for the card shows its end, where the cursor is. Returns where the card
 /// ends, and the cursor.
 pub fn text_field(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, text: &str) -> (f32, Caret) {
-    let at = draw_text_field(c, t, f, t.m.margin, top, text, false);
+    text_field_at(c, t, f, top, text, text.len(), 0)
+}
+
+/// Editable single-line text. Cursor and viewport offsets are UTF-8 byte boundaries.
+#[allow(clippy::too_many_arguments)]
+pub fn text_field_at(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, text: &str, position: usize, start: usize) -> (f32, Caret) {
+    let at = draw_text_field(c, t, f, (t.m.margin, top), text, (position, start), false);
     let caret = caret_over(at, |art, dx, dy| {
-        draw_text_field(art, t, f, t.m.margin - dx, top - dy, text, true);
+        draw_text_field(art, t, f, (t.m.margin - dx, top - dy), text, (position, start), true);
     });
     (top + t.m.dp(56.0), caret)
 }
 
+pub fn text_boundary(text: &str, position: usize) -> usize {
+    let mut position = position.min(text.len());
+    while !text.is_char_boundary(position) {
+        position -= 1;
+    }
+    position
+}
+
+fn field_window(c: &Canvas, t: &Theme, f: &Fonts, text: &str, position: usize, start: usize) -> std::ops::Range<usize> {
+    let position = text_boundary(text, position);
+    let room = (t.m.w as f32 - t.m.margin * 2.0 - t.m.inner * 2.0 - t.m.dp(4.0)).max(1.0);
+    let mut start = text_boundary(text, start).min(position);
+    while c.text_width(&f.heading, &text[start..position], t.m.row_title_px) > room {
+        start += text[start..].chars().next().map_or(0, char::len_utf8);
+    }
+    let mut end = position;
+    for ch in text[position..].chars() {
+        let next = end + ch.len_utf8();
+        if c.text_width(&f.heading, &text[start..next], t.m.row_title_px) > room {
+            break;
+        }
+        end = next;
+    }
+    start..end
+}
+
+pub fn text_field_position(t: &Theme, f: &Fonts, text: &str, position: usize, start: usize, x: f32) -> (usize, usize) {
+    let c = Canvas::new(1, 1);
+    let range = field_window(&c, t, f, text, position, start);
+    let left = t.m.margin + t.m.inner;
+    let right = t.m.w as f32 - left - t.m.dp(4.0);
+    if x < left && range.start > 0 {
+        let previous = text[..range.start].char_indices().last().map_or(0, |(at, _)| at);
+        return (previous, previous);
+    }
+    if x > right && range.end < text.len() {
+        let next = range.end + text[range.end..].chars().next().map_or(0, char::len_utf8);
+        return (next, range.start);
+    }
+    let mut last = 0.0;
+    for (offset, ch) in text[range.clone()].char_indices() {
+        let end = range.start + offset + ch.len_utf8();
+        let width = c.text_width(&f.heading, &text[range.start..end], t.m.row_title_px);
+        if x - left < (last + width) / 2.0 {
+            return (range.start + offset, range.start);
+        }
+        last = width;
+    }
+    (range.end, range.start)
+}
+
 /// Draw the text field's card from `x0`, `top`, with its cursor if
 /// `caret`; returns where the cursor is.
-fn draw_text_field(c: &mut Canvas, t: &Theme, f: &Fonts, x0: f32, top: f32, text: &str, caret: bool) -> Rect {
+fn draw_text_field(
+    c: &mut Canvas,
+    t: &Theme,
+    f: &Fonts,
+    (x0, top): (f32, f32),
+    text: &str,
+    (position, start): (usize, usize),
+    caret: bool,
+) -> Rect {
     let m = &t.m;
     let (w, h) = (m.w as f32 - m.margin * 2.0, m.dp(56.0));
     c.fill_round_rect(x0, top, w, h, m.card_radius, t.pal.card);
-    let (x, room) = (x0 + m.inner, w - m.inner * 2.0 - m.dp(4.0));
+    let x = x0 + m.inner;
     let px = m.row_title_px;
-    let mut shown = text;
-    while c.text_width(&f.heading, shown, px) > room {
-        let mut rest = shown.chars();
-        rest.next();
-        shown = rest.as_str();
-    }
-    let at = cursor(t, f, x + c.text_width(&f.heading, shown, px), top + h / 2.0, px);
+    let range = field_window(c, t, f, text, position, start);
+    let at = cursor(
+        t,
+        f,
+        x + c.text_width(&f.heading, &text[range.start..text_boundary(text, position)], px),
+        top + h / 2.0,
+        px,
+    );
     if caret {
         c.fill_round_rect(at.x, at.y, at.w, at.h, m.dp(CARET_RADIUS_DP), t.pal.accent);
     }
-    c.text_vc(&f.heading, shown, x, top + h / 2.0, px, t.pal.text, None);
+    c.text_vc(&f.heading, &text[range], x, top + h / 2.0, px, t.pal.text, None);
     at
 }
 
@@ -1384,6 +1450,7 @@ pub enum Trail<'a> {
     Value(&'a str),
     /// Right-aligned grey text with no chevron (read-only information).
     Text(&'a str),
+    DeleteTask(&'a str),
     Switch(bool),
     Badge(&'a str),
     Check(bool),
@@ -1464,6 +1531,7 @@ fn layout(c: &Canvas, t: &Theme, f: &Fonts, r: &Row) -> Layout {
         Trail::Arrow => m.chevron_inset + m.chevron_w + m.value_gap,
         Trail::Value(s) => m.chevron_inset + m.chevron_w + m.value_gap * 2.0 + c.text_width(&f.value, s, m.sub_px),
         Trail::Text(s) => m.inner + m.value_gap + c.text_width(&f.value, s, m.sub_px),
+        Trail::DeleteTask(s) => m.dp(44.0) + m.inner + c.text_width(&f.value, s, m.sub_px),
         Trail::Switch(_) => m.inner + m.switch_w + m.value_gap,
         Trail::Badge(_) => m.inner + m.badge_w + m.value_gap,
         Trail::Check(_) => m.inner + m.dp(24.0) + m.value_gap,
@@ -1544,6 +1612,11 @@ fn draw_row(c: &mut Canvas, t: &Theme, f: &Fonts, r: &Row, lay: &Layout, top: f3
         Trail::Text(s) => {
             let w = c.text_width(&f.value, s, m.sub_px);
             c.text_vc(&f.value, s, right - m.inner - w, cy, m.sub_px, tone.value, None);
+        }
+        Trail::DeleteTask(s) => {
+            icons::glyph(c, Icon::Wipe, right - m.dp(22.0), cy, m.dp(18.0), t.pal.subtitle);
+            let width = c.text_width(&f.value, s, m.sub_px);
+            c.text_vc(&f.value, s, right - m.dp(44.0) - width, cy, m.sub_px, tone.value, None);
         }
         Trail::Switch(on) => switch(c, t, right - m.inner, cy, on),
         Trail::Badge(s) => {

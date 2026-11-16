@@ -19,8 +19,8 @@ fn smaller_navigation_buttons_vibrate_once_and_obey_the_touch_preference() {
             app.set_navigation(true);
             app.state.vibrate = enabled;
             app.frame(&f, &i);
-            assert_eq!(app.nav_height(), (PPD * 36.0) as u32);
-            let x = W as f32 * (button as f32 + 0.5) / 3.0;
+            assert_eq!(app.nav_height(), (PPD * 32.0) as u32);
+            let x = app.navigation_buttons()[button].centre().0;
             let y = H as f32 - app.nav_height() as f32 / 2.0;
             let expected = if enabled { vec![Effect::Haptic] } else { Vec::new() };
             assert_eq!(app.touch(Touch::Down(x, y), &f, 1000), expected);
@@ -35,6 +35,26 @@ fn smaller_navigation_buttons_vibrate_once_and_obey_the_touch_preference() {
             assert_eq!(app.screen(), if button == 2 { Screen::Tasks } else { Screen::Home });
         }
     }
+}
+
+#[test]
+fn navigation_uses_a_compact_group_and_dragging_out_cancels_the_button() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Settings, W, H, PPD);
+    app.set_navigation(true);
+    app.frame(&f, &i);
+    let buttons = app.navigation_buttons();
+    assert!(buttons[0].x > 0.0 && buttons[2].x + buttons[2].w < W as f32);
+    assert_eq!(buttons[0].w, PPD * 84.0);
+    let (x, y) = buttons[1].centre();
+    assert!(app.touch(Touch::Down(5.0, y), &f, 1000).is_empty());
+    app.touch(Touch::Up, &f, 1001);
+    assert_eq!(app.screen(), Screen::Settings);
+    app.touch(Touch::Down(x, y), &f, 1010);
+    app.touch(Touch::Move(5.0, y), &f, 1020);
+    app.touch(Touch::Up, &f, 1030);
+    assert_eq!(app.screen(), Screen::Settings);
+    assert!(app.nav_press.is_none());
 }
 
 #[test]
@@ -289,6 +309,109 @@ fn full_browser_search_uses_html_instead_of_the_native_rss_reader() {
         skyward_net::web::full_address("https://example.com/page?format=rss"),
         "https://example.com/page?format=rss"
     );
+}
+
+#[test]
+fn native_rss_searches_are_converted_when_opened_or_revisited_in_full_mode() {
+    let rss = "https://cn.bing.com/search?format=rss&setlang=zh-Hans&q=nihao";
+    let html = "https://cn.bing.com/search?setlang=zh-Hans&q=nihao";
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.browser_read(rss.into());
+    app.browser_read("https://example.com/".into());
+    app.state.browser.full_active = true;
+    assert!(matches!(app.act(Action::BrowserBack, 0).as_slice(), [Effect::BrowserPluginStart { url, .. }] if url == html));
+    assert_eq!(app.state.browser.url, html);
+    assert_eq!(app.state.browser.address, html);
+    assert_eq!(app.state.browser.history[0], html);
+    assert!(matches!(app.browser_read(rss.into()).as_slice(), [Effect::BrowserPluginStart { url, .. }] if url == html));
+    assert!(
+        matches!(app.browser_read("https://example.com/feed.xml".into()).as_slice(), [Effect::BrowserPluginStart { url, .. }] if url == "https://example.com/feed.xml")
+    );
+}
+
+#[test]
+fn browser_address_cursor_places_and_drags_in_both_directions_without_reloading_text() {
+    let (f, i) = (fonts(), info());
+    for full in [false, true] {
+        let mut app = App::new(Screen::BrowserAddress, W, H, PPD);
+        app.state.browser.full_active = full;
+        app.state.browser.address = "https://example.com/你好/path".into();
+        app.state.browser.address_cursor = app.state.browser.address.len();
+        app.frame(&f, &i);
+        let t = app.theme();
+        let top = if full {
+            t.m.h as f32 - widgets::keyboard_height(&t) - t.m.dp(64.0)
+        } else {
+            app.frame(&f, &i)
+                .hits
+                .iter()
+                .find(|hit| hit.action == Action::BrowserAddress)
+                .unwrap()
+                .rect
+                .y
+        };
+        let y = top + t.m.dp(28.0);
+        let x = t.m.margin + t.m.inner;
+        let original = app.state.browser.address.clone();
+        app.touch(Touch::Down(x, y), &f, 1000);
+        let first = app.state.browser.address_cursor;
+        app.touch(Touch::Move(x + t.m.dp(100.0), y), &f, 1010);
+        assert!(app.state.browser.address_cursor > first);
+        app.touch(Touch::Move(x, y), &f, 1020);
+        assert!(app.state.browser.address_cursor <= first);
+        app.touch(Touch::Up, &f, 1030);
+        assert_eq!(app.state.browser.address, original);
+        app.state.browser.address_cursor = "https://example.com/你".len();
+        app.type_key(Cap::Backspace, 1040);
+        assert_eq!(app.state.browser.address, "https://example.com/好/path");
+        app.type_key(Cap::Char('你'), 1050);
+        assert_eq!(app.state.browser.address, original);
+        app.type_key(Cap::Space, 1060);
+        assert!(app.state.browser.address.contains("你 好"));
+    }
+}
+
+#[test]
+fn deleting_a_download_requires_confirmation_and_keeps_other_tasks_indexed() {
+    let mut app = App::new(Screen::BrowserDownloads, W, H, PPD);
+    app.state.data = Data::Open;
+    app.browser_offered_download("https://example.com/one.zip".into(), "one.zip".into(), 0);
+    app.browser_save_ended(Err("stopped as asked".into()), 1);
+    app.browser_offered_download("https://example.com/two.zip".into(), "two.zip".into(), 2);
+    assert!(app.act(Action::BrowserAskRemoveDownload(0), 3).is_empty());
+    assert_eq!(app.state.browser.downloads.len(), 2);
+    app.act(Action::BrowserCancelRemoveDownload, 4);
+    assert_eq!(app.state.browser.remove_download, None);
+    app.act(Action::BrowserAskRemoveDownload(0), 5);
+    let effects = app.act(Action::BrowserConfirmRemoveDownload, 6);
+    let [Effect::RemoveBrowserDownload { path }] = effects.as_slice() else {
+        panic!("confirmed deletion produces one cleanup request")
+    };
+    assert_eq!(path, "/data/media/0/Download/Skyward/one.zip");
+    assert!(
+        app.browser_offered_download("https://example.com/three.zip".into(), "three.zip".into(), 7)
+            .is_empty()
+    );
+    app.browser_download_removed(path, Ok(()), 8);
+    assert_eq!(app.state.browser.downloads.len(), 1);
+    assert_eq!(app.state.browser.saving, Some(0));
+    assert_eq!(app.state.browser.downloads[0].name, "two.zip");
+}
+
+#[test]
+fn the_plugin_is_not_finished_until_the_checksum_checked_worker_ends() {
+    let mut app = App::new(Screen::BrowserFull, W, H, PPD);
+    app.state.data = Data::Open;
+    let effects = app.act(Action::BrowserPluginDownload, 0);
+    assert!(matches!(effects.as_slice(), [Effect::BrowserPluginDownload { .. }]));
+    app.plugin_saved(100, Some(100), 1);
+    assert!(!app.state.browser.plugin_download.as_ref().unwrap().finished);
+    app.plugin_downloaded(Err("checksum mismatch".into()));
+    let download = app.state.browser.plugin_download.as_ref().unwrap();
+    assert!(!download.finished && download.error.is_some());
+    app.plugin_downloaded(Ok(()));
+    let download = app.state.browser.plugin_download.as_ref().unwrap();
+    assert!(download.finished && download.error.is_none());
 }
 fn fonts() -> Fonts {
     crate::font::bundled()

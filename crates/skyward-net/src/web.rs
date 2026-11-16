@@ -243,8 +243,34 @@ pub fn full_address(input: &str) -> String {
     if !input.trim().is_empty() && url == search_url(input.trim()) {
         format!("https://cn.bing.com/search?q={}", percent_encode(input.trim()))
     } else {
-        url
+        full_url(&url)
     }
+}
+
+/// A search already opened by the native reader can carry its RSS URL into
+/// full mode through the current page or history. Other feeds remain feeds.
+pub fn full_url(input: &str) -> String {
+    let Ok(mut url) = url::Url::parse(input) else { return input.into() };
+    if !matches!(url.scheme(), "http" | "https")
+        || !matches!(url.host_str(), Some("bing.com" | "www.bing.com" | "cn.bing.com"))
+        || !matches!(url.path(), "/search" | "/search/")
+    {
+        return input.into();
+    }
+    let pairs: Vec<_> = url.query_pairs().into_owned().collect();
+    if !pairs
+        .iter()
+        .any(|(key, value)| key.eq_ignore_ascii_case("format") && value.eq_ignore_ascii_case("rss"))
+        || !pairs.iter().any(|(key, value)| key == "q" && !value.trim().is_empty())
+    {
+        return input.into();
+    }
+    url.query_pairs_mut().clear().extend_pairs(
+        pairs
+            .iter()
+            .filter(|(key, value)| !(key.eq_ignore_ascii_case("format") && value.eq_ignore_ascii_case("rss"))),
+    );
+    url.into()
 }
 
 /// Whether `url` names a page the browser can read, rather than anything
@@ -529,6 +555,11 @@ pub fn save(agent: &ureq::Agent, url: &str, path: &Path, stop: &AtomicBool, prog
 /// Where a download waits until it is whole.
 pub fn partial(path: &Path) -> PathBuf {
     crate::download::partial(path)
+}
+
+/// Remove only an unfinished transfer and its metadata, never the final file.
+pub fn discard_partial(path: &Path) -> Result<()> {
+    crate::web_save::discard(path)
 }
 
 fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
@@ -1655,6 +1686,44 @@ mod tests {
         assert_eq!(address("example.com/a"), "https://example.com/a");
         assert_eq!(address("//example.com"), "https://example.com");
         assert!(address("skyward recovery").starts_with("https://www.bing.com/search?format=rss"));
+    }
+
+    #[test]
+    fn full_mode_converts_bing_rss_searches_without_changing_the_query() {
+        for host in ["www.bing.com", "cn.bing.com", "bing.com"] {
+            let source = format!("https://{host}/search?format=rss&setlang=zh-Hans&q=%E4%BD%A0%E5%A5%BD+a%2Bb%26c");
+            let html = full_url(&source);
+            let parsed = url::Url::parse(&html).unwrap();
+            assert_eq!(parsed.query_pairs().find(|(key, _)| key == "q").unwrap().1, "你好 a+b&c");
+            assert!(!parsed.query_pairs().any(|(key, _)| key.eq_ignore_ascii_case("format")));
+            assert_eq!(parsed.query_pairs().find(|(key, _)| key == "setlang").unwrap().1, "zh-Hans");
+            assert_eq!(full_url(&html), html, "conversion is idempotent");
+            assert_eq!(full_address(&source), html, "pasted addresses use the same normalization");
+        }
+        assert_eq!(
+            full_url("https://cn.bing.com/search?q=nihao&FORMAT=RSS"),
+            "https://cn.bing.com/search?q=nihao"
+        );
+        assert_eq!(
+            full_url("http://www.bing.com/search?format=rss&q=nihao"),
+            "http://www.bing.com/search?q=nihao"
+        );
+    }
+
+    #[test]
+    fn full_mode_does_not_rewrite_unrelated_feeds_or_other_sites() {
+        for source in [
+            "https://example.com/search?format=rss&q=nihao",
+            "https://cn.bing.com.example.com/search?format=rss&q=nihao",
+            "https://cn.bing.com/feed?format=rss&q=nihao",
+            "https://cn.bing.com/search?format=rss",
+            "https://cn.bing.com/search?format=rss&q=",
+            "https://cn.bing.com/search?format=html&q=nihao",
+            "https://example.com/document.xml",
+            "https://cn.bing.com/search?q=nihao#section",
+        ] {
+            assert_eq!(full_url(source), source);
+        }
     }
 
     #[test]

@@ -308,6 +308,9 @@ pub enum Action {
     BrowserStop,
     BrowserStopDownload,
     BrowserOpenDownload(usize),
+    BrowserAskRemoveDownload(usize),
+    BrowserConfirmRemoveDownload,
+    BrowserCancelRemoveDownload,
     BrowserClearAddress,
     BrowserTabs,
     BrowserNewTab,
@@ -596,6 +599,7 @@ pub enum Effect {
         path: String,
     },
     StopBrowser,
+    RemoveBrowserDownload { path: String },
     BrowserPluginInstall {
         archive: String,
         dir: String,
@@ -920,6 +924,7 @@ pub enum Effect {
 
 pub(super) enum Drag {
     Idle,
+    BrowserCaret,
     BrowserTouch {
         rect: Rect,
         last: (u16, u16),

@@ -55,9 +55,23 @@ impl Pages<'_> {
                     _ => {}
                 }
             }
+            if worker.stopped() && worker.ended() && !download_done {
+                if worker.plugin_download() {
+                    self.app.plugin_downloaded(Err("stopped as asked".into()));
+                } else {
+                    self.app.browser_save_ended(Err("stopped as asked".into()), now);
+                }
+                download_done = true;
+            }
         }
-        if download_done {
+        if download_done && self.browser_removal.is_none() {
             self.browser_download = None;
+        }
+        if self.browser_removal.is_some() && self.browser_download.as_ref().is_none_or(crate::browser::Worker::ended) {
+            self.browser_download = None;
+            let path = self.browser_removal.take().expect("checked above");
+            let result = skyward_net::web::discard_partial(Path::new(&path)).map_err(|error| format!("{error:#}"));
+            self.app.browser_download_removed(&path, result, now);
         }
         let mut browser_done = false;
         if let Some(worker) = &self.browser {
