@@ -27,10 +27,7 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(200);
 
 pub enum Task {
     /// Read the page at this address, with the cookies kept for it.
-    Open {
-        url: String,
-        cookie: Option<String>,
-    },
+    Open { url: String, cookie: Option<String> },
     /// Send a form the page carries.
     Submit {
         url: String,
@@ -39,26 +36,13 @@ pub enum Task {
         cookie: Option<String>,
     },
     /// Save the file at this address to this path.
-    Save {
-        url: String,
-        path: PathBuf,
-    },
+    Save { url: String, path: PathBuf },
     /// Unpack the plugin package at `archive` into `dir`.
-    Install {
-        archive: PathBuf,
-        dir: PathBuf,
-    },
+    Install { archive: PathBuf, dir: PathBuf },
     /// Keep a continuous frame stream from the persistent page.
-    FullStream {
-        dir: PathBuf,
-        url: String,
-    },
-    FullStop,
+    FullStream { dir: PathBuf, url: String },
     /// Fetch the plugin package from a release URL.
-    PluginDownload {
-        url: String,
-        path: PathBuf,
-    },
+    PluginDownload { url: String, path: PathBuf },
 }
 
 pub enum Control {
@@ -179,8 +163,8 @@ fn start_full(dir: &Path, url: &str, servers: &Servers) -> Result<()> {
     Ok(())
 }
 
-fn full_started(dir: &Path, url: &str, servers: &Servers) -> Result<Cdp> {
-    start_full(dir, url, servers)?;
+fn full_started(dir: &Path, servers: &Servers) -> Result<Cdp> {
+    start_full(dir, "about:blank", servers)?;
     Cdp::connect()
 }
 
@@ -279,13 +263,25 @@ impl Worker {
                         tell(Event::Installed(ended));
                     }
                     Task::FullStream { dir, url } => {
+                        // One owner from connect through stop: a quick close/reopen
+                        // cannot let an old worker kill or attach to the new page.
+                        static SESSION: Mutex<()> = Mutex::new(());
+                        let _session = SESSION.lock().expect("the full browser session is not poisoned");
                         let result = (|| -> Result<()> {
-                            let mut cdp = full_started(&dir, &url, &servers)?;
+                            if stopping.load(Ordering::Relaxed) {
+                                return Ok(());
+                            }
+                            let mut cdp = full_started(&dir, &servers)?;
+                            cdp.enable_downloads()?;
                             cdp.navigate(&url)?;
-                            tell(Event::Shot(cdp.screenshot().map_err(|e| format!("{e:#}"))));
-                            cdp.start_screencast()?;
+                            let mut capture_at = Instant::now();
+                            let mut previous: Option<Vec<u8>> = None;
+                            let mut capture_errors = 0;
                             while !stopping.load(Ordering::Relaxed) {
                                 let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
+                                if !commands.is_empty() {
+                                    capture_at = Instant::now();
+                                }
                                 for command in commands {
                                     match command {
                                         Control::Touch { phase, x, y } => {
@@ -311,12 +307,10 @@ impl Worker {
                                         }
                                         Control::Viewport { width, height } => {
                                             cdp.viewport(width, height)?;
-                                            cdp.start_screencast()?;
                                         }
                                     }
                                 }
                                 match cdp.next_event()? {
-                                    Some(crate::cdp::Event::Frame(frame)) => tell(Event::Shot(Ok(frame))),
                                     Some(crate::cdp::Event::Download { url, name }) => tell(Event::Download { url, name }),
                                     Some(crate::cdp::Event::Navigated(url)) => tell(Event::Navigated(url)),
                                     Some(crate::cdp::Event::Open(url)) => cdp.navigate(&url)?,
@@ -325,9 +319,32 @@ impl Worker {
                                     }
                                     None => {}
                                 }
+                                let frame_pending = newest.lock().map(|frame| frame.is_some()).unwrap_or(true);
+                                if Instant::now() >= capture_at && !frame_pending {
+                                    // Upstream browser-inline captures frames rather than
+                                    // starting/restarting a screencast on resize/navigation.
+                                    match cdp.screenshot() {
+                                        Ok(frame) => {
+                                            capture_errors = 0;
+                                            let changed = previous.as_ref() != Some(&frame);
+                                            capture_at = Instant::now() + Duration::from_millis(if changed { 100 } else { 300 });
+                                            if changed {
+                                                previous = Some(frame.clone());
+                                                tell(Event::Shot(Ok(frame)));
+                                            }
+                                        }
+                                        Err(error) if capture_errors < 4 => {
+                                            capture_errors += 1;
+                                            note(&format!("Chromium capture retry {capture_errors}: {error:#}"));
+                                            capture_at = Instant::now() + Duration::from_millis(200);
+                                        }
+                                        Err(error) => return Err(error).context("capture the active Chromium page"),
+                                    }
+                                }
                             }
                             Ok(())
                         })();
+                        stop_full();
                         if let Err(e) = result {
                             note(&format!("Chromium session failed: {e:#}"));
                             tell(Event::Shot(Err(format!("{e:#}"))));
@@ -337,7 +354,6 @@ impl Worker {
                         let ended = fetch_plugin(&a, &url, &path, &stopping, &tell);
                         tell(Event::PluginEnded(ended));
                     }
-                    Task::FullStop => stop_full(),
                 }
             })
             .map_err(|e| anyhow::anyhow!("start the browser's worker: {e}"))?;

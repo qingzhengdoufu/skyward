@@ -2888,7 +2888,6 @@ impl Pages<'_> {
                 if let Some(worker) = self.browser_stream.take() {
                     worker.stop();
                 }
-                let _ = crate::browser::Worker::start(crate::browser::Task::FullStop, self.servers.clone()).map(|w| w.stop());
             }
             Effect::BrowserPluginRemove { dir } => {
                 if dir == skyward_files::browser_plugin::ROOT && self.browser_stream.is_none() {

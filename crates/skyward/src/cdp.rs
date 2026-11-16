@@ -28,7 +28,6 @@ pub struct Cdp {
 }
 
 pub enum Event {
-    Frame(Vec<u8>),
     Download { url: String, name: String },
     Navigated(String),
     Open(String),
@@ -38,22 +37,19 @@ pub enum Event {
 impl Cdp {
     pub fn connect() -> Result<Cdp> {
         let deadline = Instant::now() + Duration::from_secs(15);
-        let list = loop {
-            match http_get("/json/list") {
-                Ok(text) => break text,
-                Err(e) if Instant::now() < deadline => {
-                    let _ = e;
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-                Err(e) => return Err(e).context("wait for Chromium's debugging port"),
+        let ws = loop {
+            // Like upstream browser-inline, wait for a page, not just the port:
+            // Chromium can answer an empty target list while it is starting.
+            let page = http_get("/json/list")
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .and_then(|pages| page_socket(&pages));
+            if let Some(page) = page {
+                break page;
             }
+            anyhow::ensure!(Instant::now() < deadline, "Chromium lists no page to attach to");
+            std::thread::sleep(Duration::from_millis(200));
         };
-        let pages: Value = serde_json::from_str(&list).context("read Chromium's page list")?;
-        let ws = pages
-            .as_array()
-            .and_then(|pages| pages.iter().find(|page| page["type"] == "page"))
-            .and_then(|page| page["webSocketDebuggerUrl"].as_str())
-            .context("Chromium lists no page to attach to")?;
         let path = ws
             .strip_prefix("ws://127.0.0.1:9222")
             .or_else(|| ws.strip_prefix("ws://localhost:9222"))
@@ -85,7 +81,20 @@ impl Cdp {
             scale: DEVICE_SCALE,
         };
         cdp.call("Page.enable", json!({}))?;
+        cdp.call("Page.bringToFront", json!({}))?;
         cdp.call("Network.enable", json!({}))?;
+        let version = cdp.call("Browser.getVersion", json!({}))?;
+        if let Some(product) = version["product"]
+            .as_str()
+            .filter(|product| product.starts_with("Chrome/") || product.starts_with("HeadlessChrome/"))
+        {
+            let version = product.split_once('/').expect("a Chromium product contains a version").1;
+            cdp.call("Network.setUserAgentOverride", json!({
+                "userAgent": format!("Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Mobile Safari/537.36"),
+                "platform": "Android",
+                "acceptLanguage": "zh-CN,zh;q=0.9,en;q=0.8"
+            }))?;
+        }
         cdp.call("Page.addScriptToEvaluateOnNewDocument",json!({"source":"window.open=(url)=>{location.href=new URL(url,location.href).href;return window};document.addEventListener('click',e=>{const a=e.target.closest?.('a[target]');if(a)a.target='_self'},true)"}))?;
         cdp.call(
             "Emulation.setDeviceMetricsOverride",
@@ -109,13 +118,7 @@ impl Cdp {
             if answer["id"].as_u64() != Some(id) {
                 if matches!(
                     answer["method"].as_str(),
-                    Some(
-                        "Page.screencastFrame"
-                            | "Browser.downloadWillBegin"
-                            | "Page.frameNavigated"
-                            | "Page.windowOpen"
-                            | "Network.loadingFailed"
-                    )
+                    Some("Browser.downloadWillBegin" | "Page.frameNavigated" | "Page.windowOpen" | "Network.loadingFailed")
                 ) && self.pending.len() < 8
                 {
                     self.pending.push_back(answer);
@@ -181,20 +184,8 @@ impl Cdp {
         base64::engine::general_purpose::STANDARD.decode(data).context("decode screenshot")
     }
 
-    /// Start the continuous frame stream; each [`Cdp::next_frame`] acknowledges
-    /// the previous frame before returning the next.
-    pub fn start_screencast(&mut self) -> Result<()> {
+    pub fn enable_downloads(&mut self) -> Result<()> {
         self.call("Browser.setDownloadBehavior", json!({"behavior":"deny","eventsEnabled":true}))?;
-        self.call(
-            "Page.startScreencast",
-            json!({
-                "format": "jpeg",
-                "quality": 10,
-                "maxWidth": self.width,
-                "maxHeight": self.height,
-                "everyNthFrame": 1
-            }),
-        )?;
         Ok(())
     }
 
@@ -246,17 +237,6 @@ impl Cdp {
                     return Ok(Some(Event::Navigated(url.into())));
                 }
             }
-            if event["method"] != "Page.screencastFrame" {
-                continue;
-            }
-            let params = &event["params"];
-            let session = params["sessionId"].as_i64().unwrap_or(0);
-            let ack = json!({"id": self.next, "method": "Page.screencastFrameAck", "params": {"sessionId": session}});
-            self.next += 1;
-            write_frame(&mut self.stream, ack.to_string().as_bytes())?;
-            // Chromium screencast uses CSS pixels even on a high-density display.
-            // Treat it as invalidation, then capture the surface at device density.
-            return Ok(Some(Event::Frame(self.screenshot()?)));
         }
     }
 
@@ -429,6 +409,14 @@ fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
 
 pub const WIDTH: u32 = VIEW_W;
 
+fn page_socket(pages: &Value) -> Option<String> {
+    pages
+        .as_array()?
+        .iter()
+        .filter(|page| page["type"] == "page")
+        .find_map(|page| page["webSocketDebuggerUrl"].as_str().map(str::to_owned))
+}
+
 pub fn resolv_conf(servers: &[std::net::Ipv4Addr]) -> String {
     let servers = if servers.is_empty() {
         &[std::net::Ipv4Addr::new(223, 5, 5, 5), std::net::Ipv4Addr::new(1, 1, 1, 1)][..]
@@ -530,7 +518,7 @@ mod tests {
         assert_eq!(read_frame(&mut server).unwrap(), b"test");
     }
     #[test]
-    fn an_idle_screencast_is_not_an_error_and_does_not_wait_forever() {
+    fn an_idle_event_socket_is_not_an_error_and_does_not_wait_forever() {
         let (client, _server) = pair();
         let mut cdp = Cdp {
             stream: client,
@@ -551,21 +539,12 @@ mod tests {
             let call: Value = serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
             write_frame(
                 &mut server,
-                json!({"method":"Page.screencastFrame","params":{"sessionId":1,"data":"dGVzdA=="}})
+                json!({"method":"Page.frameNavigated","params":{"frame":{"url":"https://example.com/next"}}})
                     .to_string()
                     .as_bytes(),
             )
             .unwrap();
             write_frame(&mut server, json!({"id":call["id"],"result":{}}).to_string().as_bytes()).unwrap();
-            let ack: Value = serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
-            assert_eq!(ack["method"], "Page.screencastFrameAck");
-            let shot: Value = serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
-            assert_eq!(shot["method"], "Page.captureScreenshot");
-            write_frame(
-                &mut server,
-                json!({"id":shot["id"],"result":{"data":"dGVzdA=="}}).to_string().as_bytes(),
-            )
-            .unwrap();
         });
         let mut cdp = Cdp {
             stream: client,
@@ -575,14 +554,14 @@ mod tests {
             height: VIEW_H,
             scale: DEVICE_SCALE,
         };
-        cdp.call("Page.startScreencast", json!({})).unwrap();
-        assert!(matches!(cdp.next_event().unwrap(),Some(Event::Frame(data)) if data==b"test"));
+        cdp.call("Page.captureScreenshot", json!({})).unwrap();
+        assert!(matches!(cdp.next_event().unwrap(),Some(Event::Navigated(url)) if url=="https://example.com/next"));
         writer.join().unwrap();
     }
 
     #[test]
     #[ignore = "requires a host Chromium executable"]
-    fn host_chromium_navigation_input_and_screencast() {
+    fn host_chromium_navigation_input_and_capture() {
         struct Running(std::process::Child);
         impl Drop for Running {
             fn drop(&mut self) {
@@ -642,18 +621,59 @@ mod tests {
             .call("Runtime.evaluate", json!({"expression":"document.title","returnByValue":true}))
             .unwrap();
         assert_eq!(title["result"]["value"], "Two");
-        cdp.start_screencast().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(Event::Frame(frame)) = cdp.next_event().unwrap() {
-                assert!(frame.starts_with(b"\x89PNG"));
-                assert_eq!(png_size(&frame).0, 1350, "stream must not downsample the page");
-                if let Ok(path) = std::env::var("SKYWARD_BROWSER_SHOT") {
-                    std::fs::write(path, frame).unwrap();
-                }
-                break;
+        let ua = cdp
+            .call("Runtime.evaluate", json!({"expression":"navigator.userAgent","returnByValue":true}))
+            .unwrap();
+        assert!(ua["result"]["value"].as_str().unwrap().contains("Mobile"));
+        cdp.enable_downloads().unwrap();
+        for height in [1400, 2400, 1400, 2400] {
+            cdp.viewport(1350, height).unwrap();
+            let frame = cdp.screenshot().unwrap();
+            assert!(frame.starts_with(b"\x89PNG"));
+            assert_eq!(png_size(&frame).0, 1350, "capture must not downsample the page");
+        }
+        // Exit/re-enter full mode against the same browser process without a
+        // stale stream or hidden page being left behind.
+        drop(cdp);
+        let mut cdp = Cdp::connect().unwrap();
+        cdp.viewport(1350, 2400).unwrap();
+        cdp.enable_downloads().unwrap();
+        cdp.navigate("data:text/html,<title>Reopened</title><h1>Reopened browser</h1>")
+            .unwrap();
+        wait_title(&mut cdp, "Reopened");
+        let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = server.local_addr().unwrap();
+        let pages = std::thread::spawn(move || {
+            let mut documents = 0;
+            while documents < 2 {
+                let (mut socket, _) = server.accept().unwrap();
+                let request = read_headers(&mut socket).unwrap();
+                let (body, document) = if request.starts_with("GET /one ") {
+                    ("<title>HTTP One</title><a id=next target=_blank href=/two>Next</a>", true)
+                } else if request.starts_with("GET /two ") {
+                    (
+                        "<title>HTTP Two</title><script>document.title='JavaScript ran'</script><input id=q>",
+                        true,
+                    )
+                } else {
+                    ("", false)
+                };
+                documents += usize::from(document);
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(reply.as_bytes());
             }
-            assert!(Instant::now() < deadline, "Chromium did not stream a frame");
+        });
+        cdp.navigate(&format!("http://{address}/one")).unwrap();
+        wait_title(&mut cdp, "HTTP One");
+        cdp.call("Runtime.evaluate", json!({"expression":"document.getElementById('next').click()"}))
+            .unwrap();
+        wait_title(&mut cdp, "JavaScript ran");
+        pages.join().unwrap();
+        if let Ok(path) = std::env::var("SKYWARD_BROWSER_SHOT") {
+            std::fs::write(path, cdp.screenshot().unwrap()).unwrap();
         }
         let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = server.local_addr().unwrap();
@@ -673,5 +693,18 @@ mod tests {
             assert!(Instant::now() < deadline, "Chromium did not report the attachment download");
         }
         response.join().unwrap();
+    }
+
+    #[test]
+    fn an_empty_or_incomplete_target_list_is_not_a_page() {
+        assert_eq!(page_socket(&json!([])), None);
+        assert_eq!(
+            page_socket(&json!([{"type":"service_worker","webSocketDebuggerUrl":"ws://bad"}])),
+            None
+        );
+        assert_eq!(
+            page_socket(&json!([{"type":"page"},{"type":"page","webSocketDebuggerUrl":"ws://page"}])),
+            Some("ws://page".into())
+        );
     }
 }
