@@ -286,6 +286,9 @@ pub enum Action {
     CloseControlCenter,
     BrowserAddress,
     BrowserSaveFile,
+    BrowserImeToggle,
+    BrowserImePick(usize),
+    BrowserImePage(bool),
     BrowserQuickOpen(usize),
     BrowserQuick,
     BrowserQuickAdd,
@@ -599,7 +602,9 @@ pub enum Effect {
         path: String,
     },
     StopBrowser,
-    RemoveBrowserDownload { path: String },
+    RemoveBrowserDownload {
+        path: String,
+    },
     BrowserPluginInstall {
         archive: String,
         dir: String,

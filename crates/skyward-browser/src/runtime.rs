@@ -31,10 +31,37 @@ pub fn verify(path: &Path) -> Result<Inventory> {
 }
 
 pub fn prepare(path: &Path) -> Result<tempfile::TempDir> {
+    prepare_with_font(path, Path::new("/skyward/MiSansVF.ttf"))
+}
+
+pub fn prepare_with_font(path: &Path, font: &Path) -> Result<tempfile::TempDir> {
     let root = tempfile::Builder::new().prefix("skyward-web-").rand_bytes(6).tempdir_in("/tmp")?;
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))?;
     verified(path, Some(root.path()))?;
+    install_font(root.path(), font)?;
     Ok(root)
+}
+
+fn install_font(root: &Path, font: &Path) -> Result<()> {
+    let bytes = fs::read(font).context("read recovery's Chinese font")?;
+    ensure!((1024..=32 << 20).contains(&bytes.len()), "invalid recovery font extent");
+    let fonts = root.join("usr/share/fonts/skyward");
+    fs::create_dir_all(&fonts)?;
+    fs::set_permissions(&fonts, fs::Permissions::from_mode(0o755))?;
+    let target = fonts.join("MiSansVF.ttf");
+    fs::write(&target, bytes)?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644))?;
+    let config = root.join("etc/fonts/conf.d/99-skyward.conf");
+    fs::write(
+        &config,
+        br#"<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig><dir>/usr/share/fonts/skyward</dir>
+<alias><family>sans-serif</family><prefer><family>MiSans VF</family><family>DejaVu Sans</family></prefer></alias>
+<alias><family>serif</family><prefer><family>MiSans VF</family><family>DejaVu Serif</family></prefer></alias>
+</fontconfig>"#,
+    )?;
+    fs::set_permissions(config, fs::Permissions::from_mode(0o644))?;
+    Ok(())
 }
 
 fn verified(path: &Path, into: Option<&Path>) -> Result<Inventory> {
@@ -141,7 +168,14 @@ fn inspect_into(source: &mut impl Read, expected: u32, cap: u64, into: Option<&P
                 Some(root) => {
                     let path = root.join(&name);
                     fs::create_dir_all(path.parent().context("browser member has no parent")?)?;
-                    Some(OpenOptions::new().write(true).create_new(true).mode(mode as u32).custom_flags(libc::O_NOFOLLOW).open(path)?)
+                    Some(
+                        OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .mode(mode as u32)
+                            .custom_flags(libc::O_NOFOLLOW)
+                            .open(path)?,
+                    )
                 }
                 None => None,
             };
@@ -150,10 +184,14 @@ fn inspect_into(source: &mut impl Read, expected: u32, cap: u64, into: Option<&P
             while left > 0 {
                 let n = left.min(buffer.len() as u64) as usize;
                 source.read_exact(&mut buffer[..n])?;
-                if let Some(output) = &mut output { output.write_all(&buffer[..n])?; }
+                if let Some(output) = &mut output {
+                    output.write_all(&buffer[..n])?;
+                }
                 left -= n as u64;
             }
-            if let Some(output) = output { output.set_permissions(fs::Permissions::from_mode(mode as u32))?; }
+            if let Some(output) = output {
+                output.set_permissions(fs::Permissions::from_mode(mode as u32))?;
+            }
         }
     }
     for (name, target) in &aliases {
@@ -193,6 +231,23 @@ fn inspect_into(source: &mut impl Read, expected: u32, cap: u64, into: Option<&P
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chinese_font_is_installed_only_inside_the_private_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("etc/fonts/conf.d")).unwrap();
+        let font = tempfile::NamedTempFile::new().unwrap();
+        fs::write(font.path(), vec![7; 4096]).unwrap();
+        install_font(root.path(), font.path()).unwrap();
+        assert_eq!(
+            fs::read(root.path().join("usr/share/fonts/skyward/MiSansVF.ttf")).unwrap(),
+            vec![7; 4096]
+        );
+        assert!(
+            fs::read_to_string(root.path().join("etc/fonts/conf.d/99-skyward.conf"))
+                .unwrap()
+                .contains("MiSans")
+        );
+    }
     fn archive(name: &str, mode: u16, data: &[u8]) -> Vec<u8> {
         members(&[(name, mode, data)])
     }
@@ -251,14 +306,29 @@ mod tests {
 
     #[test]
     fn extraction_creates_regular_files_and_resolved_aliases_in_a_private_directory() {
-        let data = members(&[("lib/alias", 0, b"lib/real"), ("lib/real", 0o755, b"ELF"), ("etc/config", 0o644, b"config")]);
+        let data = members(&[
+            ("lib/alias", 0, b"lib/real"),
+            ("lib/real", 0o755, b"ELF"),
+            ("etc/config", 0o644, b"config"),
+        ]);
         let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(),fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         inspect_into(&mut &data[..], 3, data.len() as u64, Some(root.path())).unwrap();
         assert_eq!(fs::read(root.path().join("lib/alias")).unwrap(), b"ELF");
-        assert_eq!(fs::metadata(root.path().join("lib/real")).unwrap().permissions().mode() & 0o777, 0o755);
-        assert_eq!(fs::metadata(root.path().join("etc/config")).unwrap().permissions().mode() & 0o777, 0o644);
-        assert!(!fs::symlink_metadata(root.path().join("lib/alias")).unwrap().file_type().is_symlink());
+        assert_eq!(
+            fs::metadata(root.path().join("lib/real")).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            fs::metadata(root.path().join("etc/config")).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert!(
+            !fs::symlink_metadata(root.path().join("lib/alias"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(fs::metadata(root.path()).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }

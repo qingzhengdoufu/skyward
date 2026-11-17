@@ -247,13 +247,33 @@ pub fn rgba_frame(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
         "invalid AERA pixel extent"
     );
     let mut rgba = vec![0; width as usize * height as usize * 4];
+    let columns: Vec<_> = (0..width)
+        .map(|x| {
+            let fixed = u64::from(x) * u64::from(WIDTH) * 256 / u64::from(width);
+            ((fixed / 256) as usize, (fixed % 256) as u32)
+        })
+        .collect();
     for y in 0..height {
-        let sy = u64::from(y) * u64::from(HEIGHT) / u64::from(height);
-        for x in 0..width {
-            let sx = u64::from(x) * u64::from(WIDTH) / u64::from(width);
-            let from = (sy as usize * WIDTH as usize + sx as usize) * 4;
-            let to = (y as usize * width as usize + x as usize) * 4;
-            rgba[to..to + 4].copy_from_slice(&[bgra[from + 2], bgra[from + 1], bgra[from], 255]);
+        // Fit the complete fixed-size worker viewport into the visible area.
+        // Cropping would make a page's bottom unreachable when it cannot scroll.
+        let fixed = (u64::from(y) * u64::from(HEIGHT) * 256 / u64::from(height)).min(u64::from(HEIGHT - 1) * 256);
+        let (sy, fy) = ((fixed / 256) as usize, (fixed % 256) as u32);
+        let ny = (sy + 1).min(HEIGHT as usize - 1);
+        for (x, &(sx, fx)) in columns.iter().enumerate() {
+            let nx = (sx + 1).min(WIDTH as usize - 1);
+            let (a, b, c, d) = (
+                (sy * WIDTH as usize + sx) * 4,
+                (sy * WIDTH as usize + nx) * 4,
+                (ny * WIDTH as usize + sx) * 4,
+                (ny * WIDTH as usize + nx) * 4,
+            );
+            let to = (y as usize * width as usize + x) * 4;
+            for (target, channel) in [2, 1, 0].into_iter().enumerate() {
+                let upper = u32::from(bgra[a + channel]) * (256 - fx) + u32::from(bgra[b + channel]) * fx;
+                let lower = u32::from(bgra[c + channel]) * (256 - fx) + u32::from(bgra[d + channel]) * fx;
+                rgba[to + target] = ((upper * (256 - fy) + lower * fy + 32768) >> 16) as u8;
+            }
+            rgba[to + 3] = 255;
         }
     }
     Ok(rgba)

@@ -1037,6 +1037,12 @@ impl App {
             Cap::Show(layer) => self.state.layer = layer,
             Cap::Enter => match self.screen() {
                 Screen::BrowserAddress => {
+                    for _ in 0..32 {
+                        if self.state.browser.ime.spelling.is_empty() {
+                            break;
+                        }
+                        self.browser_commit_ime(0);
+                    }
                     let input = self.state.browser.address.clone();
                     self.open(Screen::Browser);
                     return self.browser_go(&input, now);

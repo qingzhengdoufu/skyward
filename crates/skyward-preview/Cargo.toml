@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = ["pinyin-input"]
+pinyin-input = ["skyward-ui/pinyin-input"]
+aera-browser = ["skyward-ui/aera-browser"]
+
 [[bin]]
 name = "skyward-preview"
 path = "src/main.rs"

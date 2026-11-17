@@ -202,13 +202,15 @@ fn main() -> Result<()> {
                     ("browser-keys", Screen::BrowserAddress),
                     ("browser-full-live", Screen::Browser),
                     ("browser-full-keys", Screen::BrowserAddress),
+                    ("browser-ime", Screen::BrowserAddress),
+                    ("pattern-compact", Screen::Decrypt),
                     ("browser-downloads", Screen::BrowserDownloads),
                     ("browser-full-plugin", Screen::BrowserFull),
                     ("root-modules", Screen::RootModules),
                     ("partitions", Screen::Partitions),
                     ("control", Screen::ControlCenter),
                 ] {
-                    let mut app = App::new(screen, w, h, ppd);
+                    let mut app = App::new(if name == "control" { Screen::Home } else { screen }, w, h, ppd);
                     app.set_navigation(true);
                     app.state.lang = lang;
                     app.state.dark = dark;
@@ -254,6 +256,20 @@ fn main() -> Result<()> {
                         app.state.browser.full_shot = Some(std::fs::read(path)?);
                         app.state.browser.view = BrowserView::Full;
                     }
+                    if name == "browser-ime" {
+                        app.state.browser.full_active = true;
+                        app.state.browser.view = BrowserView::Full;
+                        app.state.browser.ime.enabled = true;
+                        app.state.browser.ime.spelling = "nihao".into();
+                        app.state.browser.ime.update();
+                        let theme = app.theme();
+                        let area = skyward_ui::browser::full_viewport(&theme);
+                        let mut picture = Canvas::filled(area.w as u32, area.h as u32, skyward_ui::Rgba::rgb(255,255,255));
+                        picture.text_top(&fonts.body, "中文网页离线布局预览", theme.m.dp(16.0), theme.m.dp(18.0), theme.m.dp(22.0), skyward_ui::Rgba::rgb(24,24,24), Some(area.w - theme.m.dp(32.0)));
+                        picture.text_top(&fonts.body, "你好，Skyward", theme.m.dp(16.0), theme.m.dp(65.0), theme.m.dp(18.0), skyward_ui::Rgba::rgb(24,24,24), Some(area.w - theme.m.dp(32.0)));
+                        app.state.browser.picture = Some(skyward_ui::app::BrowserPicture { width: picture.w, height: picture.h, pixels: std::sync::Arc::new(std::mem::take(&mut picture.data)) });
+                    }
+                    if name == "pattern-compact" { app.data_waiting(Some((0,Keys::Pattern)),Vec::new()); }
                     if name == "root-modules" {
                         app.state.root_modules = Some(Ok((
                             "Magisk".into(),
@@ -291,6 +307,13 @@ fn main() -> Result<()> {
                     )?;
                     let mut screen_canvas = Canvas::new(w, h);
                     app.compose(&mut screen_canvas, &fonts, &info, CLOCK, 0);
+                    if name == "control" {
+                        app.touch(Touch::Down(w as f32 / 2.0, 10.0), &fonts, 1000);
+                        app.touch(Touch::Move(w as f32 / 2.0, h as f32), &fonts, 1100);
+                        app.touch(Touch::Up, &fonts, 1120);
+                        app.tick(2200);
+                        app.compose(&mut screen_canvas, &fonts, &info, CLOCK, 2200);
+                    }
                     write_png(&out.join(format!("screen-{name}-{}-{dark}.png", lang.tag())), &screen_canvas)?;
                 }
             }

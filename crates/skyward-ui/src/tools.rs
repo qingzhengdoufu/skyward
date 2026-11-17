@@ -170,12 +170,12 @@ pub fn control(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let x = m.dp(16.0);
     let width = m.w as f32 - x * 2.0;
-    c.text_top(&f.body, &s.control_clock, x, m.dp(28.0), m.dp(44.0), t.pal.text, None);
+    c.text_top(&f.body, &s.control_clock, x, m.dp(45.0), m.dp(40.0), t.pal.text, Some(width));
     c.text_top(
         &f.body,
         &s.control_date,
         x,
-        m.dp(80.0),
+        m.dp(94.0),
         m.dp(13.0),
         t.pal.text,
         Some(width - m.dp(44.0)),
@@ -190,7 +190,7 @@ pub fn control(cx: &Ctx) -> Frame {
         &f.body,
         network,
         x,
-        m.dp(102.0),
+        m.dp(115.0),
         m.dp(12.0),
         t.pal.subtitle,
         Some(width - m.dp(60.0)),
@@ -273,7 +273,7 @@ pub fn control(cx: &Ctx) -> Frame {
             Action::Open(Screen::Wlan),
         );
     }
-    let top = m.dp(132.0);
+    let top = m.dp(144.0);
     let pad = m.dp(12.0);
     let cell = (width - pad * 2.0) / 4.0;
     let pitch = m.dp(88.0);

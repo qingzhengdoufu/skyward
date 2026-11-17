@@ -2813,7 +2813,7 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginInstall { archive, dir } => {
-                if dir != skyward_files::browser_plugin::ROOT
+                if cfg!(feature = "aera-browser") || dir != "/data/skyward-browser/chromium"
                     || !self.app.state.data.storage_open()
                     || self.browser_stream.is_some()
                     || self.installer.is_some()
@@ -2911,7 +2911,7 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginRemove { dir } => {
-                if dir == skyward_files::browser_plugin::ROOT && self.browser_stream.is_none() {
+                if !cfg!(feature = "aera-browser") && dir == "/data/skyward-browser/chromium" && self.browser_stream.is_none() {
                     let result = std::fs::remove_dir_all(dir).map_err(|e| e.to_string());
                     self.app.browser_plugin_installed(result.and(Err("Plugin removed".into())));
                 }

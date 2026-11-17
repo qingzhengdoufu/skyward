@@ -12,7 +12,7 @@ mod aod;
 mod browser;
 #[cfg(all(target_os = "android", feature = "aera-browser"))]
 mod browser_aera;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(all(target_os = "android", not(feature = "aera-browser")), test))]
 #[cfg_attr(test, allow(dead_code))]
 mod cdp;
 #[cfg(any(target_os = "android", test))]

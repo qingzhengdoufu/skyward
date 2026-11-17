@@ -234,6 +234,13 @@ pub fn status_bar(c: &mut Canvas, t: &Theme, f: &Fonts, bar: &Bar, ink: Rgba) {
     let cy = m.status_cy;
     // Digits carry no descender, so centre on half their height (≈0.72 em).
     c.text(&f.status, bar.clock, m.status_x, cy + m.status_px * 0.36, m.status_px, ink, None);
+    status_marks(c, t, f, bar, ink);
+}
+
+/// The live right-hand indicators, without duplicating the clock.
+pub fn status_marks(c: &mut Canvas, t: &Theme, f: &Fonts, bar: &Bar, ink: Rgba) {
+    let m = &t.m;
+    let cy = m.status_cy;
     let mut right = m.w as f32 - m.status_right;
     if let Some((level, charging)) = bar.battery {
         if let Some(kind) = charging {
@@ -1211,7 +1218,7 @@ fn draw_search_field(
         c.fill_round_rect(at.x, at.y, at.w, at.h, m.dp(CARET_RADIUS_DP), t.pal.accent);
     }
     if text.is_empty() {
-        c.text_vc(&f.heading, placeholder, tx, cy, px, t.pal.placeholder, None);
+        c.text_vc(&f.heading, placeholder, tx, cy, px, t.pal.placeholder, Some(room.max(0.0)));
     } else {
         c.text_vc(&f.heading, shown, tx, cy, px, t.pal.text, None);
     }

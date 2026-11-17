@@ -11,6 +11,141 @@ const H: u32 = 3200;
 const PPD: f32 = 3.5;
 
 #[test]
+fn browser_canvas_is_fixed_and_keyboard_does_not_reposition_the_web_page() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    let theme = app.theme();
+    let area = crate::browser::full_viewport(&theme);
+    assert!(
+        area.y < widgets::bar_bottom(&theme),
+        "web content starts below status, not the unused page toolbar"
+    );
+    let pixels = vec![220; area.w as usize * area.h as usize * 4];
+    app.state.browser.picture = Some(BrowserPicture {
+        width: area.w as u32,
+        height: area.h as u32,
+        pixels: std::sync::Arc::new(pixels),
+    });
+    let mut before = Canvas::new(W, H);
+    app.compose(&mut before, &f, &i, "12:00", 1000);
+    assert_eq!(app.max_scroll(), 0.0, "the dock does not add scrollable page height");
+    let point = (area.w / 2.0, area.y + 200.0);
+    app.touch(Touch::Down(point.0, point.1), &f, 1100);
+    app.touch(Touch::Move(point.0, point.1 - 50.0), &f, 1110);
+    app.touch(Touch::Up, &f, 1120);
+    assert_eq!(app.top().1, 0.0);
+    app.browser_plugin_focus(true);
+    app.end_turn();
+    let mut after = Canvas::new(W, H);
+    app.compose(&mut after, &f, &i, "12:00", 2000);
+    let upper = crate::browser::full_input_viewport(&theme);
+    let first = (area.y as usize + 10) * W as usize * 4;
+    let last = (upper.y as usize + upper.h as usize - 10) * W as usize * 4;
+    assert_eq!(
+        &before.data[first..last],
+        &after.data[first..last],
+        "keyboard overlays, not moves or rescales, the web canvas"
+    );
+    assert_eq!(app.max_scroll(), 0.0);
+}
+
+#[test]
+fn browser_long_address_is_ellipsized_before_the_menu() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.url = format!("https://example.com/{}", "long-query-".repeat(100));
+    let t = app.theme();
+    let dock = app.frame(&f, &i).dock.as_ref().unwrap();
+    let bar = dock.hits.iter().find(|h| h.action == Action::BrowserAddress).unwrap().rect;
+    let menu = dock.hits.iter().find(|h| h.action == Action::BrowserMenu).unwrap().rect;
+    let gap = dock.canvas.crop(
+        (bar.x + bar.w + 2.0) as u32,
+        bar.y as u32,
+        (menu.x - bar.x - bar.w - 4.0) as u32,
+        bar.h as u32,
+    );
+    assert!(
+        gap.data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| p[..3] == [t.pal.bg.r, t.pal.bg.g, t.pal.bg.b])
+    );
+}
+
+#[cfg(feature = "pinyin-input")]
+#[test]
+fn browser_pinyin_candidates_commit_at_the_cursor_and_enter_submits_chinese() {
+    let mut app = App::new(Screen::BrowserAddress, W, H, PPD);
+    app.act(Action::BrowserImeToggle, 0);
+    for ch in "nihao".chars() {
+        app.type_key(Cap::Char(ch), 0);
+    }
+    assert!(app.state.browser.address.is_empty());
+    let index = app.state.browser.ime.candidates.iter().position(|c| c.text == "你好").unwrap();
+    app.act(Action::BrowserImePick(index), 0);
+    assert_eq!(app.state.browser.address, "你好");
+    assert_eq!(app.state.browser.address_cursor, "你好".len());
+    assert!(app.state.browser.ime.spelling.is_empty());
+    let effects = app.type_key(Cap::Enter, 1);
+    assert!(matches!(effects.as_slice(), [Effect::BrowserOpen { url, .. }] if url.contains("%E4%BD%A0") || url.contains("%e4%bd%a0")));
+}
+
+#[test]
+fn compact_pattern_grid_has_nonoverlapping_touch_targets_and_unchanged_credentials() {
+    let (f, i) = (fonts(), info());
+    for (w, h, ppd) in [(720, 1600, 1.875), (W, H, PPD)] {
+        let mut app = App::new(Screen::Decrypt, w, h, ppd);
+        app.data_waiting(Some((0, Keys::Pattern)), Vec::new());
+        let (cx, cy, span) = app.frame(&f, &i).pattern.unwrap();
+        assert!(span <= ppd * 220.0);
+        assert!(span / 2.0 > ppd * widgets::PATTERN_REACH_DP * 2.0);
+        let dots = widgets::pattern_dots(cx, cy, span);
+        for dot in [0, 1, 4, 8] {
+            if dot == 0 {
+                app.touch(Touch::Down(dots[dot].0, dots[dot].1), &f, 1000);
+            } else {
+                app.touch(Touch::Move(dots[dot].0, dots[dot].1), &f, 1010);
+            }
+        }
+        assert_eq!(
+            app.touch(Touch::Up, &f, 1100),
+            vec![Effect::Unlock {
+                user: 0,
+                code: "1259".into()
+            }]
+        );
+    }
+}
+
+#[test]
+fn control_center_draws_live_right_hand_status_marks_without_an_extra_clock() {
+    let f = fonts();
+    let i = DeviceInfo {
+        slot: Some(Slot::A),
+        battery: Some(battery_at(100, Charge::Charging)),
+        ..info()
+    };
+    let mut app = App::new(Screen::ControlCenter, W, H, PPD);
+    let t = app.theme();
+    let mut actual = Canvas::new(W, H);
+    app.compose(&mut actual, &f, &i, "12:00", 1000);
+    let mut expected = Canvas::new(W, H);
+    widgets::status_marks(&mut expected, &t, &f, &app.bar("12:00", &i), t.pal.status);
+    let mut checked = 0;
+    for (mark, pixel) in expected.data.as_chunks::<4>().0.iter().zip(actual.data.as_chunks::<4>().0) {
+        if mark[3] == 255 {
+            assert_eq!(&mark[..3], &pixel[..3]);
+            checked += 1;
+        }
+    }
+    assert!(checked > 100, "checked {checked} opaque status pixels");
+}
+
+#[test]
 fn browser_bottom_controls_are_plain_and_do_not_cover_the_viewport() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Browser, W, H, PPD);
@@ -389,7 +524,7 @@ fn browser_address_cursor_places_and_drags_in_both_directions_without_reloading_
         app.frame(&f, &i);
         let t = app.theme();
         let top = if full {
-            t.m.h as f32 - widgets::keyboard_height(&t) - t.m.dp(64.0)
+            crate::browser::full_input_viewport(&t).y + crate::browser::full_input_viewport(&t).h
         } else {
             app.frame(&f, &i)
                 .hits

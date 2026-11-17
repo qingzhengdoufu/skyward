@@ -1327,12 +1327,17 @@ fn code(cx: &Ctx, mut c: Canvas, user: u32, keys: Keys, checking: bool) -> Frame
             top
         }
         Keys::Pattern => {
-            let span = m.dp(300.0);
-            let cy = m.dp(300.0) + span / 2.0;
+            let span = m.dp(220.0).min(m.w as f32 - m.dp(96.0));
+            let cy = m.dp(405.0).min(m.h as f32 - span / 2.0 - m.dp(120.0));
             widgets::pattern_lock(&mut c, t, x, cy, span, &s.pattern);
             if !checking {
                 out.push(Hit {
-                    rect: Rect::new(x - span, cy - span, span * 2.0, span * 2.0),
+                    rect: Rect::new(
+                        x - span / 2.0 - m.dp(32.0),
+                        cy - span / 2.0 - m.dp(32.0),
+                        span + m.dp(64.0),
+                        span + m.dp(64.0),
+                    ),
                     action: Action::Pattern,
                 });
                 pattern = Some((x, cy, span));

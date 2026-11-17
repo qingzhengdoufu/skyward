@@ -1,20 +1,27 @@
 //! Reading a web page, and saving a file it offers, on a thread of their
 //! own that tells the screen how far they have come.
 
+#[cfg(not(feature = "aera-browser"))]
 use crate::cdp::Cdp;
-use anyhow::{Context, Result};
+#[cfg(not(feature = "aera-browser"))]
+use anyhow::Context;
+use anyhow::Result;
 use skyward_net::http::{self, Servers};
 use skyward_net::web::{self, Opened, Saving};
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+#[cfg(not(feature = "aera-browser"))]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+#[cfg(not(feature = "aera-browser"))]
 use std::process::{Child, Command, Stdio};
+#[cfg(not(feature = "aera-browser"))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -58,6 +65,10 @@ pub enum Control {
 
 pub enum Event {
     Navigated(String),
+    #[cfg_attr(
+        feature = "aera-browser",
+        expect(dead_code, reason = "AERA downloads remain in the isolated runtime")
+    )]
     Download {
         url: String,
         name: String,
@@ -81,6 +92,10 @@ pub enum Event {
     /// A text field on the plugin page took focus.
     Focus(bool),
     /// How far the plugin package download has come.
+    #[cfg_attr(
+        feature = "aera-browser",
+        expect(dead_code, reason = "AERA runtime is embedded, not downloaded as Chromium")
+    )]
     PluginSaved {
         done: u64,
         total: Option<u64>,
@@ -90,17 +105,21 @@ pub enum Event {
     PluginEnded(Result<(), String>),
 }
 
+#[cfg(not(feature = "aera-browser"))]
 struct FullSession {
     child: Child,
     dir: PathBuf,
 }
 
+#[cfg(not(feature = "aera-browser"))]
 static FULL: OnceLock<Mutex<Option<FullSession>>> = OnceLock::new();
 
+#[cfg(not(feature = "aera-browser"))]
 fn full_slot() -> &'static Mutex<Option<FullSession>> {
     FULL.get_or_init(|| Mutex::new(None))
 }
 
+#[cfg(not(feature = "aera-browser"))]
 fn stop_full() {
     let mut slot = full_slot().lock().expect("the full browser slot is not poisoned");
     if let Some(mut session) = slot.take() {
@@ -122,10 +141,12 @@ fn stop_full() {
     }
 }
 
+#[cfg(not(feature = "aera-browser"))]
 fn full_launch_script() -> &'static str {
     include_str!("chromium-launch.sh")
 }
 
+#[cfg(not(feature = "aera-browser"))]
 fn start_full(dir: &Path, url: &str, servers: &Servers) -> Result<()> {
     anyhow::ensure!(dir == Path::new("/data/skyward-browser/chromium"), "unexpected browser directory");
     anyhow::ensure!(dir.join("run.sh").is_file(), "Chromium run.sh is missing");
@@ -169,6 +190,7 @@ fn start_full(dir: &Path, url: &str, servers: &Servers) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "aera-browser"))]
 fn full_started(dir: &Path, servers: &Servers) -> Result<Cdp> {
     start_full(dir, "about:blank", servers)?;
     Cdp::connect()
@@ -270,109 +292,124 @@ impl Worker {
                         tell(Event::Ended(ended));
                     }
                     Task::Install { archive, dir } => {
+                        #[cfg(not(feature = "aera-browser"))]
                         let ended = skyward_files::browser_plugin::install(&archive, &dir).map_err(|e| format!("{e:#}"));
+                        #[cfg(feature = "aera-browser")]
+                        let ended = {
+                            let _ = (archive, dir);
+                            Err("Chromium is not part of this AERA build".into())
+                        };
                         tell(Event::Installed(ended));
                     }
                     Task::FullStream { dir, url } => {
                         #[cfg(feature = "aera-browser")]
-                        if cfg!(feature = "aera-browser") {
+                        {
+                            let _ = dir;
                             if let Err(error) = crate::browser_aera::run(&url, &servers, &stopping, &inputs, &tell) {
                                 note(&format!("AERA session failed: {error:#}"));
                                 tell(Event::Shot(Err(format!("{error:#}"))));
                             }
-                            return;
                         }
-                        let url = web::full_url(&url);
-                        // One owner from connect through stop: a quick close/reopen
-                        // cannot let an old worker kill or attach to the new page.
-                        static SESSION: Mutex<()> = Mutex::new(());
-                        let _session = SESSION.lock().expect("the full browser session is not poisoned");
-                        let result = (|| -> Result<()> {
-                            if stopping.load(Ordering::Relaxed) {
-                                return Ok(());
-                            }
-                            let mut cdp = full_started(&dir, &servers)?;
-                            cdp.enable_downloads()?;
-                            cdp.navigate(&url)?;
-                            let mut capture_at = Instant::now();
-                            let mut previous: Option<Vec<u8>> = None;
-                            let mut capture_errors = 0;
-                            while !stopping.load(Ordering::Relaxed) {
-                                let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
-                                if !commands.is_empty() {
-                                    capture_at = Instant::now();
+                        #[cfg(not(feature = "aera-browser"))]
+                        {
+                            let url = web::full_url(&url);
+                            // One owner from connect through stop: a quick close/reopen
+                            // cannot let an old worker kill or attach to the new page.
+                            static SESSION: Mutex<()> = Mutex::new(());
+                            let _session = SESSION.lock().expect("the full browser session is not poisoned");
+                            let result = (|| -> Result<()> {
+                                if stopping.load(Ordering::Relaxed) {
+                                    return Ok(());
                                 }
-                                for command in commands {
-                                    match command {
-                                        Control::Touch { phase, x, y } => {
-                                            cdp.touch_event(phase, x, y)?;
-                                            if phase == 2 {
+                                let mut cdp = full_started(&dir, &servers)?;
+                                cdp.enable_downloads()?;
+                                cdp.navigate(&url)?;
+                                let mut capture_at = Instant::now();
+                                let mut previous: Option<Vec<u8>> = None;
+                                let mut capture_errors = 0;
+                                while !stopping.load(Ordering::Relaxed) {
+                                    let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
+                                    if !commands.is_empty() {
+                                        capture_at = Instant::now();
+                                    }
+                                    for command in commands {
+                                        match command {
+                                            Control::Touch { phase, x, y } => {
+                                                cdp.touch_event(phase, x, y)?;
+                                                if phase == 2 {
+                                                    tell(Event::Focus(cdp.focus_is_text()));
+                                                }
+                                            }
+                                            Control::Tap { x, y } => {
+                                                cdp.touch(crate::cdp::WIDTH * u32::from(x) / 1000, cdp.height() * u32::from(y) / 1000)?;
                                                 tell(Event::Focus(cdp.focus_is_text()));
                                             }
-                                        }
-                                        Control::Tap { x, y } => {
-                                            cdp.touch(crate::cdp::WIDTH * u32::from(x) / 1000, cdp.height() * u32::from(y) / 1000)?;
-                                            tell(Event::Focus(cdp.focus_is_text()));
-                                        }
-                                        Control::Pinch { scale } => cdp.pinch(crate::cdp::WIDTH / 2, cdp.height() / 2, scale)?,
-                                        Control::Text { text } => {
-                                            cdp.insert_text(&text)?;
-                                            tell(Event::Focus(false));
-                                        }
-                                        Control::Scroll { dy } => cdp.scroll(dy)?,
-                                        Control::Reload => cdp.reload()?,
-                                        Control::Navigate { url } => {
-                                            let url = web::full_url(&url);
-                                            note(&format!("Chromium navigate {url}"));
-                                            cdp.navigate(&url)?;
-                                        }
-                                        Control::Viewport { width, height } => {
-                                            cdp.viewport(width, height)?;
-                                        }
-                                    }
-                                }
-                                match cdp.next_event()? {
-                                    Some(crate::cdp::Event::Download { url, name }) => tell(Event::Download { url, name }),
-                                    Some(crate::cdp::Event::Navigated(url)) => tell(Event::Navigated(url)),
-                                    Some(crate::cdp::Event::Open(url)) => cdp.navigate(&web::full_url(&url))?,
-                                    Some(crate::cdp::Event::LoadFailed(error)) => {
-                                        note(&format!("Chromium page load failed: {error}"));
-                                    }
-                                    None => {}
-                                }
-                                let frame_pending = newest.lock().map(|frame| frame.is_some()).unwrap_or(true);
-                                if Instant::now() >= capture_at && !frame_pending {
-                                    // Upstream browser-inline captures frames rather than
-                                    // starting/restarting a screencast on resize/navigation.
-                                    match cdp.screenshot() {
-                                        Ok(frame) => {
-                                            capture_errors = 0;
-                                            let changed = previous.as_ref() != Some(&frame);
-                                            capture_at = Instant::now() + Duration::from_millis(if changed { 100 } else { 300 });
-                                            if changed {
-                                                previous = Some(frame.clone());
-                                                tell(Event::Shot(Ok(frame)));
+                                            Control::Pinch { scale } => cdp.pinch(crate::cdp::WIDTH / 2, cdp.height() / 2, scale)?,
+                                            Control::Text { text } => {
+                                                cdp.insert_text(&text)?;
+                                                tell(Event::Focus(false));
+                                            }
+                                            Control::Scroll { dy } => cdp.scroll(dy)?,
+                                            Control::Reload => cdp.reload()?,
+                                            Control::Navigate { url } => {
+                                                let url = web::full_url(&url);
+                                                note(&format!("Chromium navigate {url}"));
+                                                cdp.navigate(&url)?;
+                                            }
+                                            Control::Viewport { width, height } => {
+                                                cdp.viewport(width, height)?;
                                             }
                                         }
-                                        Err(error) if capture_errors < 4 => {
-                                            capture_errors += 1;
-                                            note(&format!("Chromium capture retry {capture_errors}: {error:#}"));
-                                            capture_at = Instant::now() + Duration::from_millis(200);
+                                    }
+                                    match cdp.next_event()? {
+                                        Some(crate::cdp::Event::Download { url, name }) => tell(Event::Download { url, name }),
+                                        Some(crate::cdp::Event::Navigated(url)) => tell(Event::Navigated(url)),
+                                        Some(crate::cdp::Event::Open(url)) => cdp.navigate(&web::full_url(&url))?,
+                                        Some(crate::cdp::Event::LoadFailed(error)) => {
+                                            note(&format!("Chromium page load failed: {error}"));
                                         }
-                                        Err(error) => return Err(error).context("capture the active Chromium page"),
+                                        None => {}
+                                    }
+                                    let frame_pending = newest.lock().map(|frame| frame.is_some()).unwrap_or(true);
+                                    if Instant::now() >= capture_at && !frame_pending {
+                                        // Upstream browser-inline captures frames rather than
+                                        // starting/restarting a screencast on resize/navigation.
+                                        match cdp.screenshot() {
+                                            Ok(frame) => {
+                                                capture_errors = 0;
+                                                let changed = previous.as_ref() != Some(&frame);
+                                                capture_at = Instant::now() + Duration::from_millis(if changed { 100 } else { 300 });
+                                                if changed {
+                                                    previous = Some(frame.clone());
+                                                    tell(Event::Shot(Ok(frame)));
+                                                }
+                                            }
+                                            Err(error) if capture_errors < 4 => {
+                                                capture_errors += 1;
+                                                note(&format!("Chromium capture retry {capture_errors}: {error:#}"));
+                                                capture_at = Instant::now() + Duration::from_millis(200);
+                                            }
+                                            Err(error) => return Err(error).context("capture the active Chromium page"),
+                                        }
                                     }
                                 }
+                                Ok(())
+                            })();
+                            stop_full();
+                            if let Err(e) = result {
+                                note(&format!("Chromium session failed: {e:#}"));
+                                tell(Event::Shot(Err(format!("{e:#}"))));
                             }
-                            Ok(())
-                        })();
-                        stop_full();
-                        if let Err(e) = result {
-                            note(&format!("Chromium session failed: {e:#}"));
-                            tell(Event::Shot(Err(format!("{e:#}"))));
                         }
                     }
                     Task::PluginDownload { url, path } => {
+                        #[cfg(not(feature = "aera-browser"))]
                         let ended = fetch_plugin(&a, &url, &path, &stopping, &tell);
+                        #[cfg(feature = "aera-browser")]
+                        let ended = {
+                            let _ = (url, path);
+                            Err("Chromium is not part of this AERA build".into())
+                        };
                         tell(Event::PluginEnded(ended));
                     }
                 }
@@ -456,6 +493,7 @@ pub(crate) fn note(line: &str) {
     }
 }
 
+#[cfg(not(feature = "aera-browser"))]
 fn fetch_plugin(agent: &ureq::Agent, url: &str, path: &Path, stop: &AtomicBool, tell: &dyn Fn(Event)) -> Result<(), String> {
     use skyward_net::download::{self, Progress, Sum};
     if url != skyward_files::browser_plugin::URL {

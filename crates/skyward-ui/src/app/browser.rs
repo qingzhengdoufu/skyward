@@ -113,6 +113,7 @@ pub struct PluginDownload {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Browser {
+    pub ime: crate::pinyin::Composition,
     pub picture: Option<BrowserPicture>,
     pub address: String,
     pub address_cursor: usize,
@@ -146,6 +147,7 @@ pub struct Browser {
 impl Default for Browser {
     fn default() -> Self {
         Browser {
+            ime: crate::pinyin::Composition::default(),
             picture: None,
             address: String::new(),
             address_cursor: usize::MAX,
@@ -192,7 +194,50 @@ impl Default for Browser {
 }
 
 impl App {
+    pub(super) fn browser_commit_ime(&mut self, index: usize) {
+        if self.state.browser.ime.spelling.is_empty() {
+            return;
+        }
+        let text = self.state.browser.ime.choose(index).unwrap_or_else(|| {
+            let raw = self.state.browser.ime.spelling.clone();
+            self.state.browser.ime.clear();
+            raw
+        });
+        let b = &mut self.state.browser;
+        let at = widgets::text_boundary(&b.address, b.address_cursor);
+        b.address.insert_str(at, &text);
+        b.address_cursor = at + text.len();
+        b.address_start = b.address_start.min(at);
+        self.edits += 1;
+        self.refresh();
+    }
+
     pub(super) fn browser_edit_key(&mut self, cap: Cap) {
+        if self.state.browser.ime.enabled {
+            match cap {
+                Cap::Char(ch) if ch.is_ascii_alphabetic() || ch == '\'' => {
+                    if self.state.browser.ime.spelling.len() < 32 {
+                        self.state.browser.ime.spelling.push(ch.to_ascii_lowercase());
+                        self.state.browser.ime.update();
+                    }
+                    self.refresh();
+                    return;
+                }
+                Cap::Backspace if !self.state.browser.ime.spelling.is_empty() => {
+                    self.state.browser.ime.spelling.pop();
+                    self.state.browser.ime.update();
+                    self.refresh();
+                    return;
+                }
+                Cap::Space if !self.state.browser.ime.spelling.is_empty() => {
+                    self.browser_commit_ime(0);
+                    return;
+                }
+                _ => {
+                    self.browser_commit_ime(0);
+                }
+            }
+        }
         let shifted = self.state.layer == Layer::Shifted;
         let b = &mut self.state.browser;
         let at = widgets::text_boundary(&b.address, b.address_cursor);
@@ -227,7 +272,7 @@ impl App {
         }
         let t = self.theme();
         let top = if self.state.browser.full_active {
-            t.m.h as f32 - widgets::keyboard_height(&t) - t.m.dp(64.0)
+            crate::browser::full_input_viewport(&t).y + crate::browser::full_input_viewport(&t).h
         } else {
             t.m.content_top + t.m.dp(36.0)
         };
@@ -269,7 +314,28 @@ impl App {
     pub(super) fn browser_act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
+            Action::BrowserImeToggle => {
+                self.browser_commit_ime(0);
+                self.state.browser.ime.enabled = !self.state.browser.ime.enabled;
+                self.refresh();
+            }
+            Action::BrowserImePick(index) => {
+                if index < self.state.browser.ime.candidates.len() {
+                    self.browser_commit_ime(index);
+                }
+            }
+            Action::BrowserImePage(next) => {
+                let ime = &mut self.state.browser.ime;
+                let pages = ime.candidates.len().div_ceil(3).max(1);
+                ime.page = if next {
+                    (ime.page + 1) % pages
+                } else {
+                    (ime.page + pages - 1) % pages
+                };
+                self.refresh();
+            }
             Action::BrowserAddress => {
+                self.state.browser.ime.clear();
                 self.state.browser.full_text = false;
                 self.state.browser.address = self.state.browser.url.clone();
                 self.state.browser.address_cursor = self.state.browser.address.len();
@@ -399,6 +465,7 @@ impl App {
                 }
             }
             Action::BrowserClearAddress => {
+                self.state.browser.ime.clear();
                 self.state.browser.address.clear();
                 self.state.browser.address_cursor = 0;
                 self.state.browser.address_start = 0;
@@ -549,6 +616,7 @@ impl App {
                 }];
             }
             Action::BrowserKeyboard => {
+                self.state.browser.ime.clear();
                 self.state.layer = Layer::Letters;
                 self.state.browser.full_text = true;
                 self.state.browser.address.clear();
@@ -922,8 +990,12 @@ impl App {
     }
 
     pub fn browser_plugin_focus(&mut self, focus: bool) {
+        if self.screen() == Screen::BrowserAddress && self.state.browser.full_text {
+            return;
+        }
         self.state.browser.full_text = focus;
         if focus {
+            self.state.browser.ime.clear();
             self.state.browser.address.clear();
             self.state.browser.address_cursor = 0;
             self.state.browser.address_start = 0;
@@ -1002,6 +1074,9 @@ fn is_browser_action(action: Action) -> bool {
         action,
         Action::BrowserPluginScroll(_)
             | Action::BrowserAddress
+            | Action::BrowserImeToggle
+            | Action::BrowserImePick(_)
+            | Action::BrowserImePage(_)
             | Action::BrowserSaveFile
             | Action::BrowserQuickOpen(_)
             | Action::BrowserQuick

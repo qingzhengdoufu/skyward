@@ -9,7 +9,8 @@ name = "skyward"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["pinyin-input"]
+pinyin-input = ["skyward-ui/pinyin-input"]
 aera-browser = ["dep:skyward-browser", "skyward-ui/aera-browser"]
 
 [dependencies]
@@ -35,6 +36,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 zstd = { version = "0.14.3", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
+tempfile = "3.27.0"
 skyward-browser = { path = "../skyward-browser", optional = true }
 aes-gcm = "0.10.3"
 sha2 = "0.10.9"

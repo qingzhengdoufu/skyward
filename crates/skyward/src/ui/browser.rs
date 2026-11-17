@@ -3,11 +3,8 @@ impl Pages<'_> {
     pub(super) fn browser_told(&mut self, now: u64) {
         if let Some(worker) = &self.browser_stream {
             let theme = self.app.theme();
-            let area = if self.app.screen() == Screen::BrowserAddress {
-                skyward_ui::browser::full_input_viewport(&theme)
-            } else {
-                skyward_ui::browser::full_viewport(&theme)
-            };
+            // Keyboard overlays the page; never resize/reflow on focus changes.
+            let area = skyward_ui::browser::full_viewport(&theme);
             let size = (area.w.round() as u32, area.h.round() as u32);
             if self.browser_viewport != Some(size) {
                 worker.command(crate::browser::Control::Viewport {

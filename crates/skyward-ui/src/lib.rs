@@ -18,6 +18,7 @@ pub mod lang;
 pub mod motion;
 pub mod pages;
 pub mod plugin;
+pub mod pinyin;
 pub mod search;
 pub mod settings;
 pub mod sort;

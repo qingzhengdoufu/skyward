@@ -34,9 +34,10 @@ impl App {
             && let Some(area) = self.frame.as_ref().and_then(|f| f.browser_area)
             && area.contains(x, y + self.top().1)
         {
-            let (px, py) = browser_point(area, x, y + self.top().1);
+            let mapping = crate::browser::full_viewport(&self.theme());
+            let (px, py) = browser_point(mapping, x, y + self.top().1);
             self.drag = Drag::BrowserTouch {
-                rect: area,
+                rect: mapping,
                 last: (px, py),
             };
             self.stir(now);

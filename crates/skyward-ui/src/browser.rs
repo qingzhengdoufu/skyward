@@ -154,7 +154,18 @@ fn home(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = m.content_top;
     let w = m.w as f32 - m.margin * 2.0;
-    let mut y = top;
+    let px = m.dp(34.0);
+    let mark_width = c.text_width(&f.display, "Skyward", px);
+    c.text(
+        &f.display,
+        "Skyward",
+        (m.w as f32 - mark_width) / 2.0,
+        top + m.dp(16.0) + f.display.cap(px),
+        px,
+        t.pal.text,
+        Some(w),
+    );
+    let mut y = top + m.dp(86.0);
 
     y = widgets::section(&mut c, t, f, y, l.pick(["快捷访问", "快速存取", "Shortcuts"]));
     let gap = m.dp(10.0);
@@ -305,7 +316,7 @@ fn full_page(cx: &Ctx) -> Frame {
     let (t, l) = (cx.t, cx.state.lang);
     let m = &t.m;
     let mut c = page(cx);
-    let top = widgets::bar_bottom(t);
+    let top = full_viewport(t).y;
     let mut out = Vec::new();
     let y = top;
     let area = full_viewport(t);
@@ -366,20 +377,17 @@ pub fn full_viewport(t: &Theme) -> Rect {
 }
 
 pub fn full_input_viewport(t: &Theme) -> Rect {
-    viewport_above(t, t.m.h as f32 - widgets::keyboard_height(t) - t.m.dp(64.0))
+    viewport_above(t, t.m.h as f32 - widgets::keyboard_height(t) - t.m.dp(input_field_dp()))
+}
+
+fn input_field_dp() -> f32 {
+    if cfg!(feature = "pinyin-input") { 108.0 } else { 64.0 }
 }
 
 fn viewport_above(t: &Theme, bottom: f32) -> Rect {
     let m = &t.m;
-    let y = widgets::bar_bottom(t);
+    let y = (m.status_cy + m.dp(24.0)).ceil();
     let height = (bottom - y).max(m.dp(100.0));
-    #[cfg(feature = "aera-browser")]
-    {
-        // ARP2 has a fixed CSS viewport; keep its aspect and touch coordinates.
-        let width = (height * 1080.0 / 2100.0).min(m.w as f32).floor();
-        Rect::new((m.w as f32 - width) / 2.0, y, width, (width * 2100.0 / 1080.0).floor())
-    }
-    #[cfg(not(feature = "aera-browser"))]
     Rect::new(0.0, y, m.w as f32, height)
 }
 
@@ -1027,6 +1035,9 @@ pub fn address(cx: &Ctx) -> Frame {
     let enter = l.pick(GO);
     let kb_top = t.m.h as f32 - widgets::keyboard_height(t);
     let keys = widgets::keyboard(&mut c, t, f, l, kb_top, s.layer, s.key_held(), enter);
+    if cfg!(feature = "pinyin-input") {
+        out.extend(ime_bar(&mut c, cx, kb_top - m.dp(44.0)));
+    }
     out.extend(keys.into_iter().map(|(rect, cap)| Hit {
         rect,
         action: Action::Type(cap),
@@ -1042,7 +1053,7 @@ fn full_input(cx: &Ctx) -> Frame {
     let m = &t.m;
     let mut frame = full_page(cx);
     let keys_top = m.h as f32 - widgets::keyboard_height(t);
-    let field_top = keys_top - m.dp(64.0);
+    let field_top = keys_top - m.dp(input_field_dp());
     frame.canvas.fill_rect(0.0, field_top, m.w as f32, m.h as f32 - field_top, t.pal.bg);
     frame.hits.retain(|hit| hit.rect.y + hit.rect.h <= field_top);
     let (_, caret) = widgets::text_field_at(
@@ -1055,15 +1066,93 @@ fn full_input(cx: &Ctx) -> Frame {
         s.browser.address_start,
     );
     let keys = widgets::keyboard(&mut frame.canvas, t, f, l, keys_top, s.layer, s.key_held(), l.pick(GO));
+    if cfg!(feature = "pinyin-input") {
+        frame.hits.extend(ime_bar(&mut frame.canvas, cx, keys_top - m.dp(44.0)));
+    }
     frame.hits.extend(keys.into_iter().map(|(rect, cap)| Hit {
         rect,
         action: Action::Type(cap),
     }));
     frame.canvas = frame.canvas.crop_height(m.h);
-    frame.browser_area = Some(full_input_viewport(t));
+    let visible = Rect {
+        h: (field_top - full_viewport(t).y).max(1.0),
+        ..full_viewport(t)
+    };
+    frame.browser_area = Some(visible);
     frame.dock = None;
     frame.caret = Some(caret);
     frame
+}
+
+fn ime_bar(canvas: &mut Canvas, cx: &Ctx, top: f32) -> Vec<Hit> {
+    let (t, f, ime) = (cx.t, cx.f, &cx.state.browser.ime);
+    let m = &t.m;
+    canvas.fill_rect(0.0, top, m.w as f32, m.dp(44.0), t.pal.bg);
+    let mut out = Vec::new();
+    let toggle = Rect::new(m.dp(8.0), top, m.dp(52.0), m.dp(44.0));
+    canvas.text_center(
+        &f.heading,
+        if ime.enabled { "中" } else { "EN" },
+        toggle.centre().0,
+        toggle.centre().1,
+        m.dp(16.0),
+        t.pal.accent,
+    );
+    out.push(Hit {
+        rect: toggle,
+        action: Action::BrowserImeToggle,
+    });
+    let right = m.w as f32 - m.dp(44.0);
+    let cell = (right - m.dp(64.0)) / 3.0;
+    for (offset, candidate) in ime.candidates.iter().skip(ime.page * 3).take(3).enumerate() {
+        let rect = Rect::new(m.dp(64.0) + offset as f32 * cell, top, cell, m.dp(44.0));
+        canvas.text_vc(
+            &f.body,
+            &candidate.text,
+            rect.x + m.dp(6.0),
+            rect.y + m.dp(30.0),
+            m.dp(17.0),
+            t.pal.text,
+            Some(cell - m.dp(12.0)),
+        );
+        out.push(Hit {
+            rect,
+            action: Action::BrowserImePick(ime.page * 3 + offset),
+        });
+    }
+    if !ime.spelling.is_empty() && !ime.candidates.is_empty() {
+        canvas.text_top(
+            &f.value,
+            &ime.spelling,
+            m.dp(70.0),
+            top + m.dp(2.0),
+            m.dp(10.0),
+            t.pal.subtitle,
+            Some(right - m.dp(76.0)),
+        );
+    }
+    if ime.candidates.is_empty() && !ime.spelling.is_empty() {
+        canvas.text_vc(
+            &f.body,
+            &ime.spelling,
+            m.dp(70.0),
+            top + m.dp(22.0),
+            m.dp(16.0),
+            t.pal.text,
+            Some(right - m.dp(76.0)),
+        );
+    }
+    if ime.candidates.len() > 3 {
+        let rect = Rect::new(right, top, m.dp(44.0), m.dp(44.0));
+        let (x, y) = rect.centre();
+        canvas.line(x - m.dp(3.0), y - m.dp(6.0), x + m.dp(3.0), y, m.dp(2.0), t.pal.text);
+        canvas.line(x + m.dp(3.0), y, x - m.dp(3.0), y + m.dp(6.0), m.dp(2.0), t.pal.text);
+        out.push(Hit {
+            rect,
+            action: Action::BrowserImePage(true),
+        });
+    }
+    out
 }
 
 /// The files saved and being saved.

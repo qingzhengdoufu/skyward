@@ -23,6 +23,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
+    prepare_gpu_firmware()?;
     // GPU setup is optional and never runs in recovery's startup path.
     if !Path::new("/dev/kgsl-3d0").exists() {
         let dirs = ["vendor_boot", "vendor_dlkm", "vendor", "system_dlkm"]
@@ -53,6 +54,8 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
     let mut latest = None;
     let mut changed = false;
     let mut publish_at = Instant::now();
+    let mut frames = 0u64;
+    let measured_at = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         ensure!(browser.running()?, "AERA worker exited; see /tmp/skyward-browser.log");
         let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
@@ -120,6 +123,9 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                         tell(Event::Navigated(protocol::address(&message.text)?));
                     }
                 }
+                34 if message.text == "Load request cancelled" || message.text.contains("creating the snapshot") => {
+                    super::browser::note(&format!("AERA transient page event: {}", message.text));
+                }
                 34 => bail!("AERA worker: {}", message.text),
                 35 => tell(Event::Focus(true)),
                 36 => tell(Event::Focus(false)),
@@ -129,6 +135,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 _ => {}
             }
         }
+        ensure!(
+            latest.is_some() || measured_at.elapsed() < Duration::from_secs(30),
+            "AERA did not produce a frame within 30 seconds; see /tmp/skyward-browser.log"
+        );
         if changed
             && Instant::now() >= publish_at
             && let Some(bgra) = &latest
@@ -139,12 +149,50 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 height: size.1,
                 rgba,
             });
-            publish_at = Instant::now() + Duration::from_millis(33);
+            frames += 1;
+            if frames == 1 || frames.is_multiple_of(120) {
+                super::browser::note(&format!(
+                    "AERA published {frames} frames in {} ms, backing 1080x2100, output {}x{} (not measured panel FPS)",
+                    measured_at.elapsed().as_millis(),
+                    size.0,
+                    size.1
+                ));
+            }
+            publish_at = Instant::now() + Duration::from_micros(8333);
             changed = false;
         }
         std::thread::sleep(Duration::from_millis(4));
     }
     Ok(())
+}
+
+fn prepare_gpu_firmware() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    // A non-recursive alias reveals vendor's original firmware hidden by the
+    // modem bind mount. Copy only this GPU's files to RAM; system stays read-only.
+    let alias = tempfile::Builder::new().prefix("skyward-gpu-vendor-").tempdir_in("/tmp")?;
+    skyward_block::mount::bind(Path::new("/vendor"), alias.path())?;
+    let result = (|| -> Result<()> {
+        let target = Path::new("/lib/firmware");
+        std::fs::create_dir_all(target)?;
+        for name in ["gen80000_sqe.fw", "gen80000_aqe.fw", "gen80000_gmu.bin", "gen80600_gmu.bin"] {
+            let source = alias.path().join("firmware").join(name);
+            let metadata = std::fs::symlink_metadata(&source)?;
+            ensure!(
+                metadata.is_file() && metadata.len() > 0 && metadata.len() <= 2 << 20,
+                "invalid GPU firmware {name}"
+            );
+            std::fs::copy(source, target.join(name))?;
+            std::fs::set_permissions(target.join(name), std::fs::Permissions::from_mode(0o644))?;
+        }
+        Ok(())
+    })();
+    let unmounted = skyward_block::mount::umount(alias.path());
+    if unmounted.is_err() {
+        let _ = alias.keep();
+    }
+    result?;
+    unmounted
 }
 
 fn navigate(browser: &Browser, url: &str) -> Result<()> {

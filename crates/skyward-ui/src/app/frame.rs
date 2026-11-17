@@ -236,6 +236,9 @@ impl Frame {
     /// How tall the page is: its canvas, or its rows and the margin after
     /// them if they reach further.
     pub fn height(&self, t: &Theme) -> f32 {
+        if self.browser_area.is_some() {
+            return t.m.h as f32;
+        }
         let h = self.canvas.h as f32;
         let h = self.rows.as_ref().map_or(h, |r| h.max((r.bottom() + t.m.margin * 2.0).ceil()));
         h + self.dock.as_ref().map_or(0.0, |d| d.canvas.h as f32)

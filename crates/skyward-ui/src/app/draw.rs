@@ -256,6 +256,8 @@ impl App {
                 let t = self.theme();
                 if extent < widgets::bar_bottom(&t) {
                     widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+                } else {
+                    widgets::status_marks(out, &t, f, &self.bar(clock, info), t.pal.status);
                 }
             } else {
                 self.compose_page(out, f, info, clock, now);
@@ -420,6 +422,8 @@ impl App {
         self.shown = Some(view);
         if screen != Screen::ControlCenter {
             widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        } else if self.shade.is_none() {
+            widgets::status_marks(out, &t, f, &self.bar(clock, info), t.pal.status);
         }
         if let Some((text, _)) = &self.toast {
             widgets::toast(out, &t, f, text);
@@ -578,7 +582,7 @@ impl App {
         let bar = view.bar;
         let strip = frame.pinned.as_ref().map(|p| (p, pinned_top(t, p, offset)));
         shine(out, Group::Page);
-        if bar > 0.0 {
+        if bar > 0.0 && frame.browser_area.is_none() {
             match strip {
                 Some((p, top)) => widgets::strip_mask(out, t, frame.bg, bar, top.round(), top.round() + p.canvas.h as f32),
                 None => {
