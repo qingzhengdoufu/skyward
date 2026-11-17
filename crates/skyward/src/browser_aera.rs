@@ -47,10 +47,28 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
     if stop.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let mut browser = Browser::start(root, &dns)?;
+    let viewport_wait = Instant::now();
+    let mut size = loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let mut queue = inputs.lock().expect("browser controls are not poisoned");
+        if let Some(index) = queue.iter().position(|command| matches!(command, Control::Viewport { .. }))
+            && let Some(Control::Viewport { width, height }) = queue.remove(index)
+        {
+            break (width, height);
+        }
+        drop(queue);
+        ensure!(
+            viewport_wait.elapsed() < Duration::from_secs(5),
+            "native browser viewport was not provided"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let backing = size;
+    let mut browser = Browser::start(root, &dns, backing)?;
     navigate(&browser, url)?;
     let mut zoom = 100.0f64;
-    let mut size = (1080, 2100);
     let mut latest = None;
     let mut changed = false;
     let mut publish_at = Instant::now();
@@ -61,10 +79,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
         let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
         for command in commands {
             match command {
-                Control::Touch { phase, x, y } => touch(&browser, phase, x, y)?,
+                Control::Touch { phase, x, y } => touch(&browser, phase, x, y, backing)?,
                 Control::Tap { x, y } => {
-                    touch(&browser, 0, x, y)?;
-                    touch(&browser, 2, x, y)?;
+                    touch(&browser, 0, x, y, backing)?;
+                    touch(&browser, 2, x, y, backing)?;
                 }
                 Control::Viewport { width, height } => {
                     ensure!(
@@ -99,16 +117,17 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 }
                 Control::Scroll { dy } => {
                     let (start, end) = if dy < 0 { (800, 250) } else { (250, 800) };
-                    touch(&browser, 0, 500, start)?;
+                    touch(&browser, 0, 500, start, backing)?;
                     for step in 1..=8 {
                         touch(
                             &browser,
                             1,
                             500,
                             (i32::from(start) + (i32::from(end) - i32::from(start)) * step / 8) as u16,
+                            backing,
                         )?;
                     }
-                    touch(&browser, 2, 500, end)?;
+                    touch(&browser, 2, 500, end, backing)?;
                 }
             }
         }
@@ -120,6 +139,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
             };
             match message.kind {
                 32 => {
+                    ensure!(
+                        (message.x as u32, message.y as u32) == backing,
+                        "native browser frame differs from viewport"
+                    );
                     latest = Some(browser.session.copy_frame(&message)?);
                     changed = true;
                 }
@@ -150,7 +173,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
             && Instant::now() >= publish_at
             && let Some(bgra) = &latest
         {
-            let rgba = skyward_browser::session::rgba_frame(bgra, size.0, size.1)?;
+            let rgba = skyward_browser::session::rgba_sized(bgra, backing.0, backing.1, size.0, size.1)?;
             tell(Event::Pixels {
                 width: size.0,
                 height: size.1,
@@ -159,8 +182,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
             frames += 1;
             if frames == 1 || frames.is_multiple_of(120) {
                 super::browser::note(&format!(
-                    "AERA published {frames} frames in {} ms, backing 1080x2100, output {}x{} (not measured panel FPS)",
+                    "AERA published {frames} frames in {} ms, native backing {}x{}, output {}x{} (not measured panel FPS)",
                     measured_at.elapsed().as_millis(),
+                    backing.0,
+                    backing.1,
                     size.0,
                     size.1
                 ));
@@ -208,10 +233,10 @@ fn navigate(browser: &Browser, url: &str) -> Result<()> {
     browser.session.send(&message)
 }
 
-fn touch(browser: &Browser, phase: u8, x: u16, y: u16) -> Result<()> {
+fn touch(browser: &Browser, phase: u8, x: u16, y: u16, backing: (u32, u32)) -> Result<()> {
     ensure!(phase <= 2, "invalid AERA touch phase");
     let mut message = Message::command(6 + u32::from(phase));
-    message.x = (u32::from(x.min(999)) * protocol::VIEW_WIDTH as u32 / 1000) as i32;
-    message.y = (u32::from(y.min(999)) * protocol::VIEW_HEIGHT as u32 / 1000) as i32;
+    message.x = (u32::from(x.min(999)) * (backing.0 / 4) / 1000) as i32;
+    message.y = (u32::from(y.min(999)) * (backing.1 / 4) / 1000) as i32;
     browser.session.send(&message)
 }

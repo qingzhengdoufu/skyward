@@ -106,6 +106,7 @@ enum Inbox {
     Command(Command),
     Address(u64, Result<Asked>),
     Reach(u64, Reach),
+    Time(u64, Result<u64, String>),
     End,
 }
 
@@ -161,6 +162,7 @@ impl Worker {
                 }),
                 saved: read_record(),
                 keep: None,
+                time_synced: false,
             };
             s.run(&inbox);
         })?;
@@ -312,6 +314,7 @@ struct Station {
     /// out of reach — never keeps anything, which is the whole point of
     /// waiting for the address rather than writing it as it is typed.
     keep: Option<Saved>,
+    time_synced: bool,
 }
 
 impl Station {
@@ -342,6 +345,7 @@ impl Station {
                     Inbox::Command(c) => self.command(c),
                     Inbox::Address(n, answer) => self.addressed(n, answer),
                     Inbox::Reach(n, reach) => self.reached(n, reach),
+                    Inbox::Time(n, result) => self.time_received(n, result),
                     Inbox::End => return self.off(),
                 }
             }
@@ -777,9 +781,15 @@ impl Station {
         let Some(r) = &mut self.running else { return };
         r.probed += 1;
         let n = r.probed;
+        let sync = !self.time_synced;
         thread::spawn(move || {
             let reach = reach::probe(&page, &dns);
+            let online = reach == Reach::Online;
             let _ = back.inbox.tell(Inbox::Reach(n, reach));
+            if sync && online {
+                let result = skyward_net::time::sample(&dns).map_err(|error| format!("{error:#}"));
+                let _ = back.inbox.tell(Inbox::Time(n, result));
+            }
         });
     }
 
@@ -796,6 +806,30 @@ impl Station {
         };
         let _ = skyward_sys::kmsg(&format!("the network on {} {reach}", self.cfg.interface));
         link.reach = Some(reach);
+    }
+
+    fn time_received(&mut self, n: u64, result: Result<u64, String>) {
+        if self
+            .running
+            .as_ref()
+            .is_none_or(|running| running.probed != n || running.lease.is_none())
+            || self.time_synced
+        {
+            return;
+        }
+        match result.and_then(|now| {
+            skyward_sys::clock::set_unix_ms(now)
+                .map(|()| now)
+                .map_err(|error| format!("{error:#}"))
+        }) {
+            Ok(now) => {
+                self.time_synced = true;
+                let _ = skyward_sys::kmsg(&format!("clock synchronized from independent network time servers to {now} ms"));
+            }
+            Err(why) => {
+                let _ = skyward_sys::kmsg(&format!("network time not set: {why}"));
+            }
+        }
     }
 
     /// Give the address back, and stop asking for one or keeping it.

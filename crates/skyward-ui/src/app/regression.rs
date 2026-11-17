@@ -53,6 +53,30 @@ fn browser_canvas_is_fixed_and_keyboard_does_not_reposition_the_web_page() {
 }
 
 #[test]
+fn native_web_viewport_keeps_top_and_bottom_content_clear_of_browser_chrome() {
+    for (w, h, ppd) in [(720, 1600, 1.875), (1440, 3200, 3.5), (1440, 3200, 3.75)] {
+        let mut app = App::new(Screen::Browser, w, h, ppd);
+        app.set_navigation(true);
+        app.state.browser.full_active = true;
+        let t = app.theme();
+        let area = crate::browser::full_viewport(&t);
+        assert_eq!(area.w, w as f32);
+        assert!(area.y >= t.m.dp(48.0));
+        assert!(area.y + area.h <= h as f32 - t.bottom_inset - t.m.dp(122.0));
+        assert_eq!(area.w % 4.0, 0.0);
+        assert_eq!(area.h % 4.0, 0.0);
+    }
+}
+
+#[test]
+fn full_browser_explains_why_starting_requires_decrypted_data() {
+    let mut app = App::new(Screen::BrowserFull, W, H, PPD);
+    assert!(app.act(Action::BrowserPluginStart, 0).is_empty());
+    assert!(matches!(app.state.browser.full, BrowserFull::Failed(ref why) if why.contains("data")));
+    assert_eq!(app.screen(), Screen::BrowserFull);
+}
+
+#[test]
 fn browser_long_address_is_ellipsized_before_the_menu() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Browser, W, H, PPD);
@@ -159,7 +183,10 @@ fn browser_bottom_controls_float_over_a_fullscreen_viewport_without_receiving_we
     let top = theme.m.h as f32 - dock.canvas.h as f32;
     assert!(area.x >= 0.0 && area.w <= W as f32);
     assert_eq!(area.x * 2.0 + area.w, W as f32);
-    assert_eq!(area, Rect::new(0.0, 0.0, W as f32, H as f32));
+    assert!(area.y >= theme.m.dp(48.0));
+    assert_eq!(area.w, W as f32);
+    assert_eq!(area.h % 4.0, 0.0);
+    assert!(area.y + area.h <= top);
     let interactive = frame.browser_area.unwrap();
     assert!(interactive.y + interactive.h <= top + 1.0);
     assert_eq!(dock.hits.len(), 8, "six tools, address and menu");
@@ -468,7 +495,7 @@ fn browser_touch_forwards_down_move_and_up_without_waiting_for_release() {
     app.state.browser.view = BrowserView::Full;
     let area = app.frame(&f, &i).browser_area.unwrap();
     let (x, y) = area.centre();
-    let (px, py) = ((x / W as f32 * 1000.0) as u16, (y / H as f32 * 1000.0) as u16);
+    let (px, py) = (500, 500);
     assert_eq!(
         app.touch(Touch::Down(x, y), &f, 1000),
         vec![Effect::BrowserPluginTouch { phase: 0, x: px, y: py }]

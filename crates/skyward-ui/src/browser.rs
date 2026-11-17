@@ -357,13 +357,16 @@ fn full_page(cx: &Ctx) -> Frame {
     frame.fixed = true;
     frame.header = false;
     frame.back = false;
-    frame.browser_area = Some(viewport_above(t, m.h as f32 - t.bottom_inset - m.dp(BROWSER_DOCK_DP)));
+    frame.browser_area = Some(area);
     frame.dock = Some(full_dock(cx));
     frame
 }
 
 pub fn full_viewport(t: &Theme) -> Rect {
-    Rect::new(0.0, 0.0, t.m.w as f32, t.m.h as f32)
+    let top = (t.m.dp(48.0) / 4.0).ceil() * 4.0;
+    let bottom = t.m.h as f32 - t.bottom_inset - t.m.dp(BROWSER_DOCK_DP);
+    let height = ((bottom - top).max(400.0) / 4.0).floor() * 4.0;
+    Rect::new(0.0, top, (t.m.w / 4 * 4) as f32, height)
 }
 
 pub fn full_input_viewport(t: &Theme) -> Rect {
@@ -379,7 +382,7 @@ fn input_field_dp() -> f32 {
 
 fn viewport_above(t: &Theme, bottom: f32) -> Rect {
     let m = &t.m;
-    let y = m.dp(48.0).ceil();
+    let y = full_viewport(t).y;
     let height = (bottom - y).max(m.dp(100.0));
     Rect::new(0.0, y, m.w as f32, height)
 }

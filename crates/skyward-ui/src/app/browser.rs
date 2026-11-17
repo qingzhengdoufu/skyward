@@ -931,6 +931,17 @@ impl App {
 
     fn browser_plugin_start_at(&mut self, url: String) -> Vec<Effect> {
         if !self.state.data.storage_open() {
+            self.state.browser.full = BrowserFull::Failed(
+                self.state
+                    .lang
+                    .pick([
+                        "请先解密 data，再启动完整模式",
+                        "請先解密 data，再啟動完整模式",
+                        "Decrypt data before starting full mode",
+                    ])
+                    .into(),
+            );
+            self.open(Screen::BrowserFull);
             return Vec::new();
         }
         let url = if url.is_empty() {

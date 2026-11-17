@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 /// The vendor persist partition, where Android's time daemon keeps how far
 /// the real time runs ahead of the phone's real-time clock.
@@ -19,7 +19,9 @@ pub const RTC: &str = "/sys/class/rtc/rtc0/since_epoch";
 /// The offset an ats_ file holds, in milliseconds. A daemon that never had
 /// the time stores none, and nothing can be told from the RTC alone.
 pub fn offset(bytes: &[u8]) -> Result<u64> {
-    let raw: [u8; 8] = bytes.try_into().map_err(|_| anyhow!("an offset is 8 bytes, this one is {}", bytes.len()))?;
+    let raw: [u8; 8] = bytes
+        .try_into()
+        .map_err(|_| anyhow!("an offset is 8 bytes, this one is {}", bytes.len()))?;
     match u64::from_le_bytes(raw) {
         0 => bail!("the time daemon has stored no offset yet"),
         ms => Ok(ms),
@@ -57,11 +59,26 @@ pub fn set_from_rtc() -> Result<u64> {
     let rtc = fs::read_to_string(RTC).with_context(|| format!("read {RTC}"))?;
     let rtc_s: u64 = rtc.trim().parse().with_context(|| format!("{RTC} holds {rtc:?}"))?;
     let now = wall(rtc_s, offset_ms);
-    let ts = libc::timespec { tv_sec: (now / 1000) as libc::time_t, tv_nsec: ((now % 1000) * 1_000_000) as libc::c_long };
+    set_unix_ms(now)?;
+    Ok(now)
+}
+
+/// Update the running clock only; never write the RTC or persist offset.
+#[cfg(target_os = "android")]
+pub fn set_unix_ms(now: u64) -> Result<()> {
+    use anyhow::{Context, ensure};
+    ensure!(
+        (1_704_067_200_000..4_102_444_800_000).contains(&now),
+        "clock outside supported interval"
+    );
+    let ts = libc::timespec {
+        tv_sec: (now / 1000) as libc::time_t,
+        tv_nsec: ((now % 1000) * 1_000_000) as libc::c_long,
+    };
     if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) } != 0 {
         return Err(std::io::Error::last_os_error()).context("set the system clock");
     }
-    Ok(now)
+    Ok(())
 }
 
 #[cfg(test)]

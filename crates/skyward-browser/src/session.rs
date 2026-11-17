@@ -88,7 +88,7 @@ impl Session {
                 .is_none_or(|last| message.sequence.wrapping_sub(last) > 0 && message.sequence.wrapping_sub(last) < 1 << 31),
             "stale browser frame"
         );
-        let mut out = vec![0; FRAME_BYTES];
+        let mut out = vec![0; message.value as usize];
         self.pixels.seek(SeekFrom::Start(at as u64))?;
         self.pixels.read_exact(&mut out)?;
         self.last = Some(message.sequence);
@@ -168,7 +168,11 @@ pub struct Browser {
 }
 
 impl Browser {
-    pub fn start(runtime: tempfile::TempDir, dns: &[std::net::Ipv4Addr]) -> Result<Self> {
+    pub fn start(runtime: tempfile::TempDir, dns: &[std::net::Ipv4Addr], size: (u32, u32)) -> Result<Self> {
+        ensure!(
+            crate::protocol::valid_viewport(size.0 as i32, size.1 as i32),
+            "unsupported native browser viewport"
+        );
         launcher_available()?;
         let resolver = dns.iter().map(|ip| format!("nameserver {ip}\n")).collect::<String>();
         ensure!(!resolver.is_empty(), "connect WLAN before opening the browser");
@@ -215,11 +219,16 @@ impl Browser {
                 return Err(e);
             }
         };
-        Ok(Self {
+        let browser = Self {
             session,
             child,
             _runtime: runtime,
-        })
+        };
+        let mut viewport = Message::command(16);
+        viewport.x = size.0 as i32;
+        viewport.y = size.1 as i32;
+        browser.session.send(&viewport)?;
+        Ok(browser)
     }
 
     pub fn running(&mut self) -> Result<bool> {
@@ -270,33 +279,50 @@ pub fn new_channels() -> Result<(File, OwnedFd, OwnedFd)> {
     }))
 }
 
-/// Convert the fixed ARP2 BGRA frame to a bounded display-sized RGBA copy.
+/// Convert a maximum-sized BGRA frame for the CPU-only benchmark.
 pub fn rgba_frame(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     use crate::protocol::{HEIGHT, WIDTH};
+    rgba_sized(bgra, WIDTH, HEIGHT, width, height)
+}
+
+pub fn rgba_sized(bgra: &[u8], source_width: u32, source_height: u32, width: u32, height: u32) -> Result<Vec<u8>> {
     ensure!(
-        bgra.len() == FRAME_BYTES && width > 0 && height > 0 && width <= 4096 && height <= 4096,
+        source_width > 0
+            && source_height > 0
+            && u64::from(source_width) * u64::from(source_height) <= (FRAME_BYTES / 4) as u64
+            && bgra.len() as u64 == u64::from(source_width) * u64::from(source_height) * 4
+            && width > 0
+            && height > 0
+            && width <= 4096
+            && height <= 4096,
         "invalid AERA pixel extent"
     );
     let mut rgba = vec![0; width as usize * height as usize * 4];
+    if (width, height) == (source_width, source_height) {
+        for (source, target) in bgra.as_chunks::<4>().0.iter().zip(rgba.as_chunks_mut::<4>().0) {
+            *target = [source[2], source[1], source[0], 255];
+        }
+        return Ok(rgba);
+    }
     let columns: Vec<_> = (0..width)
         .map(|x| {
-            let fixed = u64::from(x) * u64::from(WIDTH) * 256 / u64::from(width);
+            let fixed = u64::from(x) * u64::from(source_width) * 256 / u64::from(width);
             ((fixed / 256) as usize, (fixed % 256) as u32)
         })
         .collect();
     for y in 0..height {
-        // Fit the complete fixed-size worker viewport into the visible area.
+        // Fit the complete worker viewport into the visible area.
         // Cropping would make a page's bottom unreachable when it cannot scroll.
-        let fixed = (u64::from(y) * u64::from(HEIGHT) * 256 / u64::from(height)).min(u64::from(HEIGHT - 1) * 256);
+        let fixed = (u64::from(y) * u64::from(source_height) * 256 / u64::from(height)).min(u64::from(source_height - 1) * 256);
         let (sy, fy) = ((fixed / 256) as usize, (fixed % 256) as u32);
-        let ny = (sy + 1).min(HEIGHT as usize - 1);
+        let ny = (sy + 1).min(source_height as usize - 1);
         for (x, &(sx, fx)) in columns.iter().enumerate() {
-            let nx = (sx + 1).min(WIDTH as usize - 1);
+            let nx = (sx + 1).min(source_width as usize - 1);
             let (a, b, c, d) = (
-                (sy * WIDTH as usize + sx) * 4,
-                (sy * WIDTH as usize + nx) * 4,
-                (ny * WIDTH as usize + sx) * 4,
-                (ny * WIDTH as usize + nx) * 4,
+                (sy * source_width as usize + sx) * 4,
+                (sy * source_width as usize + nx) * 4,
+                (ny * source_width as usize + sx) * 4,
+                (ny * source_width as usize + nx) * 4,
             );
             let to = (y as usize * width as usize + x) * 4;
             for (target, channel) in [2, 1, 0].into_iter().enumerate() {
@@ -339,8 +365,8 @@ mod tests {
         let frame = Message {
             kind: 32,
             sequence: 1,
-            x: 1080,
-            y: 2100,
+            x: 1440,
+            y: 3200,
             value: FRAME_BYTES as u32,
             text: String::new(),
         };

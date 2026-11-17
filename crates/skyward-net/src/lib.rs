@@ -11,6 +11,7 @@ pub mod reach;
 mod readiness;
 pub mod release;
 pub mod supplicant;
+pub mod time;
 pub mod wlan;
 
 /// Work stopped because it was asked to.
