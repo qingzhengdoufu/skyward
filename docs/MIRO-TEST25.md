@@ -90,3 +90,32 @@ only and readback verification after reconnection.
 Exact runtime, sources/history, build recipes, SDK source archives and test
 logs are backed up at E:/K80Pro-Skyward-Backups/miro-test25-native.
 Runtime distribution restrictions in crates/skyward-browser/NOTICE.md apply.
+
+## Test26 Follow-up
+
+Test26 was built after the test25 checkpoint with the same stock 303 base and
+the same installer/decryption/backup paths. It adds a control-center media
+volume slider matching the brightness slider, prevents the browser canvas from
+capturing touches while the control center is open, and keeps the panel awake
+while the WPE page reports active media playback. Browser menu entries can
+switch the WPE user agent to desktop mode and request landscape video playback;
+the latter asks the page for fullscreen video and does not rotate recovery's
+DRM scanout or other pages. The native worker also hides the center playback
+overlay where WebKit exposes that pseudo-element.
+
+Test26 image SHA256: 9056ec2f878e8dba30cb5cbe4aebc5fa2089c77f45a2f39144c7dd84e80f955b
+Test26 ELF SHA256: cef10eb027b3c7c00dbf89d181a2a03cb605d016686b57fe609b7b831437ce9a
+Test26 runtime SHA256: ac6f6d676561856ebf6d050adc262f564548174b78ee0d192699dd6d5ce4a811
+Test26 worker SHA256: 03e574d20720cea575f106049136ccd54da14384ae653b1a136624df62b0588b
+
+Final test26 image SHA256: 0c714cc287c7d470691c73c746db71d5442d5d2ad144dd27c4295481a0e6c92c
+Final test26 ELF SHA256: 0c46525abfa5b0d2f1f21dfe342b26bf8909f0059cf2f4f43871e1b6f39434b3
+
+Independent test26 image verification passed. The phone still has accepted
+test25 and was not reflashed in this follow-up; desktop/landscape behavior and
+control-center interaction await real-device testing.
+
+The landscape control requests fullscreen on the current video element and
+does not claim to rotate recovery's whole display. The media sink remains
+silent until the phone exposes a registered soundcard; decoded PCM is not the
+same as audible speaker output.

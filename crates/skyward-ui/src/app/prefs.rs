@@ -4,6 +4,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slider {
     Brightness,
+    MediaVolume,
     /// How strongly the motor taps.
     Vibration,
 }
@@ -105,8 +106,13 @@ pub const TIME_ZONES: [(Text, Text, &str); 9] = [
 ];
 
 impl App {
-    pub(super) fn set_slider(&mut self, t: &Theme, which: Slider, track: Rect, x: f32) {
+    pub(super) fn set_slider(&mut self, t: &Theme, which: Slider, track: Rect, x: f32) -> Vec<Effect> {
         self.set_level(t, which, track, (x - track.x) / track.w);
+        if which == Slider::MediaVolume {
+            vec![Effect::SetMediaVolume((self.state.media_volume * 100.0).round() as u8)]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -115,6 +121,7 @@ impl App {
     pub(super) fn level(&self, which: Slider) -> f32 {
         match which {
             Slider::Brightness => self.state.brightness,
+            Slider::MediaVolume => self.state.media_volume,
             Slider::Vibration => self.state.vibration,
         }
     }
@@ -126,11 +133,15 @@ impl App {
     pub(super) fn set_level(&mut self, t: &Theme, which: Slider, track: Rect, level: f32) {
         let value = match which {
             Slider::Brightness => &mut self.state.brightness,
+            Slider::MediaVolume => &mut self.state.media_volume,
             Slider::Vibration => &mut self.state.vibration,
         };
         *value = level.clamp(if which == Slider::Brightness { MIN_BRIGHTNESS } else { 0.0 }, 1.0);
         let value = *value;
-        if self.screen()==Screen::ControlCenter {self.refresh();return;}
+        if self.screen() == Screen::ControlCenter {
+            self.refresh();
+            return;
+        }
         if let Some(fr) = self.frame.as_mut() {
             fr.canvas.fill_rect(track.x, track.y, track.w, track.h, t.pal.card);
             widgets::slider(&mut fr.canvas, t, track.x, track.y, track.w, value);

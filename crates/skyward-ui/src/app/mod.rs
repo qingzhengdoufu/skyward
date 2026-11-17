@@ -321,6 +321,8 @@ pub enum Action {
     BrowserPickTab(usize),
     BrowserCloseTab(usize),
     BrowserMenu,
+    BrowserDesktopToggle,
+    BrowserLandscapeToggle,
     BrowserBookmark,
     BrowserHistoryList,
     BrowserBookmarksList,
@@ -634,6 +636,12 @@ pub enum Effect {
     BrowserPluginText(String),
     BrowserPluginKey(u32),
     SetMediaVolume(u8),
+    BrowserPluginDesktop {
+        enabled: bool,
+    },
+    BrowserPluginLandscape {
+        enabled: bool,
+    },
     BrowserPluginReload,
     BrowserPluginScroll {
         dy: i64,
@@ -1896,7 +1904,12 @@ impl App {
             fx.extend(self.held_entry(i));
         }
         let active = *self.active.get_or_insert(now);
-        if let (true, Some(after)) = (self.display_on, SCREEN_OFF[self.state.screen_off]) {
+        if self.state.browser.full_active && self.state.browser.media_playing {
+            self.stir(now);
+        }
+        if let (true, Some(after)) = (self.display_on, SCREEN_OFF[self.state.screen_off])
+            && !(self.state.browser.full_active && self.state.browser.media_playing)
+        {
             let idle = now.saturating_sub(active);
             if idle >= after {
                 self.sleep(now);

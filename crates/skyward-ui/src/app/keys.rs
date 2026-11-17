@@ -19,6 +19,11 @@ impl App {
                             "按音量鍵調整亮度，按電源鍵完成",
                             "Set the brightness with the volume keys, then press the power key",
                         ],
+                        Slider::MediaVolume => [
+                            "按音量键调节媒体音量，按电源键完成",
+                            "按音量鍵調整媒體音量，按電源鍵完成",
+                            "Set media volume with the volume keys, then press the power key",
+                        ],
                         Slider::Vibration => [
                             "按音量键调节振动强度，按电源键完成",
                             "按音量鍵調整震動強度，按電源鍵完成",
@@ -91,6 +96,9 @@ impl App {
             {
                 let level = self.level(which) + if down { -SLIDER_STEP } else { SLIDER_STEP };
                 self.set_level(&self.theme(), which, rect, level);
+                if which == Slider::MediaVolume {
+                    return vec![Effect::SetMediaVolume((self.state.media_volume * 100.0).round() as u8)];
+                }
                 if which == Slider::Vibration && self.state.vibrate {
                     return vec![Effect::Haptic];
                 }

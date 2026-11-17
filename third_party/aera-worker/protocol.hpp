@@ -24,7 +24,7 @@ constexpr uint32_t FrameSlot(uint32_t sequence) {
 }
 enum class Kind : uint32_t { kOpen = 1, kBack, kForward, kReload, kStop,
   kTouchDown, kTouchMove, kTouchUp, kKey, kAck, kClose, kSetZoom,
-  kDownloadCancel, kSetCookiePolicy, kClearBrowsingData, kViewport, kVolume,
+  kDownloadCancel, kSetCookiePolicy, kClearBrowsingData, kViewport, kVolume, kDesktop, kLandscape,
   kFrame = 32, kStatus, kError, kKeyboardShow, kKeyboardHide,
   kDownloadStarted, kDownloadProgress, kDownloadFinished,
   kDownloadFailed, kDownloadCancelled, kBrowsingDataCleared,
@@ -58,6 +58,7 @@ inline bool Valid(const Message &m, bool from_worker) {
            m.kind == Kind::kBrowsingDataFailed;
   switch (m.kind) {
     case Kind::kVolume: return m.value <= 100;
+    case Kind::kDesktop: case Kind::kLandscape: return m.value <= 1;
     case Kind::kViewport: return m.x >= 320 && m.x <= kMaxWidth && m.y >= 400 && m.y <= kMaxHeight && m.x % 4 == 0 && m.y % 4 == 0;
     case Kind::kTouchDown: case Kind::kTouchMove: case Kind::kTouchUp:
       return m.x >= 0 && m.y >= 0 && m.x < kViewWidth &&

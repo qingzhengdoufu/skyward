@@ -60,6 +60,8 @@ pub enum Control {
     Text { text: String },
     Key { value: u32 },
     Volume { percent: u8 },
+    Desktop { enabled: bool },
+    Landscape { enabled: bool },
     Scroll { dy: i64 },
     Reload,
     Navigate { url: String },
@@ -93,6 +95,7 @@ pub enum Event {
     },
     /// A text field on the plugin page took focus.
     Focus(bool),
+    MediaPlaying(bool),
     /// How far the plugin package download has come.
     #[cfg_attr(
         feature = "aera-browser",

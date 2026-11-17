@@ -175,6 +175,23 @@ static void ApplyMediaVolume(Session *s) {
   snprintf(script, sizeof(script), "window.__skywardVolume=%u;document.querySelectorAll('video,audio').forEach(e=>e.volume=%u/100)", s->volume, s->volume);
   webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
+static void ApplyDesktopMode(Session *s, bool enabled) {
+  webkit_settings_set_user_agent(
+      webkit_web_view_get_settings(s->web),
+      enabled
+          ? "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+          : "Mozilla/5.0 (Linux; Android 16; CPH2653 Build/BP2A.250605.031.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36");
+  const char *script = enabled
+      ? "document.querySelector('meta[name=viewport]')?.setAttribute('content','width=1024,initial-scale=1')"
+      : "document.querySelector('meta[name=viewport]')?.setAttribute('content','width=device-width,initial-scale=1')";
+  webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+}
+static void ApplyLandscape(Session *s, bool enabled) {
+  const char *script = enabled
+      ? "document.documentElement.classList.toggle('skyward-landscape',true);document.querySelectorAll('video').forEach(v=>v.requestFullscreen?.().catch(()=>{}))"
+      : "document.documentElement.classList.toggle('skyward-landscape',false);document.exitFullscreen?.().catch(()=>{})";
+  webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+}
 struct Session::DownloadRecord {
   Session *session = nullptr;
   WebKitDownload *download = nullptr;
@@ -437,6 +454,8 @@ static gboolean Input(gint fd, GIOCondition condition, gpointer data) {
       ApplyMediaVolume(s);
       break;
     }
+    case Kind::kDesktop: ApplyDesktopMode(s, m.value != 0); break;
+    case Kind::kLandscape: ApplyLandscape(s, m.value != 0); break;
     case Kind::kOpen: {
       const auto address = Address(m.text);
       if (!address.empty()) webkit_web_view_load_uri(s->web, address.c_str());
@@ -580,8 +599,18 @@ int main(int argc, char **argv) {
   auto *content = webkit_user_content_manager_new();
   g_signal_connect(content, "script-message-received::aeraMedia",
       G_CALLBACK(+[](WebKitUserContentManager *, JSCValue *value, gpointer data) {
-        if (jsc_value_is_boolean(value))
-          static_cast<Session *>(data)->media_playing = jsc_value_to_boolean(value);
+        if (jsc_value_is_boolean(value)) {
+          auto *session = static_cast<Session *>(data);
+          const bool playing = jsc_value_to_boolean(value);
+          if (session->media_playing != playing) {
+            session->media_playing = playing;
+            Message message;
+            message.kind = playing ? Kind::kStatus : Kind::kStatus;
+            message.value = playing ? 1 : 0;
+            g_strlcpy(message.text, playing ? "media-playing" : "media-paused", sizeof(message.text));
+            Send(session, message);
+          }
+        }
       }), &s);
   webkit_user_content_manager_register_script_message_handler(
       content, "aeraMedia", nullptr);
@@ -605,6 +634,16 @@ int main(int argc, char **argv) {
       WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, nullptr, nullptr);
   webkit_user_content_manager_add_script(content, media_script);
   webkit_user_script_unref(media_script);
+  static const char media_style[] = R"CSS((()=>{
+    const style=document.createElement('style');
+    style.textContent='video::-webkit-media-controls-start-playback-button,video::-webkit-media-controls-overlay-play-button{display:none!important}';
+    (document.head||document.documentElement).appendChild(style);
+  })();)CSS";
+  auto *media_css = webkit_user_style_sheet_new(media_style,
+      WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER,
+      nullptr, nullptr);
+  webkit_user_content_manager_add_style_sheet(content, media_css);
+  webkit_user_style_sheet_unref(media_css);
   // Many old or desktop-first pages omit a viewport declaration. Mobile
   // browsers lay those pages out at device width instead of shrinking a
   // roughly 980 CSS-pixel canvas into an unreadable strip.

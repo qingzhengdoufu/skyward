@@ -29,6 +29,7 @@ impl Pages<'_> {
                         break;
                     }
                     crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
+                    crate::browser::Event::MediaPlaying(playing) => self.app.browser_plugin_media_playing(playing, now),
                     crate::browser::Event::Navigated(url) => self.app.browser_navigated(url),
                     crate::browser::Event::Download { url, name } => downloads.push((url, name)),
                     _ => {}
@@ -106,6 +107,7 @@ impl Pages<'_> {
                         browser_done = true;
                     }
                     crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
+                    crate::browser::Event::MediaPlaying(_) => {}
                     crate::browser::Event::PluginSaved { done, total, speed } => self.app.plugin_saved(done, total, speed),
                     crate::browser::Event::PluginEnded(ended) => {
                         self.app.plugin_downloaded(ended);

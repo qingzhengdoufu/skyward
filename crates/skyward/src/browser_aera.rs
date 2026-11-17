@@ -113,6 +113,16 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                     message.value = u32::from(percent.min(100));
                     browser.session.send(&message)?;
                 }
+                Control::Desktop { enabled } => {
+                    let mut message = Message::command(18);
+                    message.value = enabled as u32;
+                    browser.session.send(&message)?;
+                }
+                Control::Landscape { enabled } => {
+                    let mut message = Message::command(19);
+                    message.value = enabled as u32;
+                    browser.session.send(&message)?;
+                }
                 Control::Pinch { scale } => {
                     ensure!(scale.is_finite() && scale > 0.0, "invalid AERA zoom");
                     zoom = (zoom * scale).clamp(50.0, 300.0);
@@ -152,7 +162,11 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                     changed = true;
                 }
                 33 => {
-                    if message.text.starts_with("https://") || message.text.starts_with("http://") {
+                    if message.text == "media-playing" {
+                        tell(Event::MediaPlaying(true));
+                    } else if message.text == "media-paused" {
+                        tell(Event::MediaPlaying(false));
+                    } else if message.text.starts_with("https://") || message.text.starts_with("http://") {
                         tell(Event::Navigated(protocol::address(&message.text)?));
                     }
                 }

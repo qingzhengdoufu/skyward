@@ -29,10 +29,12 @@ impl App {
         if self.shade_touch(ev, now) {
             return Vec::new();
         }
-        if self.browser_address_touch(ev, f, now) {
+        let shade_content = self.shade.is_some() && self.screen() == Screen::ControlCenter;
+        if !shade_content && self.browser_address_touch(ev, f, now) {
             return Vec::new();
         }
-        if let Touch::Down(x, y) = ev
+        if !shade_content
+            && let Touch::Down(x, y) = ev
             && self.state.browser.full_active
             && let Some(area) = self.frame.as_ref().and_then(|f| f.browser_area)
             && area.contains(x, y + self.top().1)
@@ -198,7 +200,7 @@ impl App {
                     .map(|(_, r)| r);
                 self.drag = match hit {
                     Some((Action::Slider(which), track)) => {
-                        self.set_slider(&t, which, track, x);
+                        fx.extend(self.set_slider(&t, which, track, x));
                         Drag::Slider(which, track)
                     }
                     Some((Action::Confirm(which), track)) if self.on_knob(track, x) => {
@@ -313,7 +315,7 @@ impl App {
                     self.dirty = true;
                 }
                 Drag::Slider(which, track) => {
-                    self.set_slider(&t, which, track, x);
+                    fx.extend(self.set_slider(&t, which, track, x));
                     self.drag = Drag::Slider(which, track);
                 }
                 Drag::Confirm { which, track, grab } => {

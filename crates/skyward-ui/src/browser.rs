@@ -1688,6 +1688,18 @@ pub fn menu(cx: &Ctx) -> Frame {
     ];
     if cx.state.browser.full_active {
         rows.extend([
+            Row::new(if cx.state.browser.desktop_mode {
+                l.pick(["手机模式", "手機模式", "Mobile mode"])
+            } else {
+                l.pick(["电脑模式", "電腦模式", "Desktop mode"])
+            })
+            .icon(BLUE, Icon::Globe),
+            Row::new(if cx.state.browser.landscape_mode {
+                l.pick(["退出横屏", "退出橫屏", "Leave landscape"])
+            } else {
+                l.pick(["横屏播放", "橫屏播放", "Landscape video"])
+            })
+            .icon(BLUE, Icon::Globe),
             Row::new(l.pick(["输入网页文字", "輸入網頁文字", "Type on page"])).icon(BLUE, Icon::Log),
             Row::new(l.pick(["放大", "放大", "Zoom in"])).icon(BLUE, Icon::Globe),
             Row::new(l.pick(["缩小", "縮小", "Zoom out"])).icon(BLUE, Icon::Globe),
@@ -1696,6 +1708,8 @@ pub fn menu(cx: &Ctx) -> Frame {
             Row::new(l.pick(["轻量模式", "輕量模式", "Basic mode"])).icon(BLUE, Icon::Globe),
         ]);
         actions.extend([
+            Action::BrowserDesktopToggle,
+            Action::BrowserLandscapeToggle,
             Action::BrowserKeyboard,
             Action::BrowserZoomIn,
             Action::BrowserZoomOut,

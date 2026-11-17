@@ -2728,6 +2728,16 @@ impl Pages<'_> {
                     worker.command(crate::browser::Control::Volume { percent });
                 }
             }
+            Effect::BrowserPluginDesktop { enabled } => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Desktop { enabled });
+                }
+            }
+            Effect::BrowserPluginLandscape { enabled } => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Landscape { enabled });
+                }
+            }
             Effect::ReadRootModules => {
                 self.app.state.root_modules = Some(if self.app.state.data.storage_open() {
                     skyward_files::root_modules::read(Path::new("/data/adb")).map_err(|e| format!("{e:#}"))

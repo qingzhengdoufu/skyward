@@ -63,6 +63,8 @@ pub enum Icon {
     Wlan,
     /// A battery, as the stock Settings' battery shows it.
     Battery,
+    /// A compact speaker used by the media-volume slider.
+    Volume,
     /// Two phones, the one behind showing round the one in front.
     Systems,
 }
@@ -338,6 +340,12 @@ const BATTERY: &[Part] = &[add(Shape::EvenOdd(
      C22.747,11.536 22.613,11.536 22.345,11.536C22.077,11.536 21.943,11.536 21.838,11.583C21.719,11.637 21.624,11.732 21.571,11.851Z",
 ))];
 
+const VOLUME: &[Part] = &[
+    add(Shape::Fill("M5.2,11H8.4L13.2,6V22L8.4,17H5.2Z")),
+    add(Shape::Line("M16.2,10A5.7,5.7 0 0 1 16.2,18", 1.8)),
+    add(Shape::Line("M19.4,7A10.2,10.2 0 0 1 19.4,21", 1.8)),
+];
+
 const SYSTEMS: &[Part] = &[
     add(Shape::Fill("M8.6,5.2H15A2.4,2.4 0 0 1 17.4,7.6V17.2A2.4,2.4 0 0 1 15,19.6H8.6A2.4,2.4 0 0 1 6.2,17.2V7.6A2.4,2.4 0 0 1 8.6,5.2Z")),
     // The gap that sets the phone in front apart from the one behind.
@@ -370,6 +378,7 @@ fn outline(icon: Icon) -> (&'static [Part], f32) {
         Icon::Shield => (SHIELD, 1.0),
         Icon::Wlan => (WLAN, 1.0),
         Icon::Battery => (BATTERY, 1.0),
+        Icon::Volume => (VOLUME, 1.0),
         Icon::Systems => (SYSTEMS, 1.0),
     }
 }

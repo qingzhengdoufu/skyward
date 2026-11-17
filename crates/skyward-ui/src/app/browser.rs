@@ -134,6 +134,9 @@ pub struct Browser {
     pub full_active: bool,
     pub prefer_full: bool,
     pub full_failures: u8,
+    pub media_playing: bool,
+    pub desktop_mode: bool,
+    pub landscape_mode: bool,
     pub full_zoom: f32,
     pub full_text: bool,
     pub full_touch: (u16, u16),
@@ -170,6 +173,9 @@ impl Default for Browser {
             full_active: false,
             prefer_full: false,
             full_failures: 0,
+            media_playing: false,
+            desktop_mode: false,
+            landscape_mode: false,
             full_zoom: 1.0,
             full_text: false,
             full_touch: (500, 500),
@@ -509,6 +515,21 @@ impl App {
                 self.refresh();
             }
             Action::BrowserMenu => self.open(Screen::BrowserMenu),
+            Action::BrowserDesktopToggle if self.state.browser.full_active => {
+                self.state.browser.desktop_mode = !self.state.browser.desktop_mode;
+                return vec![
+                    Effect::BrowserPluginDesktop {
+                        enabled: self.state.browser.desktop_mode,
+                    },
+                    Effect::BrowserPluginReload,
+                ];
+            }
+            Action::BrowserLandscapeToggle if self.state.browser.full_active => {
+                self.state.browser.landscape_mode = !self.state.browser.landscape_mode;
+                return vec![Effect::BrowserPluginLandscape {
+                    enabled: self.state.browser.landscape_mode,
+                }];
+            }
             Action::BrowserHistoryList => self.open(Screen::BrowserHistory),
             Action::BrowserBookmarksList => self.open(Screen::BrowserBookmarks),
             Action::BrowserBookmark => {
@@ -997,6 +1018,7 @@ impl App {
             return Vec::new();
         }
         self.state.browser.full_active = true;
+        self.state.browser.media_playing = false;
         self.state.browser.full_text = false;
         self.state.browser.ime.clear();
         self.state.browser.picture = None;
@@ -1132,6 +1154,17 @@ impl App {
         }
     }
 
+    pub fn browser_plugin_media_playing(&mut self, playing: bool, now: u64) {
+        if !self.state.browser.full_active || self.state.browser.media_playing == playing {
+            return;
+        }
+        self.state.browser.media_playing = playing;
+        if playing {
+            self.stir(now);
+        }
+        self.refresh();
+    }
+
     pub fn browser_offered_download(&mut self, url: String, name: String, now: u64) -> Vec<Effect> {
         self.browser_download(url, name, now)
     }
@@ -1234,6 +1267,8 @@ fn is_browser_action(action: Action) -> bool {
             | Action::BrowserPickTab(_)
             | Action::BrowserCloseTab(_)
             | Action::BrowserMenu
+            | Action::BrowserDesktopToggle
+            | Action::BrowserLandscapeToggle
             | Action::BrowserBookmark
             | Action::BrowserHistoryList
             | Action::BrowserBookmarksList

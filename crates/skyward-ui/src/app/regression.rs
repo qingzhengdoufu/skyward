@@ -490,6 +490,30 @@ fn status_volume_drag_does_not_open_control_center_or_send_page_touches() {
 }
 
 #[test]
+fn control_center_keeps_its_hits_when_a_full_browser_is_active() {
+    let f = fonts();
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.data = Data::Open;
+    app.state.wlan = Some(connected("Skyward"));
+    app.act(Action::OpenControlCenter, 0);
+    app.tick(400);
+    let frame = app.frame(&f, &info());
+    let wifi = frame
+        .hits
+        .iter()
+        .find(|hit| matches!(hit.action, Action::Toggle(Switch::Wlan)))
+        .map(|hit| hit.rect)
+        .expect("control center keeps the WLAN hit");
+    let (x, y) = wifi.centre();
+    app.touch(Touch::Down(x, y), &f, 500);
+    let effects = app.touch(Touch::Up, &f, 510);
+    assert!(effects.is_empty());
+    assert!(app.shade.is_some() && app.screen() == Screen::ControlCenter);
+}
+
+#[test]
 fn a_partial_shade_reveals_its_header_immediately() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Home, W, H, PPD);
