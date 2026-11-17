@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) struct Shade {
     pub under: Canvas,
+    pub frost: Canvas,
     pub extent: f32,
     pub spring: Option<(f32, Spring)>,
 }
@@ -36,8 +37,10 @@ impl App {
             .map(|turn| turn.left)
             .unwrap_or_else(|| Canvas::filled(self.w, self.h, self.theme().pal.bg));
         self.push(Screen::ControlCenter);
+        let frost = frosted(&under);
         self.shade = Some(Shade {
             under,
+            frost,
             extent: 0.0,
             spring: None,
         });
@@ -185,5 +188,93 @@ impl App {
             return true;
         }
         self.shade.as_ref().is_some_and(|s| s.spring.is_some())
+    }
+}
+
+/// Blur a small snapshot once per pull, not the live page on every animation frame.
+fn frosted(source: &Canvas) -> Canvas {
+    let mut out = source.clone();
+    if !source.whole() || source.w == 0 || source.h == 0 {
+        return out;
+    }
+    let (w, h) = (source.w.div_ceil(8) as usize, source.h.div_ceil(8) as usize);
+    let mut small = vec![[0u8; 3]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u32; 3];
+            let mut n = 0;
+            for sy in y * 8..((y + 1) * 8).min(source.h as usize) {
+                for sx in x * 8..((x + 1) * 8).min(source.w as usize) {
+                    let at = (sy * source.w as usize + sx) * 4;
+                    for k in 0..3 {
+                        sum[k] += u32::from(source.data[at + k]);
+                    }
+                    n += 1;
+                }
+            }
+            small[y * w + x] = sum.map(|v| (v / n) as u8);
+        }
+    }
+    let mut scratch = small.clone();
+    for _ in 0..3 {
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = [0u32; 3];
+                for dx in -3isize..=3 {
+                    let px = small[y * w + x.saturating_add_signed(dx).min(w - 1)];
+                    for k in 0..3 {
+                        sum[k] += u32::from(px[k]);
+                    }
+                }
+                scratch[y * w + x] = sum.map(|v| (v / 7) as u8);
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = [0u32; 3];
+                for dy in -3isize..=3 {
+                    let px = scratch[y.saturating_add_signed(dy).min(h - 1) * w + x];
+                    for k in 0..3 {
+                        sum[k] += u32::from(px[k]);
+                    }
+                }
+                small[y * w + x] = sum.map(|v| (v / 7) as u8);
+            }
+        }
+    }
+    for y in 0..source.h as usize {
+        for x in 0..source.w as usize {
+            let (sx, sy) = (x / 8, y / 8);
+            let (fx, fy) = (x % 8, y % 8);
+            let (nx, ny) = ((sx + 1).min(w - 1), (sy + 1).min(h - 1));
+            let at = (y * source.w as usize + x) * 4;
+            for k in 0..3 {
+                let top = usize::from(small[sy * w + sx][k]) * (8 - fx) + usize::from(small[sy * w + nx][k]) * fx;
+                let bottom = usize::from(small[ny * w + sx][k]) * (8 - fx) + usize::from(small[ny * w + nx][k]) * fx;
+                out.data[at + k] = ((top * (8 - fy) + bottom * fy) / 64) as u8;
+            }
+            out.data[at + 3] = 255;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn frost_preserves_flat_color_and_blends_edges_without_changing_source() {
+        let color = Rgba::rgb(70, 110, 190);
+        for (w, h) in [(1, 1), (17, 31), (64, 32)] {
+            let flat = Canvas::filled(w, h, color);
+            assert_eq!(frosted(&flat).data, flat.data);
+        }
+        let mut source = Canvas::filled(64, 32, Rgba::rgb(0, 0, 0));
+        source.fill_rect(32.0, 0.0, 32.0, 32.0, Rgba::rgb(255, 255, 255));
+        let frost = frosted(&source);
+        let boundary = (16 * 64 + 32) * 4;
+        assert_eq!(source.data[boundary], 255);
+        assert!((40..215).contains(&frost.data[boundary]));
+        assert!(frost.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
 }

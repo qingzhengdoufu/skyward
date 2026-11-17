@@ -130,20 +130,24 @@ pub fn partitions(cx: &Ctx) -> Frame {
     ));
     let mut y = list.bottom + t.m.card_gap;
     if let Some(Ok(parts)) = &s.image_partitions {
-        for (name, size) in parts {
-            let sub = if name == "super" {
-                l.pick([
-                    "共享分区，包含双槽逻辑分区",
-                    "共用分割區，包含雙槽邏輯分割區",
-                    "Shared; contains both slots",
-                ])
-            } else {
-                ""
-            };
-            let value = crate::fmt::file_size(*size);
-            let rows = [Row::new(name).subtitle(sub).trail(Trail::Text(&value))];
-            y = widgets::list(&mut c, t, f, y, &rows).bottom;
-        }
+        let sizes: Vec<_> = parts.iter().map(|(_, size)| crate::fmt::file_size(*size)).collect();
+        let rows: Vec<_> = parts
+            .iter()
+            .zip(&sizes)
+            .map(|((name, _), size)| {
+                let sub = if name == "super" {
+                    l.pick([
+                        "共享分区，包含双槽逻辑分区",
+                        "共用分割區，包含雙槽邏輯分割區",
+                        "Shared; contains both slots",
+                    ])
+                } else {
+                    ""
+                };
+                Row::new(name).subtitle(sub).trail(Trail::Text(size))
+            })
+            .collect();
+        y = widgets::list(&mut c, t, f, y, &rows).bottom;
     }
     Frame::new(
         t,
@@ -158,8 +162,8 @@ pub fn control(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let m = &t.m;
     let mut c = canvas(cx, m.h * 3);
-    let background = Rgba::rgb(38, 38, 40);
-    let panel = Rgba::rgb(29, 29, 31);
+    let background = Rgba::rgb(26, 26, 28).with_alpha(150);
+    let panel = Rgba::rgb(29, 29, 31).with_alpha(210);
     let inactive = Rgba::rgb(53, 53, 55);
     let blue = Rgba::rgb(0, 132, 216);
     c.clear(background);

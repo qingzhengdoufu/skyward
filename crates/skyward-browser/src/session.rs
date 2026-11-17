@@ -6,13 +6,13 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom},
+    os::unix::process::CommandExt,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::Path,
     process::{Child, Command, Stdio},
-    os::unix::process::CommandExt,
 };
 
 pub struct Session {
@@ -126,7 +126,10 @@ pub fn launcher_available() -> Result<()> {
     ensure!(m.len() < 1 << 20, "oversized browser launcher");
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    ensure!(format!("{:x}", Sha256::digest(&bytes)) == crate::LAUNCHER_SHA256, "browser launcher digest mismatch");
+    ensure!(
+        format!("{:x}", Sha256::digest(&bytes)) == crate::LAUNCHER_SHA256,
+        "browser launcher digest mismatch"
+    );
     Ok(())
 }
 
@@ -142,7 +145,10 @@ impl Browser {
         let resolver = dns.iter().map(|ip| format!("nameserver {ip}\n")).collect::<String>();
         ensure!(!resolver.is_empty(), "connect WLAN before opening the browser");
         std::fs::write(runtime.path().join("etc/resolv.conf"), resolver)?;
-        std::fs::set_permissions(runtime.path().join("etc/resolv.conf"), std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
+        std::fs::set_permissions(
+            runtime.path().join("etc/resolv.conf"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o644),
+        )?;
         let (pixels, host, worker) = new_channels()?;
         let duplicate = |fd: i32| -> Result<OwnedFd> {
             let new = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10) };
@@ -151,9 +157,19 @@ impl Browser {
         };
         let frame = duplicate(pixels.as_raw_fd())?;
         let control = duplicate(worker.as_raw_fd())?;
-        let log = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open("/tmp/skyward-browser.log")?;
+        let log = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open("/tmp/skyward-browser.log")?;
         let mut command = Command::new(crate::LAUNCHER);
-        command.arg(runtime.path()).stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log);
+        command
+            .arg(runtime.path())
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log);
         unsafe {
             command.pre_exec(move || {
                 if libc::dup2(frame.as_raw_fd(), 3) < 0 || libc::dup2(control.as_raw_fd(), 4) < 0 {
@@ -165,21 +181,37 @@ impl Browser {
         let mut child = command.spawn().context("start browser jail")?;
         let session = match Session::attach(pixels, host) {
             Ok(session) => session,
-            Err(e) => { let _ = child.kill(); let _ = child.wait(); return Err(e); }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
         };
-        Ok(Self { session, child, _runtime: runtime })
+        Ok(Self {
+            session,
+            child,
+            _runtime: runtime,
+        })
     }
 
-    pub fn running(&mut self) -> Result<bool> { Ok(self.child.try_wait()?.is_none()) }
-    pub fn fd(&self) -> i32 { self.session.control.as_raw_fd() }
+    pub fn running(&mut self) -> Result<bool> {
+        Ok(self.child.try_wait()?.is_none())
+    }
+    pub fn fd(&self) -> i32 {
+        self.session.control.as_raw_fd()
+    }
 }
 
 impl Drop for Browser {
     fn drop(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {
-            unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM); }
+            unsafe {
+                libc::kill(self.child.id() as i32, libc::SIGTERM);
+            }
             for _ in 0..20 {
-                if self.child.try_wait().ok().flatten().is_some() { return; }
+                if self.child.try_wait().ok().flatten().is_some() {
+                    return;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             let _ = self.child.kill();
@@ -207,10 +239,46 @@ pub fn new_channels() -> Result<(File, OwnedFd, OwnedFd)> {
     }))
 }
 
+/// Convert the fixed ARP2 BGRA frame to a bounded display-sized RGBA copy.
+pub fn rgba_frame(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+    use crate::protocol::{HEIGHT, WIDTH};
+    ensure!(
+        bgra.len() == FRAME_BYTES && width > 0 && height > 0 && width <= 4096 && height <= 4096,
+        "invalid AERA pixel extent"
+    );
+    let mut rgba = vec![0; width as usize * height as usize * 4];
+    for y in 0..height {
+        let sy = u64::from(y) * u64::from(HEIGHT) / u64::from(height);
+        for x in 0..width {
+            let sx = u64::from(x) * u64::from(WIDTH) / u64::from(width);
+            let from = (sy as usize * WIDTH as usize + sx as usize) * 4;
+            let to = (y as usize * width as usize + x as usize) * 4;
+            rgba[to..to + 4].copy_from_slice(&[bgra[from + 2], bgra[from + 1], bgra[from], 255]);
+        }
+    }
+    Ok(rgba)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn frame_conversion_is_bounded_and_swaps_bgra_without_encoding() {
+        let mut frame = vec![0; FRAME_BYTES];
+        for pixel in frame.as_chunks_mut::<4>().0 {
+            *pixel = [9, 20, 30, 255];
+        }
+        for (width, height) in [(1, 1), (675, 1312), (1440, 2800)] {
+            let rgba = rgba_frame(&frame, width, height).unwrap();
+            assert_eq!(rgba.len(), width as usize * height as usize * 4);
+            assert!(rgba.as_chunks::<4>().0.iter().all(|p| *p == [30, 20, 9, 255]));
+        }
+        for (width, height) in [(0, 1), (1, 0), (4097, 1)] {
+            assert!(rgba_frame(&frame, width, height).is_err());
+        }
+        assert!(rgba_frame(&frame[..16], 1, 1).is_err());
+    }
     #[test]
     fn sealed_frame_is_copied_then_acknowledged_and_duplicates_are_refused() {
         let (mut pixels, host, worker) = new_channels().unwrap();

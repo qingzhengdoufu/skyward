@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Uses AERA's syscall policy; only the browser and RAM storage are exposed.
+// Uses AERA's syscall policy, private runtime and dedicated browser storage.
 #include "jail_policy.hpp"
 #include <libminijail.h>
 #include <algorithm>
@@ -25,11 +25,15 @@ static volatile sig_atomic_t stopping;
 static void Stop(int) { stopping = 1; }
 struct Device { const char *path; uid_t uid; gid_t gid; mode_t mode; };
 static Device devices[] = {{"/dev/kgsl-3d0", 0, 0, 0}, {"/dev/dma_heap/system", 0, 0, 0}};
-static void GiveDevices() {
+static void InspectDevices() {
   for (auto &device : devices) {
     struct stat info{};
     if (lstat(device.path, &info) || !S_ISCHR(info.st_mode)) Die("browser GPU device");
     device.uid = info.st_uid; device.gid = info.st_gid; device.mode = info.st_mode & 0777;
+  }
+}
+static void GiveDevices() {
+  for (auto &device : devices) {
     Check(chown(device.path, 0, 3003), "browser GPU group");
     Check(chmod(device.path, 0660), "browser GPU access");
   }
@@ -46,8 +50,8 @@ static void PersistentStorage() {
   struct statfs filesystem{};
   if (data<0 || fstatfs(data,&filesystem) ||
       (filesystem.f_type!=0xef53 && filesystem.f_type!=0xf2f52010)) Die("decrypt data before opening browser");
-  if (mkdirat(data,"skyward-browser",0700) && errno!=EEXIST) Die("browser data directory");
-  int parent=openat(data,"skyward-browser",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+  if (mkdirat(data,"skyward-aera",0700) && errno!=EEXIST) Die("browser data directory");
+  int parent=openat(data,"skyward-aera",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
   close(data);
   struct stat info{};
   if (parent<0 || fstat(parent,&info) || info.st_uid || !S_ISDIR(info.st_mode) || (info.st_mode&0777)!=0700)
@@ -132,8 +136,11 @@ int main(int argc, char **argv) {
   }
   Check(fchmod(directory, 0755), "runtime access"); close(directory);
   PersistentStorage();
-  GiveDevices();
+  InspectDevices();
   Supervise();
+  // Only the supervised child changes access: every exit path is restored
+  // by the parent, including a partial setup failure.
+  GiveDevices();
   rlimit files{512, 512}, processes{96, 96}, core{0, 0}, size{64ULL << 20, 64ULL << 20};
   Check(setrlimit(RLIMIT_NOFILE, &files), "browser file limit");
   Check(setrlimit(RLIMIT_NPROC, &processes), "browser process limit");
@@ -151,7 +158,7 @@ int main(int argc, char **argv) {
   for (const char *name : {"/run"})
     Check(minijail_mount_with_data(jail, "tmpfs", name, "tmpfs", flags, "size=64M,mode=0700,uid=99090,gid=99090"), "browser private storage");
   for (const char *name : {"profile","cache","downloads"}) {
-    const std::string from=std::string("/data/skyward-browser/")+name;
+    const std::string from=std::string("/data/skyward-aera/")+name;
     const std::string to=std::string("/")+name;
     Check(minijail_bind(jail,from.c_str(),to.c_str(),1),"browser persistent bind");
   }

@@ -72,6 +72,12 @@ pub enum Event {
     Installed(Result<(), String>),
     /// The plugin rendered a page, or why it did not.
     Shot(Result<Vec<u8>, String>),
+    #[cfg(feature = "aera-browser")]
+    Pixels {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
     /// A text field on the plugin page took focus.
     Focus(bool),
     /// How far the plugin package download has come.
@@ -171,7 +177,7 @@ fn full_started(dir: &Path, servers: &Servers) -> Result<Cdp> {
 pub struct Worker {
     events: Receiver<Event>,
     commands: Arc<Mutex<VecDeque<Control>>>,
-    latest: Arc<Mutex<Option<Vec<u8>>>>,
+    latest: Arc<Mutex<Option<Event>>>,
     /// Readable while events wait.
     wake: OwnedFd,
     stop: Arc<AtomicBool>,
@@ -201,9 +207,12 @@ impl Worker {
             .name("browser".into())
             .spawn(move || {
                 let tell = |event: Event| {
-                    if let Event::Shot(Ok(frame)) = event {
+                    let frame = matches!(&event, Event::Shot(Ok(_)));
+                    #[cfg(feature = "aera-browser")]
+                    let frame = frame || matches!(&event, Event::Pixels { .. });
+                    if frame {
                         if let Ok(mut latest) = newest.lock() {
-                            *latest = Some(frame);
+                            *latest = Some(event);
                         }
                         unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
                         return;
@@ -265,6 +274,14 @@ impl Worker {
                         tell(Event::Installed(ended));
                     }
                     Task::FullStream { dir, url } => {
+                        #[cfg(feature = "aera-browser")]
+                        if cfg!(feature = "aera-browser") {
+                            if let Err(error) = crate::browser_aera::run(&url, &servers, &stopping, &inputs, &tell) {
+                                note(&format!("AERA session failed: {error:#}"));
+                                tell(Event::Shot(Err(format!("{error:#}"))));
+                            }
+                            return;
+                        }
                         let url = web::full_url(&url);
                         // One owner from connect through stop: a quick close/reopen
                         // cannot let an old worker kill or attach to the new page.
@@ -405,7 +422,7 @@ impl Worker {
         if let Ok(mut latest) = self.latest.lock()
             && let Some(frame) = latest.take()
         {
-            events.push(Event::Shot(Ok(frame)));
+            events.push(frame);
         }
         events
     }
@@ -430,7 +447,7 @@ impl Drop for Worker {
     }
 }
 
-fn note(line: &str) {
+pub(crate) fn note(line: &str) {
     if let Some(dir) = Path::new(LOG).parent() {
         let _ = std::fs::create_dir_all(dir);
     }

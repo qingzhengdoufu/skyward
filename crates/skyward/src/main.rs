@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 mod aod;
 #[cfg(target_os = "android")]
 mod browser;
+#[cfg(all(target_os = "android", feature = "aera-browser"))]
+mod browser_aera;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod cdp;

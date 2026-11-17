@@ -408,10 +408,14 @@ impl App {
             Action::BrowserHistoryList => self.open(Screen::BrowserHistory),
             Action::BrowserBookmarksList => self.open(Screen::BrowserBookmarks),
             Action::BrowserBookmark => {
-                if let Some(page) = self.state.browser.page() {
+                if !self.state.browser.url.is_empty() {
                     let mark = BrowserMark {
-                        title: page.title.clone(),
-                        url: page.url.clone(),
+                        title: self
+                            .state
+                            .browser
+                            .page()
+                            .map_or_else(|| self.state.browser.url.clone(), |page| page.title.clone()),
+                        url: self.state.browser.url.clone(),
                     };
                     if let Some(at) = self.state.browser.bookmarks.iter().position(|b| b.url == mark.url) {
                         self.state.browser.bookmarks.remove(at);
@@ -528,10 +532,22 @@ impl App {
                     dy: dy.clamp(-2000.0, 2000.0) as i64,
                 }];
             }
-            Action::BrowserZoomIn if self.state.browser.full_active => return vec![Effect::BrowserPluginPinch { scale: 1.2 }],
-            Action::BrowserZoomOut if self.state.browser.full_active => return vec![Effect::BrowserPluginPinch { scale: 0.8 }],
-            Action::BrowserScrollUp if self.state.browser.full_active => return vec![Effect::BrowserPluginScroll { dy: 550 }],
-            Action::BrowserScrollDown if self.state.browser.full_active => return vec![Effect::BrowserPluginScroll { dy: -550 }],
+            Action::BrowserZoomIn | Action::BrowserZoomOut if self.state.browser.full_active => {
+                if self.screen() == Screen::BrowserMenu {
+                    self.back(now);
+                }
+                return vec![Effect::BrowserPluginPinch {
+                    scale: if action == Action::BrowserZoomIn { 1.2 } else { 0.8 },
+                }];
+            }
+            Action::BrowserScrollUp | Action::BrowserScrollDown if self.state.browser.full_active => {
+                if self.screen() == Screen::BrowserMenu {
+                    self.back(now);
+                }
+                return vec![Effect::BrowserPluginScroll {
+                    dy: if action == Action::BrowserScrollUp { 550 } else { -550 },
+                }];
+            }
             Action::BrowserKeyboard => {
                 self.state.layer = Layer::Letters;
                 self.state.browser.full_text = true;
@@ -796,8 +812,12 @@ impl App {
     }
 
     fn browser_check_full(&mut self) {
-        let path = "/data/skyward-browser/chromium";
-        self.state.browser.full = if std::path::Path::new(path).is_dir() {
+        let path = if cfg!(feature = "aera-browser") {
+            "/skyward/browser/runtime.xz"
+        } else {
+            "/data/skyward-browser/chromium"
+        };
+        self.state.browser.full = if std::path::Path::new(path).exists() {
             BrowserFull::Ready(path.into())
         } else {
             BrowserFull::Absent("插件未安装".into())
@@ -835,7 +855,12 @@ impl App {
             skyward_net::web::full_url(&url)
         };
         let dir = "/data/skyward-browser/chromium".to_string();
-        if !std::path::Path::new(&dir).is_dir() {
+        let installed = if cfg!(feature = "aera-browser") {
+            std::path::Path::new("/skyward/browser/runtime.xz").is_file()
+        } else {
+            std::path::Path::new(&dir).is_dir()
+        };
+        if !installed {
             self.state.browser.full = BrowserFull::Absent("插件未安装".into());
             self.open(Screen::BrowserFull);
             return Vec::new();
@@ -873,6 +898,26 @@ impl App {
                 self.state.browser.full = BrowserFull::Failed(why);
             }
         }
+        self.refresh();
+    }
+
+    #[cfg(feature = "aera-browser")]
+    pub fn browser_plugin_pixels(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
+        if !self.state.browser.full_active
+            || width == 0
+            || height == 0
+            || u64::from(width) * u64::from(height) > 16_000_000
+            || rgba.len() as u64 != u64::from(width) * u64::from(height) * 4
+        {
+            return;
+        }
+        self.state.browser.picture = Some(BrowserPicture {
+            width,
+            height,
+            pixels: std::sync::Arc::new(rgba),
+        });
+        self.state.browser.full_progress = Some(1.0);
+        self.state.browser.view = BrowserView::Full;
         self.refresh();
     }
 

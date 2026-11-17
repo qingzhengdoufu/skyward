@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+aera-browser = []
+
 [dependencies]
 anyhow = { workspace = true }
 ab_glyph = "0.2.32"

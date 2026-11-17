@@ -3,7 +3,7 @@
 
 use crate::app::{Action, BrowserFull, BrowserSave, BrowserView, Dock, Frame, Hit, Rows, Screen};
 use crate::canvas::Canvas;
-use crate::color::{Rgba, mix};
+use crate::color::Rgba;
 use crate::fmt;
 use crate::font::Fonts;
 use crate::geom::Rect;
@@ -146,8 +146,7 @@ fn address_bar(c: &mut Canvas, cx: &Ctx, top: f32, text: &str) -> f32 {
     r.y + r.h
 }
 
-/// The large address bar at the foot of the start page's hero, and the
-/// hero itself.
+/// Shortcuts and current tasks; the address stays in the bottom toolbar.
 fn home(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let m = &t.m;
@@ -155,48 +154,7 @@ fn home(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = m.content_top;
     let w = m.w as f32 - m.margin * 2.0;
-    let hero_h = m.dp(132.0);
-    c.fill_round_rect_graded(m.margin, top, w, hero_h, m.dp(28.0), &|fy| mix(BLUE, PURPLE, (fy - top) / hero_h));
-    let disc = m.dp(44.0);
-    let dcx = m.margin + w - m.dp(52.0);
-    let dcy = top + hero_h / 2.0;
-    c.fill_circle(dcx, dcy, disc, Rgba::rgb(255, 255, 255).with_alpha(38));
-    icons::glyph(&mut c, Icon::Globe, dcx, dcy, m.dp(50.0), Rgba::rgb(255, 255, 255));
-    let x = m.margin + m.dp(24.0);
-    let white = Rgba::rgb(255, 255, 255);
-    c.text_top(&f.heading, "Skyward", x, top + m.dp(30.0), m.dp(26.0), white, Some(w - m.dp(130.0)));
-    let tagline = l.pick(["浏览器", "瀏覽器", "Browser"]);
-    c.text_top(
-        &f.body,
-        tagline,
-        x,
-        top + m.dp(72.0),
-        m.dp(16.0),
-        white.with_alpha(220),
-        Some(w - m.dp(130.0)),
-    );
-    let hint = l.pick(["输入网址，下载刷机包", "輸入網址，下載刷機包", "Addresses, pages and files"]);
-    c.text_top(
-        &f.body,
-        hint,
-        x,
-        top + m.dp(98.0),
-        m.dp(13.0),
-        white.with_alpha(185),
-        Some(w - m.dp(130.0)),
-    );
-    out.push(Hit {
-        rect: Rect::new(m.margin, top, w, hero_h),
-        action: Action::BrowserAddress,
-    });
-
-    let bar = Rect::new(m.margin, top + hero_h + m.dp(14.0), w, m.dp(56.0));
-    address_bar(&mut c, cx, bar.y, "");
-    out.push(Hit {
-        rect: bar,
-        action: Action::BrowserAddress,
-    });
-    let mut y = bar.y + bar.h + m.dp(14.0);
+    let mut y = top;
 
     y = widgets::section(&mut c, t, f, y, l.pick(["快捷访问", "快速存取", "Shortcuts"]));
     let gap = m.dp(10.0);
@@ -208,7 +166,7 @@ fn home(cx: &Ctx) -> Frame {
         let col = k % cols;
         let tx = m.margin + col as f32 * (tile_w + gap);
         let ty = y + row as f32 * (tile_h + gap);
-        c.fill_round_rect(tx, ty, tile_w, tile_h, m.dp(20.0), t.pal.card);
+        c.fill_round_rect(tx, ty, tile_w, tile_h, m.dp(8.0), t.pal.card);
         let ccx = tx + tile_w / 2.0;
         let ccy = ty + m.dp(36.0);
         c.fill_circle(ccx, ccy, m.dp(22.0), q.color);
@@ -282,17 +240,26 @@ fn home(cx: &Ctx) -> Frame {
     y = list.bottom;
 
     y = widgets::section(&mut c, t, f, y, l.pick(["更多", "更多", "More"]));
-    let full = Row::new(l.pick([
-        "完整模式（Linux Chromium）",
-        "完整模式（Linux Chromium）",
-        "Full mode (Linux Chromium)",
-    ]))
-    .icon(PURPLE, Icon::Layers)
-    .subtitle(l.pick([
-        "外置插件，解密后可安装",
-        "外置外掛，解密後可安裝",
-        "An external plugin, installed after decryption",
-    ]));
+    let full_title = if cfg!(feature = "aera-browser") {
+        l.pick(["完整模式（AERA 实验版）", "完整模式（AERA 實驗版）", "Full mode (AERA experiment)"])
+    } else {
+        l.pick([
+            "完整模式（Linux Chromium）",
+            "完整模式（Linux Chromium）",
+            "Full mode (Linux Chromium)",
+        ])
+    };
+    let full = Row::new(full_title)
+        .icon(PURPLE, Icon::Layers)
+        .subtitle(if cfg!(feature = "aera-browser") {
+            "WPE WebKit"
+        } else {
+            l.pick([
+                "外置插件，解密后可安装",
+                "外置外掛，解密後可安裝",
+                "An external plugin, installed after decryption",
+            ])
+        });
     let list = widgets::list(&mut c, t, f, y, &[full]);
     out.extend(hits(&list.rows, &[Action::BrowserFull]));
     y = list.bottom;
@@ -333,55 +300,32 @@ fn home(cx: &Ctx) -> Frame {
     frame
 }
 
-/// A page the external Chromium drew, under the normal address bar and
-/// dock: the plugin is the webview, the recovery still owns the controls.
+/// The engine owns the page; recovery owns the bottom address and tools.
 fn full_page(cx: &Ctx) -> Frame {
     let (t, l) = (cx.t, cx.state.lang);
     let m = &t.m;
     let mut c = page(cx);
-    let top = widgets::bar_bottom(t) + m.dp(8.0);
+    let top = widgets::bar_bottom(t);
     let mut out = Vec::new();
-    let back = Rect::new(m.margin, top, m.dp(44.0), m.dp(44.0));
-    c.fill_round_rect(back.x, back.y, back.w, back.h, back.h / 2.0, t.pal.search);
-    let (cx0, cy0) = back.centre();
-    c.line(cx0 + m.dp(5.0), cy0 - m.dp(8.0), cx0 - m.dp(4.0), cy0, m.dp(2.6), t.pal.text);
-    c.line(cx0 - m.dp(4.0), cy0, cx0 + m.dp(5.0), cy0 + m.dp(8.0), m.dp(2.6), t.pal.text);
-    out.push(Hit {
-        rect: back,
-        action: Action::BrowserBasic,
-    });
-    let bar = Rect::new(
-        back.x + back.w + m.dp(10.0),
-        top,
-        m.w as f32 - back.x - back.w - m.margin - m.dp(10.0),
-        m.dp(44.0),
-    );
-    widgets::search_capsule(&mut c, t, cx.f, bar, &cx.state.browser.url);
-    out.push(Hit {
-        rect: bar,
-        action: Action::BrowserAddress,
-    });
-    let mut y = top + back.h + m.dp(8.0);
+    let y = top;
     let area = full_viewport(t);
-    if let Some(shot) = &cx.state.browser.full_shot {
-        if let Some(picture) = cx.state.browser.picture.clone().or_else(|| picture(shot)) {
+    if cx.state.browser.picture.is_some() || cx.state.browser.full_shot.is_some() {
+        if let Some(picture) = cx
+            .state
+            .browser
+            .picture
+            .clone()
+            .or_else(|| cx.state.browser.full_shot.as_deref().and_then(picture))
+        {
             let (w, h) = (picture.width, picture.height);
-            let x = (m.w as f32 - w as f32) / 2.0;
+            let x = area.x + (area.w - w as f32) / 2.0;
             c.blit_rgba(&picture.pixels, w, h, x.round() as i32, y.round() as i32);
             if let Some(progress) = cx.state.browser.full_progress.filter(|p| *p < 1.0) {
                 let progress = progress.clamp(0.0, 1.0);
-                c.fill_round_rect(
-                    m.margin,
-                    y - m.dp(4.0),
-                    (m.w as f32 - m.margin * 2.0) * progress,
-                    m.dp(3.0),
-                    m.dp(1.5),
-                    t.pal.accent,
-                );
+                c.fill_round_rect(0.0, y - m.dp(4.0), m.w as f32 * progress, m.dp(3.0), m.dp(1.5), t.pal.accent);
             }
-            y += h as f32;
         } else {
-            y = widgets::footnote(
+            widgets::footnote(
                 &mut c,
                 t,
                 cx.f,
@@ -395,7 +339,7 @@ fn full_page(cx: &Ctx) -> Frame {
         }
     } else {
         let progress = cx.state.browser.full_progress.unwrap_or(0.0);
-        y = widgets::progress_card(
+        widgets::progress_card(
             &mut c,
             t,
             cx.f,
@@ -409,7 +353,7 @@ fn full_page(cx: &Ctx) -> Frame {
             action: Action::BrowserAddress,
         });
     }
-    let mut frame = Frame::new(t, fit(c, t, y), out, l.pick(BROWSER), top);
+    let mut frame = Frame::new(t, c.crop_height(m.h), out, l.pick(BROWSER), top);
     frame.header = false;
     frame.back = false;
     frame.browser_area = Some(area);
@@ -418,14 +362,25 @@ fn full_page(cx: &Ctx) -> Frame {
 }
 
 pub fn full_viewport(t: &Theme) -> Rect {
+    viewport_above(t, t.m.h as f32 - t.m.dp(BROWSER_DOCK_DP))
+}
+
+pub fn full_input_viewport(t: &Theme) -> Rect {
+    viewport_above(t, t.m.h as f32 - widgets::keyboard_height(t) - t.m.dp(64.0))
+}
+
+fn viewport_above(t: &Theme, bottom: f32) -> Rect {
     let m = &t.m;
-    let y = widgets::bar_bottom(t) + m.dp(60.0);
-    Rect::new(
-        m.margin,
-        y,
-        m.w as f32 - m.margin * 2.0,
-        (m.h as f32 - y - m.dp(86.0)).max(m.dp(100.0)),
-    )
+    let y = widgets::bar_bottom(t);
+    let height = (bottom - y).max(m.dp(100.0));
+    #[cfg(feature = "aera-browser")]
+    {
+        // ARP2 has a fixed CSS viewport; keep its aspect and touch coordinates.
+        let width = (height * 1080.0 / 2100.0).min(m.w as f32).floor();
+        Rect::new((m.w as f32 - width) / 2.0, y, width, (width * 2100.0 / 1080.0).floor())
+    }
+    #[cfg(not(feature = "aera-browser"))]
+    Rect::new(0.0, y, m.w as f32, height)
 }
 
 pub(crate) fn picture(bytes: &[u8]) -> Option<crate::app::BrowserPicture> {
@@ -526,44 +481,47 @@ fn dock(cx: &Ctx) -> Dock {
             Action::BrowserBack,
             Action::BrowserForward,
             Action::BrowserReload,
-            Action::BrowserHome,
-            Action::BrowserTabs,
+            Action::BrowserHistoryList,
+            Action::BrowserBookmarksList,
             Action::BrowserDownloads,
-            Action::BrowserFullLoad,
-            Action::BrowserMenu,
         ],
     )
 }
 
 fn full_dock(cx: &Ctx) -> Dock {
-    dock_with(
-        cx,
-        &[
-            Action::BrowserBack,
-            Action::BrowserForward,
-            Action::BrowserReload,
-            Action::BrowserKeyboard,
-            Action::BrowserScrollUp,
-            Action::BrowserScrollDown,
-            Action::BrowserZoomOut,
-            Action::BrowserZoomIn,
-            Action::BrowserHome,
-        ],
-    )
+    dock(cx)
 }
 
+const BROWSER_DOCK_DP: f32 = 122.0;
+
 fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
-    let (t, l) = (cx.t, cx.state.lang);
+    let t = cx.t;
     let m = &t.m;
-    let (h, pad, gap) = (m.dp(48.0), m.dp(12.0), m.dp(8.0));
-    let mut c = Canvas::new(m.w, (pad + h + m.dp(26.0)).ceil() as u32);
+    let (h, pad, gap) = (m.dp(44.0), m.dp(64.0), m.dp(4.0));
+    let mut c = Canvas::new(m.w, m.dp(BROWSER_DOCK_DP).ceil() as u32);
     c.clear(t.pal.bg);
+    let menu = Rect::new(m.w as f32 - m.margin - m.dp(40.0), m.dp(8.0), m.dp(40.0), m.dp(44.0));
+    let bar = Rect::new(m.margin, m.dp(8.0), menu.x - m.margin - m.dp(6.0), m.dp(44.0));
+    let url = &cx.state.browser.url;
+    let address = if url.is_empty() {
+        cx.state.lang.pick(OPEN_ADDRESS)
+    } else {
+        url.as_str()
+    };
+    widgets::search_capsule(&mut c, t, cx.f, bar, address);
+    for k in 0..3 {
+        c.fill_circle(
+            menu.x + menu.w / 2.0,
+            menu.y + menu.h / 2.0 + (k as f32 - 1.0) * m.dp(5.0),
+            m.dp(1.6),
+            t.pal.text,
+        );
+    }
     let n = actions.len() as f32;
     let w = (m.w as f32 - m.margin * 2.0 - gap * (n - 1.0)) / n;
     let mut rects = Vec::new();
     for (k, action) in actions.iter().enumerate() {
         let x = m.margin + k as f32 * (w + gap);
-        c.fill_round_rect(x, pad, w, h, h / 2.0, t.pal.search);
         let (cx0, cy0) = (x + w / 2.0, pad + h / 2.0);
         let ink = t.pal.text;
         match action {
@@ -629,6 +587,15 @@ fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
                     c.fill_circle(cx0 + (k as f32 - 1.0) * m.dp(5.0), cy0, m.dp(1.8), ink);
                 }
             }
+            Action::BrowserHistoryList => crate::icons::glyph(&mut c, Icon::Clock, cx0, cy0, m.dp(23.0), ink),
+            Action::BrowserBookmarksList => {
+                let (dx, dy) = (m.dp(7.0), m.dp(9.0));
+                c.line(cx0 - dx, cy0 - dy, cx0 + dx, cy0 - dy, m.dp(2.0), ink);
+                c.line(cx0 - dx, cy0 - dy, cx0 - dx, cy0 + dy, m.dp(2.0), ink);
+                c.line(cx0 + dx, cy0 - dy, cx0 + dx, cy0 + dy, m.dp(2.0), ink);
+                c.line(cx0 - dx, cy0 + dy, cx0, cy0 + m.dp(3.0), m.dp(2.0), ink);
+                c.line(cx0 + dx, cy0 + dy, cx0, cy0 + m.dp(3.0), m.dp(2.0), ink);
+            }
             Action::BrowserFullLoad => {
                 c.stroke_round_rect(cx0 - m.dp(8.0), cy0 - m.dp(8.0), m.dp(16.0), m.dp(16.0), m.dp(8.0), m.dp(1.8), ink);
                 c.line(cx0 - m.dp(8.0), cy0, cx0 + m.dp(8.0), cy0, m.dp(1.5), ink);
@@ -643,11 +610,16 @@ fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
         }
         rects.push(Rect::new(x, pad, w, h));
     }
-    let _ = l;
-    Dock {
-        canvas: c,
-        hits: hits(&rects, actions),
-    }
+    let mut controls = hits(&rects, actions);
+    controls.push(Hit {
+        rect: bar,
+        action: Action::BrowserAddress,
+    });
+    controls.push(Hit {
+        rect: menu,
+        action: Action::BrowserMenu,
+    });
+    Dock { canvas: c, hits: controls }
 }
 
 /// A page read as text and links: its title and address in a card, then a
@@ -658,12 +630,7 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     let mut c = page(cx);
     let top = widgets::bar_bottom(t) + m.dp(8.0);
     let mut out = Vec::new();
-    let bar = address_bar(&mut c, cx, top, &article.url);
-    out.push(Hit {
-        rect: rect_bar(cx, top),
-        action: Action::BrowserAddress,
-    });
-    let header = article_head(&mut c, cx, article, bar + m.dp(12.0));
+    let header = article_head(&mut c, cx, article, top);
     let header = if article.scripts && article.blocks.is_empty() {
         let row = Row::new(l.pick(["此页面含 JavaScript", "此頁面含 JavaScript", "This page uses JavaScript"]))
             .subtitle(l.pick(["使用完整模式加载脚本页面", "使用完整模式載入指令碼頁面", "Open it in full mode"]))
@@ -1093,10 +1060,7 @@ fn full_input(cx: &Ctx) -> Frame {
         action: Action::Type(cap),
     }));
     frame.canvas = frame.canvas.crop_height(m.h);
-    frame.browser_area = frame.browser_area.map(|r| Rect {
-        h: (field_top - r.y).max(1.0),
-        ..r
-    });
+    frame.browser_area = Some(full_input_viewport(t));
     frame.dock = None;
     frame.caret = Some(caret);
     frame
@@ -1344,13 +1308,15 @@ pub fn full(cx: &Ctx) -> Frame {
     y = widgets::footnote(&mut c, t, f, y + m.dp(4.0), status);
     let mut rows = Vec::new();
     let mut actions = Vec::new();
-    rows.push(
-        Row::new(l.pick(["在线下载插件", "線上取得外掛", "Download the plugin"]))
-            .icon(BLUE, Icon::Install)
-            .subtitle("GitHub Releases · chromium.zip")
-            .trail(Trail::Arrow),
-    );
-    actions.push(Action::BrowserPluginDownload);
+    if !cfg!(feature = "aera-browser") {
+        rows.push(
+            Row::new(l.pick(["在线下载插件", "線上取得外掛", "Download the plugin"]))
+                .icon(BLUE, Icon::Install)
+                .subtitle("GitHub Releases · chromium.zip")
+                .trail(Trail::Arrow),
+        );
+        actions.push(Action::BrowserPluginDownload);
+    }
     match &s.browser.full {
         BrowserFull::Ready(_) => {
             rows.push(
@@ -1359,12 +1325,14 @@ pub fn full(cx: &Ctx) -> Frame {
                     .trail(Trail::Arrow),
             );
             actions.push(Action::BrowserPluginStart);
-            rows.push(
-                Row::new(l.pick(["移除插件", "移除外掛", "Remove the plugin"]))
-                    .icon(ORANGE, Icon::Wipe)
-                    .trail(Trail::None),
-            );
-            actions.push(Action::BrowserPluginRemove);
+            if !cfg!(feature = "aera-browser") {
+                rows.push(
+                    Row::new(l.pick(["移除插件", "移除外掛", "Remove the plugin"]))
+                        .icon(ORANGE, Icon::Wipe)
+                        .trail(Trail::None),
+                );
+                actions.push(Action::BrowserPluginRemove);
+            }
         }
         BrowserFull::Running(_) => {
             rows.push(
@@ -1375,7 +1343,7 @@ pub fn full(cx: &Ctx) -> Frame {
             actions.push(Action::BrowserPluginStop);
         }
         BrowserFull::Installing { .. } => {}
-        _ => {
+        _ if !cfg!(feature = "aera-browser") => {
             rows.push(
                 Row::new(l.pick(["安装或更新", "安裝或更新", "Install or update"]))
                     .icon(GREEN, Icon::Install)
@@ -1383,6 +1351,7 @@ pub fn full(cx: &Ctx) -> Frame {
             );
             actions.push(Action::BrowserPluginInstall);
         }
+        _ => {}
     }
     let list = widgets::list(&mut c, t, f, y + m.card_gap, &rows);
     out.extend(hits(&list.rows, &actions));
@@ -1584,16 +1553,12 @@ pub fn quick(cx: &Ctx) -> Frame {
 pub fn menu(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
     let m = &t.m;
-    let mut c = page(cx);
+    let mut c = long_page(cx);
     let top = m.content_top;
     let mut out = Vec::new();
     let y = widgets::section_first(&mut c, t, f, top, l.pick(["浏览器菜单", "瀏覽器選單", "Browser menu"]));
-    let bookmarked = cx
-        .state
-        .browser
-        .page()
-        .is_some_and(|page| cx.state.browser.bookmarks.iter().any(|b| b.url == page.url));
-    let rows = [
+    let bookmarked = cx.state.browser.bookmarks.iter().any(|b| b.url == cx.state.browser.url);
+    let mut rows = vec![
         Row::new(l.pick(["新建标签页", "新增分頁", "New tab"]))
             .icon(BLUE, Icon::Layers)
             .trail(Trail::None),
@@ -1616,20 +1581,43 @@ pub fn menu(cx: &Ctx) -> Frame {
         Row::new(l.pick(["完整模式", "完整模式", "Full mode"]))
             .icon(PURPLE, Icon::Layers)
             .trail(Trail::Arrow),
+        Row::new(l.pick(["标签页", "分頁", "Tabs"])).icon(BLUE, Icon::Layers),
+        Row::new(l.pick(["主页", "首頁", "Home"])).icon(BLUE, Icon::Globe),
     ];
+    let mut actions = vec![
+        Action::BrowserNewTab,
+        Action::BrowserHistoryList,
+        Action::BrowserBookmarksList,
+        Action::BrowserBookmark,
+        Action::BrowserDownloads,
+        Action::BrowserFull,
+        Action::BrowserTabs,
+        Action::BrowserHome,
+    ];
+    if cx.state.browser.full_active {
+        rows.extend([
+            Row::new(l.pick(["输入网页文字", "輸入網頁文字", "Type on page"])).icon(BLUE, Icon::Log),
+            Row::new(l.pick(["放大", "放大", "Zoom in"])).icon(BLUE, Icon::Globe),
+            Row::new(l.pick(["缩小", "縮小", "Zoom out"])).icon(BLUE, Icon::Globe),
+            Row::new(l.pick(["向上滚动", "向上捲動", "Scroll up"])).icon(BLUE, Icon::Restore),
+            Row::new(l.pick(["向下滚动", "向下捲動", "Scroll down"])).icon(BLUE, Icon::Restore),
+            Row::new(l.pick(["轻量模式", "輕量模式", "Basic mode"])).icon(BLUE, Icon::Globe),
+        ]);
+        actions.extend([
+            Action::BrowserKeyboard,
+            Action::BrowserZoomIn,
+            Action::BrowserZoomOut,
+            Action::BrowserScrollUp,
+            Action::BrowserScrollDown,
+            Action::BrowserBasic,
+        ]);
+    } else {
+        rows.push(Row::new(l.pick(["在完整模式中打开", "在完整模式中開啟", "Open in full mode"])).icon(PURPLE, Icon::Layers));
+        actions.push(Action::BrowserFullLoad);
+    }
     let list = widgets::list(&mut c, t, f, y, &rows);
-    out.extend(hits(
-        &list.rows,
-        &[
-            Action::BrowserNewTab,
-            Action::BrowserHistoryList,
-            Action::BrowserBookmarksList,
-            Action::BrowserBookmark,
-            Action::BrowserDownloads,
-            Action::BrowserFull,
-        ],
-    ));
-    Frame::new(t, c, out, l.pick(BROWSER), top)
+    out.extend(hits(&list.rows, &actions));
+    Frame::new(t, fit(c, t, list.bottom), out, l.pick(BROWSER), top)
 }
 
 pub fn marks(cx: &Ctx, history: bool) -> Frame {

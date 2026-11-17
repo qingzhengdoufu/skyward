@@ -11,6 +11,55 @@ const H: u32 = 3200;
 const PPD: f32 = 3.5;
 
 #[test]
+fn browser_bottom_controls_are_plain_and_do_not_cover_the_viewport() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    let theme = app.theme();
+    let area = crate::browser::full_viewport(&theme);
+    let frame = app.frame(&f, &i);
+    let dock = frame.dock.as_ref().unwrap();
+    let top = theme.m.h as f32 - dock.canvas.h as f32;
+    assert!(area.x >= 0.0 && area.w <= W as f32);
+    assert_eq!(area.x * 2.0 + area.w, W as f32);
+    assert!(area.y + area.h <= top + 1.0);
+    assert_eq!(dock.hits.len(), 8, "six tools, address and menu");
+    for hit in &dock.hits[..6] {
+        assert!(hit.rect.w >= theme.m.dp(44.0));
+        let x = (hit.rect.x + theme.m.dp(3.0)) as u32;
+        let y = (hit.rect.y + theme.m.dp(3.0)) as u32;
+        let at = ((y * dock.canvas.w + x) * 4) as usize;
+        assert_eq!(
+            &dock.canvas.data[at..at + 3],
+            &[theme.pal.bg.r, theme.pal.bg.g, theme.pal.bg.b],
+            "no old individual button background"
+        );
+    }
+    assert!(dock.hits.iter().any(|h| h.action == Action::BrowserMenu));
+    assert!(dock.hits.iter().any(|h| h.action == Action::BrowserAddress));
+}
+
+#[test]
+fn full_page_bookmarks_and_menu_zoom_remain_usable() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    app.state.browser.url = "https://example.com/".into();
+    app.act(Action::BrowserBookmark, 0);
+    assert_eq!(app.state.browser.bookmarks.len(), 1);
+    app.act(Action::BrowserBookmark, 0);
+    assert!(app.state.browser.bookmarks.is_empty());
+    app.act(Action::BrowserMenu, 1000);
+    app.frame(&f, &i);
+    let fx = app.act(Action::BrowserZoomIn, 1100);
+    assert_eq!(app.screen(), Screen::Browser);
+    assert_eq!(fx, vec![Effect::BrowserPluginPinch { scale: 1.2 }]);
+}
+
+#[test]
 fn smaller_navigation_buttons_vibrate_once_and_obey_the_touch_preference() {
     let (f, i) = (fonts(), info());
     for enabled in [true, false] {

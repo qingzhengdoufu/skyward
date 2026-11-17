@@ -3,13 +3,12 @@ impl Pages<'_> {
     pub(super) fn browser_told(&mut self, now: u64) {
         if let Some(worker) = &self.browser_stream {
             let theme = self.app.theme();
-            let area = skyward_ui::browser::full_viewport(&theme);
-            let height = if self.app.screen() == Screen::BrowserAddress {
-                (theme.m.h as f32 - skyward_ui::widgets::keyboard_height(&theme) - theme.m.dp(64.0) - area.y).max(300.0)
+            let area = if self.app.screen() == Screen::BrowserAddress {
+                skyward_ui::browser::full_input_viewport(&theme)
             } else {
-                area.h
+                skyward_ui::browser::full_viewport(&theme)
             };
-            let size = (area.w.round() as u32, height.round() as u32);
+            let size = (area.w.round() as u32, area.h.round() as u32);
             if self.browser_viewport != Some(size) {
                 worker.command(crate::browser::Control::Viewport {
                     width: size.0,
@@ -23,6 +22,8 @@ impl Pages<'_> {
         if let Some(worker) = &self.browser_stream {
             for ev in worker.events() {
                 match ev {
+                    #[cfg(feature = "aera-browser")]
+                    crate::browser::Event::Pixels { width, height, rgba } => self.app.browser_plugin_pixels(width, height, rgba),
                     crate::browser::Event::Shot(Ok(frame)) => self.app.browser_plugin_shot(Ok(frame)),
                     crate::browser::Event::Shot(Err(why)) => {
                         self.app.browser_plugin_shot(Err(why));
@@ -77,6 +78,8 @@ impl Pages<'_> {
         if let Some(worker) = &self.browser {
             for ev in worker.events() {
                 match ev {
+                    #[cfg(feature = "aera-browser")]
+                    crate::browser::Event::Pixels { width, height, rgba } => self.app.browser_plugin_pixels(width, height, rgba),
                     crate::browser::Event::Opened(opened) => {
                         self.app.browser_opened(opened);
                         browser_done = true;

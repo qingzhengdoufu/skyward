@@ -233,7 +233,26 @@ impl App {
                 let extent = shade.extent(now, self.h as f32);
                 out.put(&shade.under, 0);
                 out.dim(1.0 - 0.28 * extent / self.h as f32);
-                out.put_rows(&sheet, 0, extent.round() as i32, 0);
+                let rows = extent.round() as usize;
+                out.put_rows(&shade.frost, 0, rows as i32, 0);
+                let bytes = rows.min(out.h as usize) * out.w as usize * 4;
+                for (dst, src) in out.data[..bytes]
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(sheet.data.as_chunks::<4>().0)
+                {
+                    crate::color::blend_px(
+                        dst,
+                        Rgba {
+                            r: src[0],
+                            g: src[1],
+                            b: src[2],
+                            a: src[3],
+                        },
+                        src[3] as u32,
+                    );
+                }
                 let t = self.theme();
                 if extent < widgets::bar_bottom(&t) {
                     widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
