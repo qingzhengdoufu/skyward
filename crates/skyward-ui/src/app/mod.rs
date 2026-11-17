@@ -62,6 +62,7 @@ mod state;
 mod systems;
 mod terminal;
 mod update;
+mod volume;
 mod wipe;
 mod wlan;
 
@@ -632,6 +633,7 @@ pub enum Effect {
     },
     BrowserPluginText(String),
     BrowserPluginKey(u32),
+    SetMediaVolume(u8),
     BrowserPluginReload,
     BrowserPluginScroll {
         dy: i64,
@@ -1477,6 +1479,7 @@ pub(super) fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
+    volume_drag: bool,
     shade_pull: Option<shade::ShadePull>,
     shade: Option<shade::Shade>,
     parked: Option<Vec<(Screen, f32, Focus)>>,
@@ -1634,6 +1637,7 @@ pub struct App {
 impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
+            volume_drag: false,
             shade_pull: None,
             shade: None,
             parked: None,

@@ -75,6 +75,10 @@ impl App {
     /// down the page or up it, or moves a slider that takes the keys, the
     /// strength slider tapping the motor as strongly as it was moved to.
     pub(super) fn volume(&mut self, down: bool, now: u64) -> Vec<Effect> {
+        if self.state.browser.full_active && matches!(self.screen(), Screen::Browser | Screen::BrowserAddress) {
+            self.stir(now);
+            return self.set_media_volume(self.state.media_volume + if down { -0.05 } else { 0.05 });
+        }
         if self.frame.is_none() {
             return Vec::new();
         }

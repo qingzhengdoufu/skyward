@@ -268,6 +268,7 @@ impl App {
         }
         if charge < 1.0 {
             self.draw_navigation(out);
+            self.draw_media_volume(out);
         }
         out.dim(self.curtain.level(now));
     }

@@ -5,8 +5,8 @@
 //! a time zone, a part or a place by its name, so a later version that lists
 //! them otherwise reads them the same.
 
-use crate::app::{Place, SortKey, State, SCREEN_OFF, TIME_ZONES};
 use crate::Lang;
+use crate::app::{Place, SCREEN_OFF, SortKey, State, TIME_ZONES};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +47,7 @@ pub struct Settings {
     pub dark: bool,
     /// The brightness slider's place, from 0 at its left end to 1.
     pub brightness: f32,
+    pub media_volume: f32,
     /// How long the screen stays on with nothing touched, in seconds; 0
     /// keeps it on.
     pub screen_off: u64,
@@ -150,6 +151,7 @@ impl Settings {
             spoken: Some(state.lang.tag().to_string()),
             dark: state.dark,
             brightness: state.brightness,
+            media_volume: state.media_volume,
             screen_off: SCREEN_OFF[state.screen_off].map_or(0, |ms| ms / 1000),
             time_zone: TIME_ZONES[state.time_zone].2.to_string(),
             vibrate: state.vibrate,
@@ -166,7 +168,10 @@ impl Settings {
             }]
             .to_string(),
             mirror: state.mirror,
-            install: Install { check_signature: state.check_signature, keep_recovery: state.keep_recovery },
+            install: Install {
+                check_signature: state.check_signature,
+                keep_recovery: state.keep_recovery,
+            },
             backup: Backup {
                 parts: names(&state.backup, &PARTS),
                 to: match state.backup_to {
@@ -177,7 +182,10 @@ impl Settings {
                 compress: state.compress,
                 verify: state.verify,
             },
-            logs: Logs { kinds: names(&state.logs, &LOGS), to: LOG_PLACES[state.logs_to].to_string() },
+            logs: Logs {
+                kinds: names(&state.logs, &LOGS),
+                to: LOG_PLACES[state.logs_to].to_string(),
+            },
         }
     }
 
@@ -210,6 +218,9 @@ impl Settings {
             state.language_chosen = true;
         }
         state.dark = self.dark;
+        if (0.0..=1.0).contains(&self.media_volume) {
+            state.media_volume = self.media_volume;
+        }
         if (0.0..=1.0).contains(&self.brightness) {
             state.brightness = self.brightness;
         }
@@ -253,7 +264,11 @@ impl Settings {
 
 /// The names of those of `all` that are `ticked`.
 fn names(ticked: &[bool], all: &[&str]) -> Vec<String> {
-    all.iter().zip(ticked).filter(|&(_, &on)| on).map(|(name, _)| name.to_string()).collect()
+    all.iter()
+        .zip(ticked)
+        .filter(|&(_, &on)| on)
+        .map(|(name, _)| name.to_string())
+        .collect()
 }
 
 /// Which of `all` the names `kept` tick.
@@ -350,6 +365,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn media_volume_survives_restart_and_old_settings_keep_a_quiet_default() {
+        let state = State {
+            media_volume: 0.42,
+            ..State::default()
+        };
+        let mut back = State::default();
+        Settings::read(&Settings::of(&state).text()).unwrap().apply(&mut back);
+        assert_eq!(back.media_volume, 0.42);
+        Settings::read("{}").unwrap().apply(&mut back);
+        assert_eq!(back.media_volume, 0.15);
+        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            Settings {
+                media_volume: value,
+                ..Settings::default()
+            }
+            .apply(&mut back);
+            assert_eq!(back.media_volume, 0.15);
+        }
+    }
+
+    #[test]
     fn the_avb_and_remember_switches_are_kept_and_start_off() {
         // Both change something the owner should have chosen: one the
         // signatures the bootloader checks, the other a password written
@@ -360,7 +396,11 @@ mod tests {
         assert!(fresh.remembered.is_none());
 
         // A value the pages set comes back at the next start.
-        let state = State { disable_avb: true, remember_password: true, ..State::default() };
+        let state = State {
+            disable_avb: true,
+            remember_password: true,
+            ..State::default()
+        };
         let kept = Settings::read(&Settings::of(&state).text()).unwrap();
         let mut back = State::default();
         kept.apply(&mut back);
@@ -368,7 +408,11 @@ mod tests {
         // What was remembered is never written to the settings file: it
         // lives in its own sealed file, and a settings file copied off
         // the phone must not carry it.
-        let text = Settings::of(&State { remembered: Some("1234".into()), ..state }).text();
+        let text = Settings::of(&State {
+            remembered: Some("1234".into()),
+            ..state
+        })
+        .text();
         assert!(!text.contains("1234"), "the credential is not in the settings file");
     }
 
@@ -383,14 +427,19 @@ mod tests {
         assert!(fresh.mirror, "the mirror is on before anything is chosen");
         assert!(Settings::read("{}").unwrap().mirror, "a file naming no mirror leaves it on");
 
-        let off = Settings::of(&State { mirror: false, ..State::default() }).text();
+        let off = Settings::of(&State {
+            mirror: false,
+            ..State::default()
+        })
+        .text();
         let mut back = State::default();
         Settings::read(&off).unwrap().apply(&mut back);
         assert!(!back.mirror, "a switch turned off stays off across a start");
     }
 
     #[test]
-    fn the_settings_go_round_through_their_file() {        let state = State {
+    fn the_settings_go_round_through_their_file() {
+        let state = State {
             lang: Lang::En,
             language_chosen: true,
             dark: true,
@@ -426,12 +475,20 @@ mod tests {
         // never visited here has no face on its dark panel. Miro retains
         // the software double-tap default used by its compatibility mode.
         assert!(!State::default().always_on, "the face on a dark panel is off until it is turned on");
-        assert!(State::default().double_tap, "miro keeps its established software double-tap default");
+        assert!(
+            State::default().double_tap,
+            "miro keeps its established software double-tap default"
+        );
     }
 
     #[test]
     fn each_value_is_kept_as_what_it_means() {
-        let state = State { screen_off: 3, time_zone: 1, backup: [true, false, false, true], ..State::default() };
+        let state = State {
+            screen_off: 3,
+            time_zone: 1,
+            backup: [true, false, false, true],
+            ..State::default()
+        };
         let text = Settings::of(&state).text();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["screen_off"], 120, "two minutes, in seconds");
@@ -442,7 +499,10 @@ mod tests {
         assert_eq!(json["always_on"], false, "the face on a dark panel is off until it is turned on");
         assert_eq!(json["double_tap"], true, "miro keeps its established software double-tap default");
         assert!(json.get("language").is_none(), "no language is chosen until one is");
-        let never = Settings::of(&State { screen_off: SCREEN_OFF.len() - 1, ..State::default() });
+        let never = Settings::of(&State {
+            screen_off: SCREEN_OFF.len() - 1,
+            ..State::default()
+        });
         assert_eq!(never.screen_off, 0, "a screen that stays on");
     }
 
@@ -452,7 +512,17 @@ mod tests {
         let mut state = State::default();
         kept.apply(&mut state);
         assert!(state.dark && state.compress);
-        assert_eq!(Settings::of(&state), Settings { dark: true, backup: Backup { compress: true, ..Backup::default() }, ..Settings::default() });
+        assert_eq!(
+            Settings::of(&state),
+            Settings {
+                dark: true,
+                backup: Backup {
+                    compress: true,
+                    ..Backup::default()
+                },
+                ..Settings::default()
+            }
+        );
         assert!(!state.language_chosen);
         assert!(state.double_tap, "old settings retain the previous enabled default");
         assert!(Settings::read("dark = true").is_err(), "not JSON");
@@ -466,15 +536,25 @@ mod tests {
             vibration: f32::NAN,
             screen_off: 7,
             time_zone: "Mars/Olympus".into(),
-            backup: Backup { parts: vec!["boot".into(), "photos".into()], to: "cloud".into(), ..Backup::default() },
-            logs: Logs { kinds: vec!["kernel".into()], to: "printer".into() },
+            backup: Backup {
+                parts: vec!["boot".into(), "photos".into()],
+                to: "cloud".into(),
+                ..Backup::default()
+            },
+            logs: Logs {
+                kinds: vec!["kernel".into()],
+                to: "printer".into(),
+            },
             ..Settings::default()
         };
         let mut state = State::default();
         kept.apply(&mut state);
         let start = State::default();
         assert_eq!((state.brightness, state.vibration), (start.brightness, start.vibration));
-        assert_eq!((state.screen_off, state.time_zone, state.backup_to, state.logs_to), (start.screen_off, start.time_zone, start.backup_to, start.logs_to));
+        assert_eq!(
+            (state.screen_off, state.time_zone, state.backup_to, state.logs_to),
+            (start.screen_off, start.time_zone, start.backup_to, start.logs_to)
+        );
         assert!(!state.language_chosen);
         assert_eq!(state.backup, [true, false, false, false], "a part this version has not is left out");
         assert_eq!(state.logs, [false, true]);
@@ -484,12 +564,22 @@ mod tests {
     fn changed_settings_are_written_once_they_have_stood_for_a_moment() {
         let mut keeper = Keeper::new(&Kept::Settings(Settings::default()));
         assert_eq!(keeper.due(Settings::default(), 0), None, "what the file holds is not written again");
-        let dark = Settings { dark: true, ..Settings::default() };
+        let dark = Settings {
+            dark: true,
+            ..Settings::default()
+        };
         assert_eq!(keeper.due(dark.clone(), 1_000), None);
-        let dim = Settings { brightness: 0.5, ..dark.clone() };
+        let dim = Settings {
+            brightness: 0.5,
+            ..dark.clone()
+        };
         assert_eq!(keeper.due(dim.clone(), 2_500), None, "a change waits again");
         assert_eq!(keeper.due(dim.clone(), 4_000), None);
-        assert_eq!(keeper.due(dim.clone(), 4_500), Some(dim.clone()), "having stood for the wait since the last change");
+        assert_eq!(
+            keeper.due(dim.clone(), 4_500),
+            Some(dim.clone()),
+            "having stood for the wait since the last change"
+        );
         keeper.written(dim.clone());
         assert_eq!(keeper.due(dim.clone(), 9_000), None, "and once");
         assert_eq!(keeper.due(Settings::default(), 9_000), None, "going back starts another wait");
@@ -499,9 +589,16 @@ mod tests {
     #[test]
     fn settings_that_failed_to_be_written_wait_for_the_next_change() {
         let mut keeper = Keeper::new(&Kept::Nothing);
-        let dark = Settings { dark: true, ..Settings::default() };
+        let dark = Settings {
+            dark: true,
+            ..Settings::default()
+        };
         keeper.due(dark.clone(), 0);
-        assert_eq!(keeper.due(dark.clone(), 2_000), Some(dark.clone()), "an empty file takes what the pages show");
+        assert_eq!(
+            keeper.due(dark.clone(), 2_000),
+            Some(dark.clone()),
+            "an empty file takes what the pages show"
+        );
         keeper.failed();
         assert_eq!(keeper.due(dark.clone(), 60_000), None, "not tried at every look");
         let light = Settings::default();
@@ -512,7 +609,10 @@ mod tests {
     #[test]
     fn a_file_that_could_not_be_read_is_left_alone_until_its_place_is_made_afresh() {
         let mut keeper = Keeper::new(&Kept::Unreadable);
-        let dark = Settings { dark: true, ..Settings::default() };
+        let dark = Settings {
+            dark: true,
+            ..Settings::default()
+        };
         keeper.due(dark.clone(), 0);
         assert_eq!(keeper.due(dark.clone(), 10_000), None);
         keeper.remade();
@@ -521,6 +621,10 @@ mod tests {
         keeper.written(dark.clone());
         keeper.remade();
         keeper.due(dark.clone(), 20_000);
-        assert_eq!(keeper.due(dark.clone(), 22_000), Some(dark), "erasing takes the file with it, so it is written again");
+        assert_eq!(
+            keeper.due(dark.clone(), 22_000),
+            Some(dark),
+            "erasing takes the file with it, so it is written again"
+        );
     }
 }

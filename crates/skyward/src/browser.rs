@@ -59,6 +59,7 @@ pub enum Control {
     Pinch { scale: f64 },
     Text { text: String },
     Key { value: u32 },
+    Volume { percent: u8 },
     Scroll { dy: i64 },
     Reload,
     Navigate { url: String },
@@ -350,6 +351,7 @@ impl Worker {
                                                 cdp.insert_text(&text)?;
                                             }
                                             Control::Key { value } => cdp.key(value)?,
+                                            Control::Volume { percent } => cdp.media_volume(percent)?,
                                             Control::Scroll { dy } => cdp.scroll(dy)?,
                                             Control::Reload => cdp.reload()?,
                                             Control::Navigate { url } => {

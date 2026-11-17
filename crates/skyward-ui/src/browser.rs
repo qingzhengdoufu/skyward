@@ -241,7 +241,7 @@ fn home(cx: &Ctx) -> Frame {
 
     y = widgets::section(&mut c, t, f, y, l.pick(["更多", "更多", "More"]));
     let full_title = if cfg!(feature = "aera-browser") {
-        l.pick(["完整模式（AERA 实验版）", "完整模式（AERA 實驗版）", "Full mode (AERA experiment)"])
+        l.pick(["完整模式", "完整模式", "Full mode"])
     } else {
         l.pick([
             "完整模式（Linux Chromium）",
@@ -1414,7 +1414,7 @@ pub fn full(cx: &Ctx) -> Frame {
         actions.push(Action::BrowserPluginDownload);
     }
     match &s.browser.full {
-        BrowserFull::Ready(_) => {
+        BrowserFull::Ready(_) | BrowserFull::Failed(_) => {
             rows.push(
                 Row::new(l.pick(["启动完整模式", "啟動完整模式", "Start full mode"]))
                     .icon(GREEN, Icon::Install)
@@ -1499,11 +1499,7 @@ pub fn full(cx: &Ctx) -> Frame {
             f,
             y + m.card_gap,
             l.pick(["正在启动完整模式", "正在啟動完整模式", "Starting full mode"]),
-            l.pick([
-                "Chromium 正在渲染页面，请稍候",
-                "Chromium 正在繪製頁面，請稍候",
-                "Chromium is drawing the page. Wait a moment",
-            ]),
+            l.pick(["正在渲染页面", "正在繪製頁面", "Drawing the page"]),
             Some(progress),
         );
     }

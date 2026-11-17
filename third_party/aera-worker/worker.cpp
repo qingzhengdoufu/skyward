@@ -3,6 +3,8 @@
 // loads WebKit; this executable runs only behind the audited platform jail.
 #include "protocol.hpp"
 #include "platform_sandbox.hpp"
+#include "frame_layout.hpp"
+#include <cairo/cairo.h>
 #include <wpe/webkit.h>
 #include <wpe/wpe-platform.h>
 #include <wpe/headless/wpe-headless.h>
@@ -81,6 +83,8 @@ struct Session {
   gint64 last_input_us = 0;
   gint64 visual_activity_until_us = 0;
   bool media_playing = false;
+  uint32_t volume = 15;
+  gint64 frame_warning_us = 0;
   std::vector<uint8_t> staged;
   struct DownloadRecord;
   std::vector<std::unique_ptr<DownloadRecord>> downloads;
@@ -111,7 +115,10 @@ static void BrowsingDataCleared(GObject *object, GAsyncResult *result,
   Send(s, message);
 }
 static bool Send(Session *s, const Message &m) {
-  if (send(4, &m, sizeof(m), MSG_DONTWAIT | MSG_NOSIGNAL) == sizeof(m)) return true;
+  ssize_t sent;
+  do { sent = send(4, &m, sizeof(m), MSG_DONTWAIT | MSG_NOSIGNAL); } while (sent < 0 && errno == EINTR);
+  if (sent == sizeof(m)) return true;
+  fprintf(stderr, "Browser IPC send failed: kind=%u count=%zd errno=%d\n", static_cast<unsigned>(m.kind), sent, sent < 0 ? errno : 0);
   // Never stall WebKit or accumulate an unbounded queue behind recovery.
   g_main_loop_quit(s->loop); return false;
 }
@@ -161,6 +168,12 @@ static void Status(Session *s, const char *error = nullptr) {
   const char *text = error ? error : webkit_web_view_get_uri(s->web);
   g_strlcpy(m.text, text ? text : "", sizeof(m.text));
   Send(s, m);
+}
+
+static void ApplyMediaVolume(Session *s) {
+  char script[160];
+  snprintf(script, sizeof(script), "window.__skywardVolume=%u;document.querySelectorAll('video,audio').forEach(e=>e.volume=%u/100)", s->volume, s->volume);
+  webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 struct Session::DownloadRecord {
   Session *session = nullptr;
@@ -289,8 +302,7 @@ static void Publish(Session *s) {
   const auto stride = wpe_buffer_shm_get_stride(shm);
   gsize bytes = 0;
   auto *data = static_cast<const uint8_t *>(g_bytes_get_data(wpe_buffer_shm_get_data(shm), &bytes));
-  if (wpe_buffer_shm_get_format(shm) != WPE_PIXEL_FORMAT_ARGB8888 || stride < uint32_t(kWidth) * 4 ||
-      stride > uint32_t(kWidth) * 4 + 4096 || bytes < uint64_t(stride) * kHeight) {
+  if (!data || wpe_buffer_shm_get_format(shm) != WPE_PIXEL_FORMAT_ARGB8888 || !skyward_frame::Valid(kWidth, kHeight, stride, bytes)) {
     Status(s, "Invalid browser frame layout."); g_main_loop_quit(s->loop); return;
   }
   // buffer-rendered is WebKit's commit notification. Comparing the complete
@@ -324,14 +336,44 @@ static void SnapshotDone(GObject *source, GAsyncResult *result, gpointer data) {
   GError *error = nullptr;
   WebKitImage *image = webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(source), result, &error);
   if (!image) {
-    if (error) { Status(s, error->message); g_error_free(error); }
+    if (error) {
+      if (g_get_monotonic_time() - s->frame_warning_us > 5000000) {
+        s->frame_warning_us = g_get_monotonic_time();
+        fprintf(stderr, "Snapshot unavailable: %s\n", error->message);
+      }
+      g_error_free(error);
+    }
     return;
   }
-  const guint stride = webkit_image_get_stride(image);
+  guint stride = webkit_image_get_stride(image);
   gsize bytes = 0;
-  const auto *data_bytes = static_cast<const uint8_t *>(g_bytes_get_data(webkit_image_as_bytes(image), &bytes));
-  if (webkit_image_get_width(image) == kWidth && webkit_image_get_height(image) == kHeight &&
-      stride >= uint32_t(kWidth) * 4 && stride <= uint32_t(kWidth) * 4 + 4096 && bytes >= uint64_t(stride) * kHeight) {
+  GBytes *image_bytes = webkit_image_as_bytes(image);
+  const auto *data_bytes = image_bytes ? static_cast<const uint8_t *>(g_bytes_get_data(image_bytes, &bytes)) : nullptr;
+  const int width = webkit_image_get_width(image), height = webkit_image_get_height(image);
+  std::vector<uint8_t> scaled;
+  bool valid = data_bytes && skyward_frame::Valid(width, height, stride, bytes);
+  if (valid && (width != kWidth || height != kHeight)) {
+    valid = skyward_frame::SameAspect(width, height, kWidth, kHeight);
+    if (valid) {
+      // Cairo may inspect stride padding. Own complete packed rows first.
+      std::vector<uint8_t> packed(size_t(width) * height * 4);
+      for (int row = 0; row < height; ++row)
+        memcpy(packed.data() + size_t(row) * width * 4, data_bytes + size_t(row) * stride, size_t(width) * 4);
+      scaled.resize(kFrameBytes);
+      auto *input = cairo_image_surface_create_for_data(packed.data(), CAIRO_FORMAT_ARGB32, width, height, width * 4);
+      auto *output = cairo_image_surface_create_for_data(scaled.data(), CAIRO_FORMAT_ARGB32, kWidth, kHeight, kWidth * 4);
+      auto *paint = cairo_create(output);
+      cairo_scale(paint, double(kWidth) / width, double(kHeight) / height);
+      cairo_set_source_surface(paint, input, 0, 0);
+      cairo_pattern_set_filter(cairo_get_source(paint), CAIRO_FILTER_BILINEAR);
+      cairo_paint(paint);
+      cairo_surface_flush(output);
+      valid = cairo_status(paint) == CAIRO_STATUS_SUCCESS && cairo_surface_status(input) == CAIRO_STATUS_SUCCESS && cairo_surface_status(output) == CAIRO_STATUS_SUCCESS;
+      cairo_destroy(paint); cairo_surface_destroy(output); cairo_surface_destroy(input);
+      data_bytes = scaled.data(); stride = kWidth * 4;
+    }
+  }
+  if (valid) {
     if (s->pending) {
       if (s->staged.empty()) s->staged.resize(kFrameBytes);
       const uint8_t *baseline = s->staged_ready ? s->staged.data() :
@@ -342,7 +384,10 @@ static void SnapshotDone(GObject *source, GAsyncResult *result, gpointer data) {
         s->visual_activity_until_us = g_get_monotonic_time() + 1000000;
       }
     } else PublishPixels(s, data_bytes, stride);
-  } else Status(s, "Invalid software browser frame.");
+  } else if (g_get_monotonic_time() - s->frame_warning_us > 5000000) {
+    s->frame_warning_us = g_get_monotonic_time();
+    fprintf(stderr, "Snapshot rejected safely: %dx%d stride=%u bytes=%zu expected=%dx%d\n", width, height, stride, bytes, kWidth, kHeight);
+  }
   g_object_unref(image);
 }
 static gboolean SnapshotTick(gpointer data) {
@@ -360,9 +405,6 @@ static gboolean SnapshotTick(gpointer data) {
   const bool interacting = s->last_input_us && now - s->last_input_us < 500000;
   const bool loading = webkit_web_view_get_estimated_load_progress(s->web) < 0.999;
   const bool visual_motion = s->media_playing || now < s->visual_activity_until_us;
-  const gint64 native_quiet_us = interacting ? 50000 : 500000;
-  if (s->last_native_frame_us && now - s->last_native_frame_us < native_quiet_us)
-    return G_SOURCE_CONTINUE;
   // Some media paths do not always submit a new WPE buffer for video frames.
   // While media is playing, drive the non-overlapping snapshot path as fast as
   // 60 Hz; snapshot_pending naturally applies back-pressure.
@@ -390,6 +432,11 @@ static gboolean Input(gint fd, GIOCondition condition, gpointer data) {
       m.kind == Kind::kTouchUp)
     s->last_input_us = g_get_monotonic_time();
   switch (m.kind) {
+    case Kind::kVolume: {
+      s->volume = m.value;
+      ApplyMediaVolume(s);
+      break;
+    }
     case Kind::kOpen: {
       const auto address = Address(m.text);
       if (!address.empty()) webkit_web_view_load_uri(s->web, address.c_str());
@@ -489,6 +536,7 @@ int main(int argc, char **argv) {
   if (!wpe_display_connect(display, &error)) { fprintf(stderr, "Browser display: %s\n", error ? error->message : "failed"); return 78; }
   auto *settings = webkit_settings_new_with_settings("enable-developer-extras", FALSE,
       "enable-javascript", TRUE, "enable-webgl", FALSE,
+      "enable-fullscreen", TRUE,
       "enable-smooth-scrolling", TRUE,
       "media-playback-requires-user-gesture", TRUE, nullptr);
   webkit_settings_set_user_agent(settings,
@@ -538,6 +586,7 @@ int main(int argc, char **argv) {
   webkit_user_content_manager_register_script_message_handler(
       content, "aeraMedia", nullptr);
   static const char media_observer[] = R"JS((()=>{
+    window.__skywardVolume=15;
     let active=false;
     const report=()=>{
       const next=[...document.querySelectorAll('video')].some(
@@ -546,8 +595,10 @@ int main(int argc, char **argv) {
       active=next;
       window.webkit.messageHandlers.aeraMedia.postMessage(active);
     };
-    for(const event of ['playing','play','pause','ended','emptied','abort'])
-      document.addEventListener(event,report,true);
+    const apply=e=>{if(e instanceof HTMLMediaElement)e.volume=(window.__skywardVolume??15)/100;};
+    for(const event of ['playing','play','pause','ended','emptied','abort','loadedmetadata','error'])
+      document.addEventListener(event,e=>{if(event==='loadedmetadata')apply(e.target);report();},true);
+    document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('video,audio').forEach(apply),{once:true});
   })();)JS";
   auto *media_script = webkit_user_script_new(media_observer,
       WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
@@ -572,6 +623,12 @@ int main(int argc, char **argv) {
   s.web = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", display,
       "settings", settings, "web-context", context, "network-session", network,
       "user-content-manager", content, nullptr));
+  // The engine's video/fullscreen UI stays within its isolated native viewport.
+  g_signal_connect(s.web, "enter-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer) -> gboolean { return TRUE; }), nullptr);
+  g_signal_connect(s.web, "leave-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer) -> gboolean { return TRUE; }), nullptr);
+  g_signal_connect(s.web, "load-changed", G_CALLBACK(+[](WebKitWebView *, WebKitLoadEvent event, gpointer data) {
+    if (event == WEBKIT_LOAD_COMMITTED || event == WEBKIT_LOAD_FINISHED) ApplyMediaVolume(static_cast<Session *>(data));
+  }), &s);
   g_signal_connect(network, "download-started", G_CALLBACK(DownloadStarted), &s);
   g_signal_connect(s.web, "permission-request", G_CALLBACK(+[](WebKitWebView *, WebKitPermissionRequest *r, gpointer) -> gboolean {
     webkit_permission_request_deny(r); return TRUE;
@@ -594,6 +651,9 @@ int main(int argc, char **argv) {
     Status(static_cast<Session *>(data));
   }), &s);
   g_signal_connect(s.web, "load-failed", G_CALLBACK(+[](WebKitWebView *, WebKitLoadEvent, const char *, GError *e, gpointer data) -> gboolean {
+    if (g_error_matches(e, WEBKIT_NETWORK_ERROR, WEBKIT_NETWORK_ERROR_CANCELLED) ||
+        g_error_matches(e, WEBKIT_MEDIA_ERROR, WEBKIT_MEDIA_ERROR_WILL_HANDLE_LOAD) ||
+        g_error_matches(e, WEBKIT_POLICY_ERROR, WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE)) return TRUE;
     Status(static_cast<Session *>(data), e->message); return TRUE;
   }), &s);
   g_signal_connect(s.web, "web-process-terminated", G_CALLBACK(+[](WebKitWebView *, WebKitWebProcessTerminationReason reason, gpointer data) {

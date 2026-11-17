@@ -73,6 +73,9 @@ impl App {
                 }
             }
             Action::Open(s) => {
+                if s == Screen::Browser && cfg!(feature = "aera-browser") {
+                    return self.browser_enter();
+                }
                 if s == Screen::Install {
                     self.state.image_only = false;
                 }

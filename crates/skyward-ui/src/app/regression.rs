@@ -390,6 +390,7 @@ fn control_center_has_no_header_settings_shortcut() {
 #[test]
 fn browser_address_changes_reuse_one_browser_page() {
     let mut app = App::new(Screen::Home, W, H, PPD);
+    app.state.data = Data::Open;
     app.act(Action::Open(Screen::Browser), 0);
     for n in 0..10 {
         app.act(Action::BrowserAddress, 0);
@@ -400,6 +401,92 @@ fn browser_address_changes_reuse_one_browser_page() {
     }
     app.act(Action::NavHome, 0);
     assert_eq!(app.screen(), Screen::Home);
+}
+
+#[cfg(feature = "aera-browser")]
+#[test]
+fn browser_entry_defaults_to_full_mode_and_resumes_without_another_worker() {
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.state.data = Data::Open;
+    assert!(
+        matches!(app.act(Action::Open(Screen::Browser), 0).as_slice(), [Effect::BrowserPluginStart { url, .. }] if url == "https://cn.bing.com/" || url == "https://cn.bing.com")
+    );
+    assert_eq!(app.screen(), Screen::Browser);
+    assert!(app.state.browser.prefer_full && app.state.browser.full_active);
+    app.act(Action::NavHome, 1);
+    assert!(app.act(Action::Open(Screen::Browser), 2).is_empty());
+    assert_eq!(app.screen(), Screen::Browser);
+}
+
+#[cfg(feature = "aera-browser")]
+#[test]
+fn browser_recovery_tries_full_twice_then_falls_back_without_a_restart_loop() {
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.state.data = Data::Open;
+    app.act(Action::Open(Screen::Browser), 0);
+    for attempt in 1..=2 {
+        let effects = app.browser_plugin_failed("test worker terminated".into(), attempt);
+        assert!(matches!(effects.as_slice(), [Effect::BrowserPluginStart { .. }]));
+        assert_eq!(app.state.browser.full_failures, attempt as u8);
+        app.browser_navigated("https://cn.bing.com/".into());
+        assert_eq!(app.state.browser.full_failures, attempt as u8);
+    }
+    let effects = app.browser_plugin_failed("test worker terminated".into(), 3);
+    assert!(matches!(effects.as_slice(), [Effect::BrowserOpen { .. }]));
+    assert!(!app.state.browser.full_active && !app.state.browser.prefer_full);
+    assert!(app.browser_plugin_failed("stale failure".into(), 4).is_empty());
+    assert!(matches!(
+        app.act(Action::BrowserReload, 5).as_slice(),
+        [Effect::BrowserPluginStart { .. }]
+    ));
+    assert_eq!(app.state.browser.full_failures, 0);
+}
+
+#[cfg(feature = "aera-browser")]
+#[test]
+fn hidden_browser_failure_never_restarts_or_switches_the_users_page() {
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.state.data = Data::Open;
+    app.act(Action::Open(Screen::Browser), 0);
+    app.act(Action::NavHome, 1);
+    assert!(app.browser_plugin_failed("worker stopped".into(), 2).is_empty());
+    assert_eq!(app.screen(), Screen::Home);
+    assert!(!app.state.browser.full_active);
+    assert!(matches!(
+        app.act(Action::Open(Screen::Browser), 3).as_slice(),
+        [Effect::BrowserPluginStart { .. }]
+    ));
+}
+
+#[test]
+fn status_volume_drag_does_not_open_control_center_or_send_page_touches() {
+    let f = fonts();
+    for (w, h, ppd) in [(720, 1600, 1.875), (W, H, PPD), (W, H, 3.75)] {
+        let mut app = App::new(Screen::Browser, w, h, ppd);
+        app.state.browser.full_active = true;
+        let rect = app.volume_rect();
+        assert_eq!(
+            app.touch(Touch::Down(rect.x, rect.centre().1), &f, 1000),
+            vec![Effect::SetMediaVolume(0)]
+        );
+        assert_eq!(
+            app.touch(Touch::Move(rect.x + rect.w, rect.centre().1), &f, 1010),
+            vec![Effect::SetMediaVolume(100)]
+        );
+        let m = app.theme().m;
+        assert_eq!(
+            app.touch(
+                Touch::Move(rect.x + m.dp(15.0) + (rect.w - m.dp(16.0)) / 2.0, rect.centre().1),
+                &f,
+                1015
+            ),
+            vec![Effect::SetMediaVolume(50)]
+        );
+        app.touch(Touch::Up, &f, 1020);
+        assert!(app.shade.is_none());
+        assert_eq!(app.state.media_volume, 0.5);
+        assert_eq!(app.volume(true, 1030), vec![Effect::SetMediaVolume(45)]);
+    }
 }
 
 #[test]

@@ -3573,7 +3573,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
                 .icon(GREEN, Icon::Layers)
                 .trail(Trail::Value(update_value(cx))),
             Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
-            Row::new(l.pick(["浏览器实验", "瀏覽器實驗", "Browser experiment"])).icon(BLUE, Icon::Globe),
+            Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(BLUE, Icon::Globe),
         ],
     );
     let out = hits(

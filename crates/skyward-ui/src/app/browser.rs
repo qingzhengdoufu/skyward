@@ -132,6 +132,8 @@ pub struct Browser {
     pub full: BrowserFull,
     pub full_shot: Option<Vec<u8>>,
     pub full_active: bool,
+    pub prefer_full: bool,
+    pub full_failures: u8,
     pub full_zoom: f32,
     pub full_text: bool,
     pub full_touch: (u16, u16),
@@ -166,6 +168,8 @@ impl Default for Browser {
             full: BrowserFull::Unknown,
             full_shot: None,
             full_active: false,
+            prefer_full: false,
+            full_failures: 0,
             full_zoom: 1.0,
             full_text: false,
             full_touch: (500, 500),
@@ -378,10 +382,16 @@ impl App {
                 }
                 let url = self.state.browser.url.clone();
                 if !url.is_empty() {
+                    if cfg!(feature = "aera-browser") && matches!(self.state.browser.full, BrowserFull::Failed(_)) {
+                        return self.browser_plugin_start_at(url);
+                    }
                     return self.browser_read(url);
                 }
             }
             Action::BrowserHome => {
+                if self.state.browser.prefer_full {
+                    return self.browser_plugin_start_at(String::new());
+                }
                 let full = self.state.browser.full_active;
                 self.state.browser.full_active = false;
                 self.state.browser.url.clear();
@@ -577,6 +587,7 @@ impl App {
             }
             Action::BrowserFullLoad => return self.browser_plugin_start_at(self.state.browser.url.clone()),
             Action::BrowserBasic => {
+                self.state.browser.prefer_full = false;
                 self.state.browser.full_active = false;
                 let url = self.state.browser.url.clone();
                 self.open(Screen::Browser);
@@ -590,6 +601,11 @@ impl App {
             Action::BrowserPluginStart => return self.browser_plugin_start_at(self.state.browser.url.clone()),
             Action::BrowserPluginStop => {
                 self.state.browser.full_active = false;
+                self.state.browser.prefer_full = false;
+                self.state.browser.full_progress = None;
+                self.state.browser.full = BrowserFull::Unknown;
+                self.state.browser.view = BrowserView::Home;
+                self.refresh();
                 return vec![Effect::BrowserPluginStop];
             }
             Action::BrowserPluginInstall => return self.browser_plugin_install(now),
@@ -676,6 +692,12 @@ impl App {
     }
 
     pub(super) fn browser_read(&mut self, url: String) -> Vec<Effect> {
+        if self.state.browser.prefer_full && !self.state.browser.full_active {
+            return self.browser_plugin_start_at(url);
+        }
+        if self.state.browser.url != url {
+            self.state.browser.full_failures = 0;
+        }
         let url = if self.state.browser.full_active {
             skyward_net::web::full_url(&url)
         } else {
@@ -896,6 +918,9 @@ impl App {
     }
 
     fn browser_check_full(&mut self) {
+        if self.state.browser.full_active {
+            return;
+        }
         let path = if cfg!(feature = "aera-browser") {
             "/skyward/browser/runtime.xz"
         } else {
@@ -929,7 +954,17 @@ impl App {
         Vec::new()
     }
 
+    pub(super) fn browser_enter(&mut self) -> Vec<Effect> {
+        if self.state.browser.full_active {
+            self.open(Screen::Browser);
+            return Vec::new();
+        }
+        self.browser_plugin_start_at(self.state.browser.url.clone())
+    }
+
     fn browser_plugin_start_at(&mut self, url: String) -> Vec<Effect> {
+        self.state.browser.prefer_full = true;
+        self.state.browser.full_failures = 0;
         if !self.state.data.storage_open() {
             self.state.browser.full = BrowserFull::Failed(
                 self.state
@@ -951,7 +986,8 @@ impl App {
         };
         let dir = "/data/skyward-browser/chromium".to_string();
         let installed = if cfg!(feature = "aera-browser") {
-            std::path::Path::new("/skyward/browser/runtime.xz").is_file()
+            // Runtime identity and presence are checked by the background loader.
+            true
         } else {
             std::path::Path::new(&dir).is_dir()
         };
@@ -961,17 +997,74 @@ impl App {
             return Vec::new();
         }
         self.state.browser.full_active = true;
-        self.state.browser.url = url.clone();
+        self.state.browser.full_text = false;
+        self.state.browser.ime.clear();
+        self.state.browser.picture = None;
+        self.state.browser.full_shot = None;
         self.state.browser.address = url.clone();
-        self.state.browser.full = BrowserFull::Running("localhost:9222".into());
+        self.state.browser.full = BrowserFull::Running(
+            if cfg!(feature = "aera-browser") {
+                "WPE WebKit"
+            } else {
+                "localhost:9222"
+            }
+            .into(),
+        );
         self.state.browser.full_progress = Some(0.1);
         self.state.browser.view = BrowserView::Full;
         self.open(Screen::Browser);
-        vec![Effect::BrowserPluginStart {
-            dir,
-            url,
-            out: "/tmp/skyward-full.jpg".into(),
-        }]
+        self.browser_read(url)
+    }
+
+    pub fn browser_plugin_failed(&mut self, why: String, now: u64) -> Vec<Effect> {
+        if !self.state.browser.full_active {
+            return Vec::new();
+        }
+        let b = &mut self.state.browser;
+        b.full_failures = b.full_failures.saturating_add(1);
+        b.full_text = false;
+        b.ime.clear();
+        b.picture = None;
+        b.full_shot = None;
+        b.full = BrowserFull::Failed(why.clone());
+        let url = b.url.clone();
+        let visible = matches!(self.screen(), Screen::Browser | Screen::BrowserAddress | Screen::BrowserFull);
+        if visible && self.state.data.storage_open() && self.state.browser.full_failures <= 2 {
+            self.state.browser.full_progress = Some(0.0);
+            self.state.browser.view = BrowserView::Full;
+            self.open(Screen::Browser);
+            self.say(
+                self.state.lang.pick([
+                    "完整模式已中断，正在重试",
+                    "完整模式已中斷，正在重試",
+                    "Full mode stopped; retrying",
+                ]),
+                now,
+            );
+            return vec![Effect::BrowserPluginStart {
+                dir: "/data/skyward-browser/chromium".into(),
+                url,
+                out: "/tmp/skyward-full.jpg".into(),
+            }];
+        }
+        self.state.browser.full_active = false;
+        self.state.browser.full_progress = None;
+        if visible && self.state.data.storage_open() {
+            self.state.browser.prefer_full = false;
+            self.open(Screen::Browser);
+            self.say(
+                self.state.lang.pick([
+                    "完整模式连续失败，已切换轻量模式",
+                    "完整模式連續失敗，已切換輕量模式",
+                    "Full mode failed repeatedly; using basic mode",
+                ]),
+                now,
+            );
+            return self.browser_read(url);
+        }
+        self.state.browser.view = BrowserView::Failed { url, why };
+        self.refresh();
+        Vec::new()
     }
 
     pub fn browser_plugin_shot(&mut self, shot: Result<Vec<u8>, String>) {

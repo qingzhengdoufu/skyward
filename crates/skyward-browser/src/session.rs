@@ -189,6 +189,8 @@ impl Browser {
         };
         let frame = duplicate(pixels.as_raw_fd())?;
         let control = duplicate(worker.as_raw_fd())?;
+        // Keep the previous failure across automatic restarts. Diagnostics are best-effort.
+        let _ = std::fs::rename("/tmp/skyward-browser.log", "/tmp/skyward-browser.previous.log");
         let log = OpenOptions::new()
             .write(true)
             .create(true)

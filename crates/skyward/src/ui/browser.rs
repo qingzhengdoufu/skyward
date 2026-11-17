@@ -17,7 +17,7 @@ impl Pages<'_> {
             }
         }
         let mut downloads = Vec::new();
-        let mut stream_dead = false;
+        let mut stream_failure = None;
         if let Some(worker) = &self.browser_stream {
             for ev in worker.events() {
                 match ev {
@@ -25,8 +25,8 @@ impl Pages<'_> {
                     crate::browser::Event::Pixels { width, height, rgba } => self.app.browser_plugin_pixels(width, height, rgba),
                     crate::browser::Event::Shot(Ok(frame)) => self.app.browser_plugin_shot(Ok(frame)),
                     crate::browser::Event::Shot(Err(why)) => {
-                        self.app.browser_plugin_shot(Err(why));
-                        stream_dead = true;
+                        stream_failure = Some(why);
+                        break;
                     }
                     crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
                     crate::browser::Event::Navigated(url) => self.app.browser_navigated(url),
@@ -35,8 +35,15 @@ impl Pages<'_> {
                 }
             }
         }
-        if stream_dead {
+        if let Some(why) = stream_failure {
             self.browser_stream = None;
+            let mut effects = VecDeque::from(self.app.browser_plugin_failed(why, now));
+            while let Some(effect) = effects.pop_front() {
+                match self.effect(effect, now) {
+                    Ok(next) => effects.extend(next),
+                    Err(error) => self.app.report(&format!("{error:#}"), now),
+                }
+            }
         }
         let mut download_done = false;
         if let Some(worker) = &self.browser_download {

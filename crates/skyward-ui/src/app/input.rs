@@ -23,6 +23,9 @@ impl App {
         if let Some(effects) = self.navigation_touch(ev, now) {
             return effects;
         }
+        if let Some(effects) = self.media_volume_touch(ev, now) {
+            return effects;
+        }
         if self.shade_touch(ev, now) {
             return Vec::new();
         }

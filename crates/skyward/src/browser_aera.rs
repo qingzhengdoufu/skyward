@@ -108,6 +108,11 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 }
                 Control::Navigate { url } => navigate(&browser, &skyward_net::web::full_url(&url))?,
                 Control::Reload => browser.session.send(&Message::command(4))?,
+                Control::Volume { percent } => {
+                    let mut message = Message::command(17);
+                    message.value = u32::from(percent.min(100));
+                    browser.session.send(&message)?;
+                }
                 Control::Pinch { scale } => {
                     ensure!(scale.is_finite() && scale > 0.0, "invalid AERA zoom");
                     zoom = (zoom * scale).clamp(50.0, 300.0);

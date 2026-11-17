@@ -2723,6 +2723,11 @@ impl Pages<'_> {
     pub(super) fn effect(&mut self, fx: Effect, now: u64) -> Result<Vec<Effect>> {
         let cfg = self.cfg;
         match fx {
+            Effect::SetMediaVolume(percent) => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Volume { percent });
+                }
+            }
             Effect::ReadRootModules => {
                 self.app.state.root_modules = Some(if self.app.state.data.storage_open() {
                     skyward_files::root_modules::read(Path::new("/data/adb")).map_err(|e| format!("{e:#}"))
@@ -2845,8 +2850,11 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginStart { dir, url, out } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
                 self.browser_viewport = None;
-                if let Some(worker) = &self.browser_stream {
+                if let Some(worker) = self.browser_stream.as_ref().filter(|worker| !worker.ended()) {
                     worker.command(crate::browser::Control::Navigate { url });
                     return Ok(Vec::new());
                 }
@@ -2859,8 +2867,13 @@ impl Pages<'_> {
                 };
                 let _ = out;
                 match crate::browser::Worker::start(task, self.servers.clone()) {
-                    Ok(worker) => self.browser_stream = Some(worker),
-                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                    Ok(worker) => {
+                        worker.command(crate::browser::Control::Volume {
+                            percent: (self.app.state.media_volume * 100.0).round() as u8,
+                        });
+                        self.browser_stream = Some(worker);
+                    }
+                    Err(e) => return Ok(self.app.browser_plugin_failed(format!("{e:#}"), now)),
                 }
             }
             Effect::BrowserPluginTouch { phase, x, y } => {
