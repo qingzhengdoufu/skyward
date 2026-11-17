@@ -72,7 +72,7 @@ static void PersistentStorage() {
 // exceeds its aggregate resident-memory or process bound on cgroup-v2 phones.
 static bool WithinLimits(pid_t group) {
   DIR *entries = opendir("/proc");
-  if (!entries) return false;
+  if (!entries) { perror("browser supervisor: inspect process group"); return false; }
   unsigned count = 0;
   uint64_t pages = 0;
   while (dirent *entry = readdir(entries)) {
@@ -86,7 +86,11 @@ static bool WithinLimits(pid_t group) {
     if (file) { if (fscanf(file, "%lu %lu", &unused, &resident) == 2) pages += resident; fclose(file); }
   }
   closedir(entries);
-  return count <= 96 && pages * static_cast<uint64_t>(sysconf(_SC_PAGESIZE)) <= (1536ULL << 20);
+  const uint64_t bytes = pages * static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
+  const bool within = count <= 96 && bytes <= (1536ULL << 20);
+  if (!within) fprintf(stderr, "browser supervisor: resource limit, processes=%u/96, resident=%llu/1610612736 bytes\n",
+      count, static_cast<unsigned long long>(bytes));
+  return within;
 }
 
 static void Supervise() {
@@ -107,10 +111,17 @@ static void Supervise() {
   bool exited = false;
   while (!stopping) {
     const pid_t ended = waitpid(child, &status, WNOHANG);
-    if (ended == child) { exited = true; break; }
-    if ((ended < 0 && errno != EINTR) || !WithinLimits(child)) break;
+    if (ended == child) {
+      exited = true;
+      if (WIFEXITED(status)) fprintf(stderr, "browser supervisor: worker exited with status %d\n", WEXITSTATUS(status));
+      else if (WIFSIGNALED(status)) fprintf(stderr, "browser supervisor: worker terminated by signal %d\n", WTERMSIG(status));
+      break;
+    }
+    if (ended < 0 && errno != EINTR) { perror("browser supervisor: wait for worker"); break; }
+    if (!WithinLimits(child)) break;
     usleep(100000);
   }
+  if (stopping) fprintf(stderr, "browser supervisor: stop requested\n");
   kill(-child, SIGKILL);
   if (!exited) { kill(child, SIGKILL); while (waitpid(child, &status, 0) < 0 && errno == EINTR) {} }
   RestoreDevices();

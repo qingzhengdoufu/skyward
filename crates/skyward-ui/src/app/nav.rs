@@ -116,7 +116,10 @@ impl App {
         }
         let left = self.screen();
         match left {
-            Screen::BrowserAddress => self.state.browser.ime.clear(),
+            Screen::BrowserAddress => {
+                self.state.browser.full_text = false;
+                self.state.browser.ime.clear();
+            }
             Screen::Mount => self.state.mount_failure = None,
             Screen::Slot => self.state.next_slot = None,
             Screen::Systems => {

@@ -90,7 +90,7 @@ impl App {
                 } else {
                     None
                 };
-                let at_edge = side.filter(|_| self.stack.len() > 1);
+                let at_edge = side.filter(|_| self.stack.len() > 1 && !self.frame.as_ref().is_some_and(|frame| frame.fixed));
                 if at_edge.is_some() && self.in_motion(now) {
                     self.drag = Drag::Press {
                         x,
@@ -254,6 +254,7 @@ impl App {
                         _ if matches!(action, Some(Action::BrowserPluginTap(..))) && dy.abs() > slop => {
                             Drag::BrowserScroll { start: y0, last: y }
                         }
+                        _ if dx.abs().max(dy.abs()) > slop && self.frame.as_ref().is_some_and(|frame| frame.fixed) => Drag::Held,
                         _ if dy.abs() > slop => {
                             let history = self
                                 .frame

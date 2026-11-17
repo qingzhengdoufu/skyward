@@ -194,25 +194,35 @@ impl Default for Browser {
 }
 
 impl App {
-    pub(super) fn browser_commit_ime(&mut self, index: usize) {
+    pub(super) fn browser_commit_ime(&mut self, index: usize) -> Vec<Effect> {
         if self.state.browser.ime.spelling.is_empty() {
-            return;
+            return Vec::new();
         }
         let text = self.state.browser.ime.choose(index).unwrap_or_else(|| {
             let raw = self.state.browser.ime.spelling.clone();
             self.state.browser.ime.clear();
             raw
         });
+        self.browser_insert_text(&text)
+    }
+
+    fn browser_insert_text(&mut self, text: &str) -> Vec<Effect> {
+        if self.state.browser.full_active && self.state.browser.full_text {
+            self.refresh();
+            return vec![Effect::BrowserPluginText(text.to_string())];
+        }
         let b = &mut self.state.browser;
         let at = widgets::text_boundary(&b.address, b.address_cursor);
-        b.address.insert_str(at, &text);
+        b.address.insert_str(at, text);
         b.address_cursor = at + text.len();
         b.address_start = b.address_start.min(at);
         self.edits += 1;
         self.refresh();
+        Vec::new()
     }
 
-    pub(super) fn browser_edit_key(&mut self, cap: Cap) {
+    pub(super) fn browser_edit_key(&mut self, cap: Cap) -> Vec<Effect> {
+        let mut effects = Vec::new();
         if self.state.browser.ime.enabled {
             match cap {
                 Cap::Char(ch) if ch.is_ascii_alphabetic() || ch == '\'' => {
@@ -221,24 +231,39 @@ impl App {
                         self.state.browser.ime.update();
                     }
                     self.refresh();
-                    return;
+                    return effects;
                 }
                 Cap::Backspace if !self.state.browser.ime.spelling.is_empty() => {
                     self.state.browser.ime.spelling.pop();
                     self.state.browser.ime.update();
                     self.refresh();
-                    return;
+                    return effects;
                 }
                 Cap::Space if !self.state.browser.ime.spelling.is_empty() => {
-                    self.browser_commit_ime(0);
-                    return;
+                    return self.browser_commit_ime(0);
                 }
                 _ => {
-                    self.browser_commit_ime(0);
+                    effects.extend(self.browser_commit_ime(0));
                 }
             }
         }
         let shifted = self.state.layer == Layer::Shifted;
+        if self.state.browser.full_active && self.state.browser.full_text {
+            match cap {
+                Cap::Char(ch) => {
+                    let ch = if shifted { ch.to_ascii_uppercase() } else { ch };
+                    effects.extend(self.browser_insert_text(&ch.to_string()));
+                    if shifted {
+                        self.state.layer = Layer::Letters;
+                    }
+                }
+                Cap::Space => effects.extend(self.browser_insert_text(" ")),
+                Cap::Backspace => effects.push(Effect::BrowserPluginKey(8)),
+                _ => {}
+            }
+            self.refresh();
+            return effects;
+        }
         let b = &mut self.state.browser;
         let at = widgets::text_boundary(&b.address, b.address_cursor);
         match cap {
@@ -264,10 +289,11 @@ impl App {
         b.address_start = widgets::text_boundary(&b.address, b.address_start).min(b.address_cursor);
         self.edits += 1;
         self.refresh();
+        effects
     }
 
     pub(super) fn browser_address_touch(&mut self, ev: Touch, f: &Fonts, now: u64) -> bool {
-        if self.screen() != Screen::BrowserAddress {
+        if self.screen() != Screen::BrowserAddress || self.state.browser.full_text {
             return false;
         }
         let t = self.theme();
@@ -315,13 +341,14 @@ impl App {
         let l = self.state.lang;
         match action {
             Action::BrowserImeToggle => {
-                self.browser_commit_ime(0);
+                let effects = self.browser_commit_ime(0);
                 self.state.browser.ime.enabled = !self.state.browser.ime.enabled;
                 self.refresh();
+                return effects;
             }
             Action::BrowserImePick(index) => {
                 if index < self.state.browser.ime.candidates.len() {
-                    self.browser_commit_ime(index);
+                    return self.browser_commit_ime(index);
                 }
             }
             Action::BrowserImePage(next) => {
@@ -637,17 +664,6 @@ impl App {
     }
 
     pub(super) fn browser_go(&mut self, input: &str, _now: u64) -> Vec<Effect> {
-        if self.state.browser.full_text {
-            let text = input.trim().to_string();
-            self.state.browser.full_text = false;
-            self.state.browser.address.clear();
-            if text.is_empty() {
-                return Vec::new();
-            }
-            self.state.browser.full_progress = Some(0.2);
-            self.refresh();
-            return vec![Effect::BrowserPluginText(text)];
-        }
         let url = if self.state.browser.full_active {
             skyward_net::web::full_address(input)
         } else {
@@ -990,7 +1006,10 @@ impl App {
     }
 
     pub fn browser_plugin_focus(&mut self, focus: bool) {
-        if self.screen() == Screen::BrowserAddress && self.state.browser.full_text {
+        if !self.state.browser.full_active || (self.screen() == Screen::BrowserAddress && !self.state.browser.full_text) {
+            return;
+        }
+        if self.state.browser.full_text == focus {
             return;
         }
         self.state.browser.full_text = focus;
@@ -1003,6 +1022,9 @@ impl App {
             if self.screen() == Screen::Browser {
                 self.open(Screen::BrowserAddress);
             }
+        } else if self.screen() == Screen::BrowserAddress {
+            self.state.browser.ime.clear();
+            self.open(Screen::Browser);
         }
     }
 

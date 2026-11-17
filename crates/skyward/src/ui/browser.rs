@@ -1,7 +1,9 @@
 use super::*;
 impl Pages<'_> {
     pub(super) fn browser_told(&mut self, now: u64) {
-        if let Some(worker) = &self.browser_stream {
+        if let Some(worker) = &self.browser_stream
+            && matches!(self.app.screen(), Screen::Browser | Screen::BrowserAddress)
+        {
             let theme = self.app.theme();
             // Keyboard overlays the page; never resize/reflow on focus changes.
             let area = skyward_ui::browser::full_viewport(&theme);

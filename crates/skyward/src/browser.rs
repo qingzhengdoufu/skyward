@@ -58,6 +58,7 @@ pub enum Control {
     Viewport { width: u32, height: u32 },
     Pinch { scale: f64 },
     Text { text: String },
+    Key { value: u32 },
     Scroll { dy: i64 },
     Reload,
     Navigate { url: String },
@@ -347,8 +348,8 @@ impl Worker {
                                             Control::Pinch { scale } => cdp.pinch(crate::cdp::WIDTH / 2, cdp.height() / 2, scale)?,
                                             Control::Text { text } => {
                                                 cdp.insert_text(&text)?;
-                                                tell(Event::Focus(false));
                                             }
+                                            Control::Key { value } => cdp.key(value)?,
                                             Control::Scroll { dy } => cdp.scroll(dy)?,
                                             Control::Reload => cdp.reload()?,
                                             Control::Navigate { url } => {

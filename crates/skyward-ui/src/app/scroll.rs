@@ -63,6 +63,9 @@ impl App {
     /// page follows with growing resistance; coming back undoes the pull
     /// before the page scrolls again.
     pub(super) fn drag_by(&mut self, d: f32) {
+        if self.frame.as_ref().is_some_and(|frame| frame.fixed) {
+            return;
+        }
         self.dirty = true;
         let mut d = d;
         if self.pull != 0.0 {

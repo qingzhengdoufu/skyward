@@ -83,7 +83,7 @@ impl App {
                 whole.replace(&frame.canvas);
                 frame.canvas = whole;
             }
-            self.height = frame.height(&t) + self.nav_height() as f32;
+            self.height = frame.height(&t) + if self.browser_fullscreen() { 0.0 } else { self.nav_height() as f32 };
             self.frame = Some(frame);
             self.clamp_scroll();
             if std::mem::take(&mut self.snap) {
@@ -421,6 +421,9 @@ impl App {
         }
         self.shown = Some(view);
         if screen != Screen::ControlCenter {
+            if self.browser_fullscreen() {
+                out.fill_rect(0.0, 0.0, self.w as f32, t.m.dp(48.0), Rgba::rgb(0, 0, 0).with_alpha(145));
+            }
             widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
         } else if self.shade.is_none() {
             widgets::status_marks(out, &t, f, &self.bar(clock, info), t.pal.status);
@@ -457,6 +460,7 @@ impl App {
         let m = t.m;
         let screen = self.screen();
         let (scroll, offset, pressing) = (view.scroll, view.offset, view.pressing);
+        let browser_fullscreen = self.browser_fullscreen();
         let shine = |out: &mut Canvas, part: Group| {
             if let Some((g, r, radius, tint)) = view.light
                 && g == part
@@ -600,7 +604,11 @@ impl App {
             shine(out, Group::Strip);
         }
         if let Some(d) = &frame.dock {
-            out.put(&d.canvas, t.m.h as i32 - d.canvas.h as i32);
+            if browser_fullscreen {
+                out.lay(&d.canvas, 0, t.m.h as i32 - d.canvas.h as i32, 1.0);
+            } else {
+                out.put(&d.canvas, t.m.h as i32 - d.canvas.h as i32);
+            }
             shine(out, Group::Dock);
         }
         if frame.back {

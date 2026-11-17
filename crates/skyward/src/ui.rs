@@ -2802,9 +2802,17 @@ impl Pages<'_> {
                 if target.parent() != Some(Path::new("/data/media/0/Download/Skyward")) || target.file_name().is_none() {
                     self.app.browser_download_removed(&path, Err("Invalid download path".into()), now);
                 } else {
-                    let active = self.app.state.browser.saving.and_then(|index| self.app.state.browser.downloads.get(index)).is_some_and(|download| download.path == path);
+                    let active = self
+                        .app
+                        .state
+                        .browser
+                        .saving
+                        .and_then(|index| self.app.state.browser.downloads.get(index))
+                        .is_some_and(|download| download.path == path);
                     if active && self.browser_download.is_some() {
-                        if let Some(worker) = &self.browser_download { worker.stop(); }
+                        if let Some(worker) = &self.browser_download {
+                            worker.stop();
+                        }
                         self.browser_removal = Some(path);
                     } else {
                         let result = skyward_net::web::discard_partial(target).map_err(|error| format!("{error:#}"));
@@ -2813,7 +2821,8 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginInstall { archive, dir } => {
-                if cfg!(feature = "aera-browser") || dir != "/data/skyward-browser/chromium"
+                if cfg!(feature = "aera-browser")
+                    || dir != "/data/skyward-browser/chromium"
                     || !self.app.state.data.storage_open()
                     || self.browser_stream.is_some()
                     || self.installer.is_some()
@@ -2872,6 +2881,11 @@ impl Pages<'_> {
             Effect::BrowserPluginText(text) => {
                 if let Some(worker) = &self.browser_stream {
                     worker.command(crate::browser::Control::Text { text });
+                }
+            }
+            Effect::BrowserPluginKey(value) => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::Key { value });
                 }
             }
             Effect::BrowserPluginScroll { dy } => {

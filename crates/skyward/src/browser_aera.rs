@@ -81,7 +81,12 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                         message.value = ch as u32;
                         browser.session.send(&message)?;
                     }
-                    tell(Event::Focus(false));
+                }
+                Control::Key { value } => {
+                    ensure!(matches!(value, 8 | 13), "unsupported AERA editing key");
+                    let mut message = Message::command(9);
+                    message.value = value;
+                    browser.session.send(&message)?;
                 }
                 Control::Navigate { url } => navigate(&browser, &skyward_net::web::full_url(&url))?,
                 Control::Reload => browser.session.send(&Message::command(4))?,
@@ -123,7 +128,9 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                         tell(Event::Navigated(protocol::address(&message.text)?));
                     }
                 }
-                34 if message.text == "Load request cancelled" || message.text.contains("creating the snapshot") => {
+                34 if matches!(message.text.as_str(), "Load request cancelled" | "Operation was cancelled")
+                    || message.text.contains("creating the snapshot") =>
+                {
                     super::browser::note(&format!("AERA transient page event: {}", message.text));
                 }
                 34 => bail!("AERA worker: {}", message.text),

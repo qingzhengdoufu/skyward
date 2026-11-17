@@ -9,7 +9,7 @@ name = "skyward"
 path = "src/main.rs"
 
 [features]
-default = ["pinyin-input"]
+default = ["pinyin-input", "aera-browser"]
 pinyin-input = ["skyward-ui/pinyin-input"]
 aera-browser = ["dep:skyward-browser", "skyward-ui/aera-browser"]
 

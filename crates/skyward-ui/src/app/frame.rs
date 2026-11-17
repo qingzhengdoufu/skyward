@@ -10,6 +10,7 @@ pub struct Hit {
 /// left empty, and the `<`, the titles and the bar are laid over the page
 /// as it scrolls.
 pub struct Frame {
+    pub fixed: bool,
     pub browser_area: Option<Rect>,
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
@@ -183,6 +184,7 @@ impl Frame {
     /// large type and goes back with `<`.
     pub fn new(t: &Theme, canvas: Canvas, hits: Vec<Hit>, title: &'static str, content_top: f32) -> Frame {
         Frame {
+            fixed: false,
             browser_area: None,
             canvas,
             hits,
@@ -236,7 +238,7 @@ impl Frame {
     /// How tall the page is: its canvas, or its rows and the margin after
     /// them if they reach further.
     pub fn height(&self, t: &Theme) -> f32 {
-        if self.browser_area.is_some() {
+        if self.fixed || self.browser_area.is_some() {
             return t.m.h as f32;
         }
         let h = self.canvas.h as f32;

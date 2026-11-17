@@ -1006,8 +1006,7 @@ impl App {
     /// opens the first result of a search, and runs a terminal's command.
     pub(super) fn type_key(&mut self, cap: Cap, now: u64) -> Vec<Effect> {
         if self.screen() == Screen::BrowserAddress && matches!(cap, Cap::Char(_) | Cap::Space | Cap::Backspace) {
-            self.browser_edit_key(cap);
-            return Vec::new();
+            return self.browser_edit_key(cap);
         }
         let (l, layer) = (self.state.lang, self.state.layer);
         match cap {
@@ -1037,15 +1036,24 @@ impl App {
             Cap::Show(layer) => self.state.layer = layer,
             Cap::Enter => match self.screen() {
                 Screen::BrowserAddress => {
+                    let mut effects = Vec::new();
                     for _ in 0..32 {
                         if self.state.browser.ime.spelling.is_empty() {
                             break;
                         }
-                        self.browser_commit_ime(0);
+                        effects.extend(self.browser_commit_ime(0));
+                    }
+                    if self.state.browser.full_active && self.state.browser.full_text {
+                        self.state.browser.full_text = false;
+                        self.state.browser.address.clear();
+                        self.open(Screen::Browser);
+                        effects.push(Effect::BrowserPluginKey(13));
+                        return effects;
                     }
                     let input = self.state.browser.address.clone();
                     self.open(Screen::Browser);
-                    return self.browser_go(&input, now);
+                    effects.extend(self.browser_go(&input, now));
+                    return effects;
                 }
                 Screen::BrowserForm => {
                     let (form, _) = self.state.browser.field.expect("form input");

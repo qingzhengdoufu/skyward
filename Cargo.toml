@@ -51,3 +51,7 @@ strip = true
 # The UI draws every pixel of every frame; it is built for speed.
 [profile.release.package.skyward-ui]
 opt-level = 3
+
+# Browser frame conversion is a per-pixel hot path, like the UI compositor.
+[profile.release.package.skyward-browser]
+opt-level = 3

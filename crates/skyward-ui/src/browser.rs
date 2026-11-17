@@ -154,18 +154,7 @@ fn home(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = m.content_top;
     let w = m.w as f32 - m.margin * 2.0;
-    let px = m.dp(34.0);
-    let mark_width = c.text_width(&f.display, "Skyward", px);
-    c.text(
-        &f.display,
-        "Skyward",
-        (m.w as f32 - mark_width) / 2.0,
-        top + m.dp(16.0) + f.display.cap(px),
-        px,
-        t.pal.text,
-        Some(w),
-    );
-    let mut y = top + m.dp(86.0);
+    let mut y = top;
 
     y = widgets::section(&mut c, t, f, y, l.pick(["快捷访问", "快速存取", "Shortcuts"]));
     let gap = m.dp(10.0);
@@ -333,7 +322,7 @@ fn full_page(cx: &Ctx) -> Frame {
             c.blit_rgba(&picture.pixels, w, h, x.round() as i32, y.round() as i32);
             if let Some(progress) = cx.state.browser.full_progress.filter(|p| *p < 1.0) {
                 let progress = progress.clamp(0.0, 1.0);
-                c.fill_round_rect(0.0, y - m.dp(4.0), m.w as f32 * progress, m.dp(3.0), m.dp(1.5), t.pal.accent);
+                c.fill_round_rect(0.0, m.dp(48.0), m.w as f32 * progress, m.dp(3.0), m.dp(1.5), t.pal.accent);
             }
         } else {
             widgets::footnote(
@@ -354,7 +343,7 @@ fn full_page(cx: &Ctx) -> Frame {
             &mut c,
             t,
             cx.f,
-            y,
+            m.dp(60.0),
             l.pick(["正在渲染页面", "正在繪製頁面", "Drawing the page"]),
             &cx.state.browser.url,
             Some(progress),
@@ -365,19 +354,23 @@ fn full_page(cx: &Ctx) -> Frame {
         });
     }
     let mut frame = Frame::new(t, c.crop_height(m.h), out, l.pick(BROWSER), top);
+    frame.fixed = true;
     frame.header = false;
     frame.back = false;
-    frame.browser_area = Some(area);
+    frame.browser_area = Some(viewport_above(t, m.h as f32 - t.bottom_inset - m.dp(BROWSER_DOCK_DP)));
     frame.dock = Some(full_dock(cx));
     frame
 }
 
 pub fn full_viewport(t: &Theme) -> Rect {
-    viewport_above(t, t.m.h as f32 - t.m.dp(BROWSER_DOCK_DP))
+    Rect::new(0.0, 0.0, t.m.w as f32, t.m.h as f32)
 }
 
 pub fn full_input_viewport(t: &Theme) -> Rect {
-    viewport_above(t, t.m.h as f32 - widgets::keyboard_height(t) - t.m.dp(input_field_dp()))
+    viewport_above(
+        t,
+        t.m.h as f32 - t.bottom_inset - widgets::keyboard_height(t) - t.m.dp(input_field_dp()),
+    )
 }
 
 fn input_field_dp() -> f32 {
@@ -386,7 +379,7 @@ fn input_field_dp() -> f32 {
 
 fn viewport_above(t: &Theme, bottom: f32) -> Rect {
     let m = &t.m;
-    let y = (m.status_cy + m.dp(24.0)).ceil();
+    let y = m.dp(48.0).ceil();
     let height = (bottom - y).max(m.dp(100.0));
     Rect::new(0.0, y, m.w as f32, height)
 }
@@ -506,8 +499,9 @@ fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
     let t = cx.t;
     let m = &t.m;
     let (h, pad, gap) = (m.dp(44.0), m.dp(64.0), m.dp(4.0));
-    let mut c = Canvas::new(m.w, m.dp(BROWSER_DOCK_DP).ceil() as u32);
-    c.clear(t.pal.bg);
+    let overlay = cx.state.browser.full_active;
+    let mut c = Canvas::new(m.w, (m.dp(BROWSER_DOCK_DP) + t.bottom_inset).ceil() as u32);
+    c.clear(if overlay { Rgba::rgb(0, 0, 0).with_alpha(175) } else { t.pal.bg });
     let menu = Rect::new(m.w as f32 - m.margin - m.dp(40.0), m.dp(8.0), m.dp(40.0), m.dp(44.0));
     let bar = Rect::new(m.margin, m.dp(8.0), menu.x - m.margin - m.dp(6.0), m.dp(44.0));
     let url = &cx.state.browser.url;
@@ -1043,6 +1037,7 @@ pub fn address(cx: &Ctx) -> Frame {
         action: Action::Type(cap),
     }));
     Frame {
+        fixed: true,
         caret: Some(caret),
         ..Frame::new(t, c, out, l.pick(OPEN_ADDRESS), top)
     }
@@ -1052,19 +1047,32 @@ fn full_input(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let m = &t.m;
     let mut frame = full_page(cx);
-    let keys_top = m.h as f32 - widgets::keyboard_height(t);
-    let field_top = keys_top - m.dp(input_field_dp());
+    let keys_top = m.h as f32 - t.bottom_inset - widgets::keyboard_height(t);
+    let direct = s.browser.full_text;
+    let field_top = keys_top
+        - m.dp(if direct {
+            if cfg!(feature = "pinyin-input") { 44.0 } else { 0.0 }
+        } else {
+            input_field_dp()
+        });
     frame.canvas.fill_rect(0.0, field_top, m.w as f32, m.h as f32 - field_top, t.pal.bg);
     frame.hits.retain(|hit| hit.rect.y + hit.rect.h <= field_top);
-    let (_, caret) = widgets::text_field_at(
-        &mut frame.canvas,
-        t,
-        f,
-        field_top,
-        &s.browser.address,
-        s.browser.address_cursor,
-        s.browser.address_start,
-    );
+    let caret = if direct {
+        None
+    } else {
+        Some(
+            widgets::text_field_at(
+                &mut frame.canvas,
+                t,
+                f,
+                field_top,
+                &s.browser.address,
+                s.browser.address_cursor,
+                s.browser.address_start,
+            )
+            .1,
+        )
+    };
     let keys = widgets::keyboard(&mut frame.canvas, t, f, l, keys_top, s.layer, s.key_held(), l.pick(GO));
     if cfg!(feature = "pinyin-input") {
         frame.hits.extend(ime_bar(&mut frame.canvas, cx, keys_top - m.dp(44.0)));
@@ -1074,13 +1082,9 @@ fn full_input(cx: &Ctx) -> Frame {
         action: Action::Type(cap),
     }));
     frame.canvas = frame.canvas.crop_height(m.h);
-    let visible = Rect {
-        h: (field_top - full_viewport(t).y).max(1.0),
-        ..full_viewport(t)
-    };
-    frame.browser_area = Some(visible);
+    frame.browser_area = Some(viewport_above(t, field_top));
     frame.dock = None;
-    frame.caret = Some(caret);
+    frame.caret = caret;
     frame
 }
 

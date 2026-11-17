@@ -1,4 +1,4 @@
-use crate::color::{over, Rgba};
+use crate::color::{Rgba, over};
 use crate::glow::{self, Glow};
 
 #[derive(Clone, Copy)]
@@ -149,6 +149,7 @@ impl Metrics {
 
 #[derive(Clone, Copy)]
 pub struct Theme {
+    pub bottom_inset: f32,
     pub pal: Palette,
     pub hero: Hero,
     pub m: Metrics,
@@ -158,11 +159,23 @@ pub struct Theme {
 impl Theme {
     /// `px_per_dp` is the panel density over 160, e.g. 3.0 at 480 dpi.
     pub fn light(w: u32, h: u32, px_per_dp: f32) -> Self {
-        Theme { pal: LIGHT, hero: LIGHT_HERO, m: metrics(w, h, px_per_dp), dark: false }
+        Theme {
+            bottom_inset: 0.0,
+            pal: LIGHT,
+            hero: LIGHT_HERO,
+            m: metrics(w, h, px_per_dp),
+            dark: false,
+        }
     }
 
     pub fn dark(w: u32, h: u32, px_per_dp: f32) -> Self {
-        Theme { pal: DARK, hero: DARK_HERO, m: metrics(w, h, px_per_dp), dark: true }
+        Theme {
+            bottom_inset: 0.0,
+            pal: DARK,
+            hero: DARK_HERO,
+            m: metrics(w, h, px_per_dp),
+            dark: true,
+        }
     }
 
     /// This theme with every card as it shows behind a row held down.

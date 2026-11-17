@@ -54,22 +54,27 @@ impl Session {
 
     pub fn receive(&mut self) -> Result<Option<Message>> {
         let mut bytes = [0; MESSAGE_BYTES + 1];
-        let n = unsafe {
-            libc::recv(
-                self.control.as_raw_fd(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-                libc::MSG_DONTWAIT | libc::MSG_TRUNC,
-            )
-        };
-        if n < 0 {
-            let e = std::io::Error::last_os_error();
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                return Ok(None);
+        let n = loop {
+            let n = unsafe {
+                libc::recv(
+                    self.control.as_raw_fd(),
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                    libc::MSG_DONTWAIT | libc::MSG_TRUNC,
+                )
+            };
+            if n >= 0 {
+                break n;
             }
-            return Err(e.into());
-        }
-        ensure!(n > 0 && n as usize == MESSAGE_BYTES, "browser channel closed or malformed packet");
+            let e = std::io::Error::last_os_error();
+            match e.kind() {
+                std::io::ErrorKind::Interrupted => continue,
+                std::io::ErrorKind::WouldBlock => return Ok(None),
+                _ => return Err(e).context("receive browser event"),
+            }
+        };
+        ensure!(n > 0, "browser channel closed by peer");
+        ensure!(n as usize == MESSAGE_BYTES, "browser packet length mismatch: {n}");
         let message = Message::decode(&bytes[..MESSAGE_BYTES])?;
         message.validate_worker()?;
         Ok(Some(message))
@@ -96,18 +101,41 @@ impl Session {
     pub fn send(&self, message: &Message) -> Result<()> {
         message.validate_command()?;
         let bytes = message.encode()?;
-        ensure!(
-            unsafe {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        loop {
+            let sent = unsafe {
                 libc::send(
                     self.control.as_raw_fd(),
                     bytes.as_ptr().cast(),
                     bytes.len(),
                     libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
                 )
-            } == MESSAGE_BYTES as isize,
-            "send browser command"
-        );
-        Ok(())
+            };
+            if sent >= 0 {
+                ensure!(sent == MESSAGE_BYTES as isize, "partial browser command packet: {sent}");
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            ensure!(std::time::Instant::now() < deadline, "browser command queue timed out");
+            match error.kind() {
+                std::io::ErrorKind::Interrupted => continue,
+                std::io::ErrorKind::WouldBlock => {
+                    let mut fd = libc::pollfd {
+                        fd: self.control.as_raw_fd(),
+                        events: libc::POLLOUT,
+                        revents: 0,
+                    };
+                    let ready = unsafe { libc::poll(&mut fd, 1, 10) };
+                    if ready < 0 {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::Interrupted {
+                            return Err(error).context("wait for browser command queue");
+                        }
+                    }
+                }
+                _ => return Err(error).context("send browser command"),
+            }
+        }
     }
 }
 
@@ -195,7 +223,10 @@ impl Browser {
     }
 
     pub fn running(&mut self) -> Result<bool> {
-        Ok(self.child.try_wait()?.is_none())
+        if let Some(status) = self.child.try_wait()? {
+            anyhow::bail!("browser sandbox exited: {status}");
+        }
+        Ok(true)
     }
     pub fn fd(&self) -> i32 {
         self.session.control.as_raw_fd()
@@ -328,5 +359,57 @@ mod tests {
         temp.set_len(SHARED_BYTES as u64).unwrap();
         let (_, host, _) = new_channels().unwrap();
         assert!(Session::attach(temp, host).is_err());
+    }
+
+    #[test]
+    fn closed_and_malformed_channels_are_distinguished() {
+        let (pixels, host, worker) = new_channels().unwrap();
+        let mut session = Session::attach(pixels, host).unwrap();
+        assert!(session.receive().unwrap().is_none());
+        assert_eq!(
+            unsafe { libc::send(worker.as_raw_fd(), b"bad".as_ptr().cast(), 3, libc::MSG_NOSIGNAL) },
+            3
+        );
+        assert!(session.receive().unwrap_err().to_string().contains("packet length mismatch"));
+        drop(worker);
+        assert!(session.receive().unwrap_err().to_string().contains("closed by peer"));
+        assert!(format!("{:#}", session.send(&Message::command(4)).unwrap_err()).contains("send browser command"));
+    }
+
+    #[test]
+    fn command_backpressure_retries_until_the_peer_reads() {
+        let (pixels, host, worker) = new_channels().unwrap();
+        let session = Session::attach(pixels, host).unwrap();
+        let command = Message::command(4).encode().unwrap();
+        loop {
+            let sent = unsafe {
+                libc::send(
+                    session.control.as_raw_fd(),
+                    command.as_ptr().cast(),
+                    command.len(),
+                    libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+                )
+            };
+            if sent < 0 {
+                assert_eq!(std::io::Error::last_os_error().kind(), std::io::ErrorKind::WouldBlock);
+                break;
+            }
+            assert_eq!(sent, MESSAGE_BYTES as isize);
+        }
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                let mut packet = [0; MESSAGE_BYTES];
+                loop {
+                    let n = unsafe { libc::recv(worker.as_raw_fd(), packet.as_mut_ptr().cast(), packet.len(), libc::MSG_DONTWAIT) };
+                    if n < 0 {
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            });
+            session.send(&Message::command(4)).unwrap();
+            reader.join().unwrap();
+        });
     }
 }

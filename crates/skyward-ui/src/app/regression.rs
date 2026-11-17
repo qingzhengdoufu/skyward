@@ -146,7 +146,7 @@ fn control_center_draws_live_right_hand_status_marks_without_an_extra_clock() {
 }
 
 #[test]
-fn browser_bottom_controls_are_plain_and_do_not_cover_the_viewport() {
+fn browser_bottom_controls_float_over_a_fullscreen_viewport_without_receiving_web_touches() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Browser, W, H, PPD);
     app.set_navigation(true);
@@ -159,21 +159,125 @@ fn browser_bottom_controls_are_plain_and_do_not_cover_the_viewport() {
     let top = theme.m.h as f32 - dock.canvas.h as f32;
     assert!(area.x >= 0.0 && area.w <= W as f32);
     assert_eq!(area.x * 2.0 + area.w, W as f32);
-    assert!(area.y + area.h <= top + 1.0);
+    assert_eq!(area, Rect::new(0.0, 0.0, W as f32, H as f32));
+    let interactive = frame.browser_area.unwrap();
+    assert!(interactive.y + interactive.h <= top + 1.0);
     assert_eq!(dock.hits.len(), 8, "six tools, address and menu");
     for hit in &dock.hits[..6] {
         assert!(hit.rect.w >= theme.m.dp(44.0));
         let x = (hit.rect.x + theme.m.dp(3.0)) as u32;
         let y = (hit.rect.y + theme.m.dp(3.0)) as u32;
         let at = ((y * dock.canvas.w + x) * 4) as usize;
-        assert_eq!(
-            &dock.canvas.data[at..at + 3],
-            &[theme.pal.bg.r, theme.pal.bg.g, theme.pal.bg.b],
-            "no old individual button background"
-        );
+        assert_eq!(&dock.canvas.data[at..at + 3], &[0, 0, 0], "no old individual button background");
     }
     assert!(dock.hits.iter().any(|h| h.action == Action::BrowserMenu));
     assert!(dock.hits.iter().any(|h| h.action == Action::BrowserAddress));
+    let address = dock.hits.iter().find(|hit| hit.action == Action::BrowserAddress).unwrap().rect;
+    let (x, y) = address.centre();
+    assert!(
+        app.touch(Touch::Down(x, y + top), &f, 1000)
+            .iter()
+            .all(|effect| !matches!(effect, Effect::BrowserPluginTouch { .. }))
+    );
+    app.touch(Touch::Up, &f, 1010);
+    assert_eq!(app.screen(), Screen::BrowserAddress);
+}
+
+#[test]
+fn webpage_keys_edit_the_focused_page_instead_of_an_empty_local_copy() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.browser_plugin_focus(true);
+    assert_eq!(app.screen(), Screen::BrowserAddress);
+    assert_eq!(app.type_key(Cap::Backspace, 0), vec![Effect::BrowserPluginKey(8)]);
+    assert_eq!(app.type_key(Cap::Char('x'), 0), vec![Effect::BrowserPluginText("x".into())]);
+    assert_eq!(app.type_key(Cap::Space, 0), vec![Effect::BrowserPluginText(" ".into())]);
+    assert!(app.state.browser.address.is_empty());
+    assert!(app.state.browser.full_text);
+    assert_eq!(app.type_key(Cap::Enter, 1), vec![Effect::BrowserPluginKey(13)]);
+    assert_eq!(app.screen(), Screen::Browser);
+    app.browser_plugin_focus(true);
+    app.act(Action::NavBack, 2);
+    assert_eq!(app.screen(), Screen::Browser);
+    assert!(!app.state.browser.full_text);
+}
+
+#[cfg(feature = "pinyin-input")]
+#[test]
+fn webpage_pinyin_commits_to_the_engine_and_backspace_deletes_composition_first() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.browser_plugin_focus(true);
+    app.act(Action::BrowserImeToggle, 0);
+    for ch in "nihaox".chars() {
+        assert!(app.type_key(Cap::Char(ch), 0).is_empty());
+    }
+    assert!(app.type_key(Cap::Backspace, 0).is_empty());
+    assert_eq!(app.state.browser.ime.spelling, "nihao");
+    let index = app
+        .state
+        .browser
+        .ime
+        .candidates
+        .iter()
+        .position(|candidate| candidate.text == "你好")
+        .unwrap();
+    assert_eq!(
+        app.act(Action::BrowserImePick(index), 0),
+        vec![Effect::BrowserPluginText("你好".into())]
+    );
+    assert!(app.state.browser.address.is_empty());
+    assert_eq!(app.type_key(Cap::Backspace, 0), vec![Effect::BrowserPluginKey(8)]);
+}
+
+#[test]
+fn keyboard_drags_never_move_recovery_or_leak_into_the_webpage() {
+    let (f, i) = (fonts(), info());
+    for (w, h, ppd) in [(720, 1600, 1.875), (W, H, PPD)] {
+        for direct in [false, true] {
+            let mut app = App::new(Screen::Browser, w, h, ppd);
+            app.set_navigation(true);
+            app.state.browser.full_active = true;
+            app.state.browser.view = BrowserView::Full;
+            if direct {
+                app.browser_plugin_focus(true);
+            } else {
+                app.act(Action::BrowserAddress, 0);
+            }
+            app.end_turn();
+            let t = app.theme();
+            let frame = app.frame(&f, &i);
+            assert!(frame.fixed);
+            assert!(
+                frame
+                    .hits
+                    .iter()
+                    .filter(|hit| matches!(hit.action, Action::Type(_)))
+                    .all(|hit| hit.rect.y + hit.rect.h <= h as f32 - t.bottom_inset + 1.0)
+            );
+            let key = frame
+                .hits
+                .iter()
+                .find(|hit| hit.action == Action::Type(Cap::Char('g')))
+                .unwrap()
+                .rect;
+            let (x, y) = key.centre();
+            for dy in [-ppd * 80.0, ppd * 80.0] {
+                let mut effects = app.touch(Touch::Down(x, y), &f, 1000);
+                effects.extend(app.touch(Touch::Move(x, y + dy), &f, 1010));
+                effects.extend(app.touch(Touch::Up, &f, 1020));
+                assert!(effects.iter().all(|effect| matches!(effect, Effect::Haptic)));
+                assert_eq!(app.top().1, 0.0);
+                assert_eq!(app.pull, 0.0);
+                assert!(app.bounce.is_none() && app.fling.is_none());
+                assert_eq!(app.screen(), Screen::BrowserAddress);
+            }
+            let area = app.frame(&f, &i).browser_area.unwrap();
+            let effects = app.touch(Touch::Down(area.w / 2.0, area.y + 50.0), &f, 1100);
+            assert!(matches!(effects.as_slice(), [Effect::BrowserPluginTouch { phase: 0, .. }]));
+            app.touch(Touch::Up, &f, 1110);
+        }
+    }
 }
 
 #[test]
@@ -364,10 +468,11 @@ fn browser_touch_forwards_down_move_and_up_without_waiting_for_release() {
     app.state.browser.view = BrowserView::Full;
     let area = app.frame(&f, &i).browser_area.unwrap();
     let (x, y) = area.centre();
-    assert!(matches!(
-        app.touch(Touch::Down(x, y), &f, 1000).as_slice(),
-        [Effect::BrowserPluginTouch { phase: 0, x: 500, y: 500 }]
-    ));
+    let (px, py) = ((x / W as f32 * 1000.0) as u16, (y / H as f32 * 1000.0) as u16);
+    assert_eq!(
+        app.touch(Touch::Down(x, y), &f, 1000),
+        vec![Effect::BrowserPluginTouch { phase: 0, x: px, y: py }]
+    );
     assert!(matches!(
         app.touch(Touch::Move(x, y - 200.0), &f, 1030).as_slice(),
         [Effect::BrowserPluginTouch { phase: 1, .. }]

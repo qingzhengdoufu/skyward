@@ -107,7 +107,12 @@ impl App {
         }
         let t = self.theme();
         let y = (self.h - height) as f32;
-        out.fill_rect(0.0, y, self.w as f32, height as f32, t.pal.bg);
+        let background = if self.browser_fullscreen() {
+            Rgba::rgb(0, 0, 0).with_alpha(155)
+        } else {
+            t.pal.bg
+        };
+        out.fill_rect(0.0, y, self.w as f32, height as f32, background);
         for (index, rect) in self.navigation_buttons().iter().enumerate() {
             let (x, cy) = rect.centre();
             let ink = if self.nav_press == Some(index as u8) {

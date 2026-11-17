@@ -168,6 +168,24 @@ impl Cdp {
         Ok(())
     }
 
+    pub fn key(&mut self, value: u32) -> Result<()> {
+        let (key, code) = match value {
+            8 => ("Backspace", "Backspace"),
+            13 => ("Enter", "Enter"),
+            _ => bail!("unsupported browser editing key"),
+        };
+        for kind in ["keyDown", "keyUp"] {
+            self.call(
+                "Input.dispatchKeyEvent",
+                json!({
+                    "type": kind, "key": key, "code": code,
+                    "windowsVirtualKeyCode": value, "nativeVirtualKeyCode": value
+                }),
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn focus_is_text(&mut self) -> bool {
         let answer = self.call(
             "Runtime.evaluate",

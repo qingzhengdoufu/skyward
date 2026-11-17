@@ -631,6 +631,7 @@ pub enum Effect {
         scale: f64,
     },
     BrowserPluginText(String),
+    BrowserPluginKey(u32),
     BrowserPluginReload,
     BrowserPluginScroll {
         dy: i64,
@@ -1712,12 +1713,26 @@ impl App {
 
 impl App {
     pub fn theme(&self) -> Theme {
-        let height = self.h.saturating_sub(self.nav_height());
-        if self.state.dark || self.screen() == Screen::ControlCenter {
+        let height = if self.browser_fullscreen() {
+            self.h
+        } else {
+            self.h.saturating_sub(self.nav_height())
+        };
+        let mut theme = if self.state.dark || self.screen() == Screen::ControlCenter || self.browser_fullscreen() {
             Theme::dark(self.w, height, self.px_per_dp)
         } else {
             Theme::light(self.w, height, self.px_per_dp)
+        };
+        if self.browser_fullscreen() {
+            theme.bottom_inset = self.nav_height() as f32;
         }
+        theme
+    }
+}
+
+impl App {
+    pub(super) fn browser_fullscreen(&self) -> bool {
+        self.state.browser.full_active && matches!(self.screen(), Screen::Browser | Screen::BrowserAddress)
     }
 }
 
