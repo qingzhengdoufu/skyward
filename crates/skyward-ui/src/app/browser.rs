@@ -4,6 +4,22 @@ use super::*;
 use crate::icons::Icon;
 use skyward_net::web::{FileOffer, Page as WebPage};
 
+#[derive(Clone, Copy)]
+pub(super) struct ImmersivePull {
+    x: f32,
+    y: f32,
+    edge: EscapeEdge,
+    moved: bool,
+}
+
+#[derive(Clone, Copy)]
+enum EscapeEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 /// A shortcut on the browser's start page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuickLink {
@@ -241,25 +257,59 @@ impl App {
             self.immersive_pull = None;
             return None;
         }
-        if let Touch::Down(x, y) = event
-            && y < self.theme().m.dp(12.0)
-        {
-            self.immersive_pull = Some((x, y));
+        let m = self.theme().m;
+        if let Touch::Down(x, y) = event {
+            let edge = if y < m.dp(36.0) {
+                Some(EscapeEdge::Top)
+            } else if y >= self.h as f32 - m.dp(20.0) {
+                Some(EscapeEdge::Bottom)
+            } else if x < m.dp(12.0) {
+                Some(EscapeEdge::Left)
+            } else if x >= self.w as f32 - m.dp(12.0) {
+                Some(EscapeEdge::Right)
+            } else {
+                None
+            };
+            self.immersive_pull = edge.map(|edge| ImmersivePull { x, y, edge, moved: false });
+            self.immersive_pull?;
             self.stir(now);
             return Some(Vec::new());
         }
-        let (start_x, start_y) = self.immersive_pull?;
+        let mut pull = self.immersive_pull?;
         match event {
-            Touch::Move(x, y) if y - start_y > self.theme().m.dp(40.0) && y - start_y > (x - start_x).abs() => {
-                let effects = self.set_browser_immersive(false);
-                self.open_shade(now, true);
-                self.drag = Drag::Held;
-                self.stir(now);
-                Some(effects)
+            Touch::Move(x, y) => {
+                pull.moved |= (x - pull.x).abs().max((y - pull.y).abs()) > m.dp(8.0);
+                self.immersive_pull = Some(pull);
+                let (along, across) = match pull.edge {
+                    EscapeEdge::Top => (y - pull.y, x - pull.x),
+                    EscapeEdge::Bottom => (pull.y - y, x - pull.x),
+                    EscapeEdge::Left => (x - pull.x, y - pull.y),
+                    EscapeEdge::Right => (pull.x - x, y - pull.y),
+                };
+                if along >= m.dp(24.0) && along >= across.abs() * 0.65 {
+                    let mut effects = self.set_browser_immersive(false);
+                    if matches!(pull.edge, EscapeEdge::Top) {
+                        self.open_shade(now, true);
+                    }
+                    if self.state.vibrate {
+                        effects.push(Effect::Haptic);
+                    }
+                    self.drag = Drag::Waking;
+                    self.stir(now);
+                    Some(effects)
+                } else {
+                    Some(Vec::new())
+                }
             }
             Touch::Up => {
                 self.immersive_pull = None;
-                Some(Vec::new())
+                if pull.moved {
+                    return Some(Vec::new());
+                }
+                let rect = self.browser_viewport();
+                let x = ((pull.x - rect.x) / rect.w * 1000.0).clamp(0.0, 999.0) as u16;
+                let y = ((pull.y - rect.y) / rect.h * 1000.0).clamp(0.0, 999.0) as u16;
+                Some(vec![Effect::BrowserPluginTap { x, y }])
             }
             _ => Some(Vec::new()),
         }

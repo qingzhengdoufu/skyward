@@ -68,6 +68,8 @@ pub struct Settings {
     /// Remember the screen lock that opens the data partition, and try it
     /// by itself at the next start.
     pub remember_password: bool,
+    #[serde(default = "yes")]
+    pub remember_wlan: bool,
     /// The order the file manager shows a folder in, by name: by name,
     /// modified or kind.
     pub sort: String,
@@ -159,6 +161,7 @@ impl Settings {
             always_on: state.always_on,
             disable_avb: state.disable_avb,
             remember_password: state.remember_password,
+            remember_wlan: state.remember_wlan,
             sort: SORTS[match state.sort {
                 SortKey::Name => 0,
                 SortKey::Modified => 1,
@@ -234,6 +237,7 @@ impl Settings {
         state.always_on = self.always_on;
         state.disable_avb = self.disable_avb;
         state.remember_password = self.remember_password;
+        state.remember_wlan = self.remember_wlan;
         state.mirror = self.mirror;
         // A name this version does not know leaves the order as it is, as an
         // unknown time zone or place does.
@@ -419,6 +423,20 @@ mod tests {
         let mut back = State::default();
         Settings::read(&off).unwrap().apply(&mut back);
         assert!(!back.mirror, "a switch turned off stays off across a start");
+    }
+
+    #[test]
+    fn wlan_remembering_stays_off_across_starts_without_storing_passwords_in_settings() {
+        let mut state = State {
+            remember_wlan: false,
+            ..State::default()
+        };
+        let text = Settings::of(&state).text();
+        state.remember_wlan = true;
+        Settings::read(&text).unwrap().apply(&mut state);
+        assert!(!state.remember_wlan);
+        assert!(Settings::read("{}").unwrap().remember_wlan);
+        assert!(!text.contains("ssid"));
     }
 
     #[test]

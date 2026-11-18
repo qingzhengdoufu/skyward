@@ -1,10 +1,5 @@
 use super::*;
 
-/// Where a plugin's folder is looked for, from the top of internal storage:
-/// beside the backups the recovery writes, so that what a person puts on the
-/// phone and what the recovery keeps are found in one place.
-pub const PLUGIN_FOLDER: &str = "Skyward/plugins";
-
 /// An entry a search found, and the folder it is in: what the search box
 /// shows is the whole tree under the folder on the page, so a row of that
 /// list has to say which folder its entry came from — two folders can hold
@@ -65,37 +60,6 @@ pub struct VbmetaCopy {
     pub rollback: Result<Rollback, String>,
     /// When it was taken, in Unix seconds.
     pub made: i64,
-}
-
-/// A plugin found in the folder the recovery reads them from: what its
-/// manifest says, or why it cannot be used.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PluginRow {
-    /// The plugin's folder name, which is what it is called.
-    pub name: String,
-    /// What its manifest says, or why there is none to read: the page shows
-    /// either, so a folder a person dropped in is never silently passed
-    /// over.
-    pub manifest: Result<Plugin, String>,
-}
-
-/// What a plugin's manifest says it is.
-///
-/// Nothing runs one yet: this release is the page and the reading of what a
-/// plugin will be, so that a later one has somewhere to put what it does.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Plugin {
-    /// What it calls itself, where its folder's name is not enough.
-    pub title: Option<String>,
-    /// The version it is at, as its author numbers it.
-    pub version: Option<String>,
-    /// Who wrote it.
-    pub author: Option<String>,
-    /// What it is for, in one line.
-    pub about: Option<String>,
-    /// What it says it needs of the recovery, by name: what a later release
-    /// refuses to run it without.
-    pub needs: Vec<String>,
 }
 
 /// A tap on the dark panel, as the touchscreen reports it while nothing else
@@ -237,19 +201,13 @@ impl App {
 }
 
 impl App {
-    /// The plugins found in the folder the recovery reads them from, or why
-    /// it could not be read.
-    pub fn set_plugins(&mut self, plugins: Result<Vec<PluginRow>, String>) {
-        self.state.plugins = Some(plugins);
-        self.refresh();
-    }
-}
-
-impl App {
     /// Forgetting a network ended: the page says what came of it, and what
     /// is kept is read again.
     pub fn wlan_forgotten(&mut self, forgot: Result<String, String>, now: u64) {
         let l = self.state.lang;
+        let succeeded_here = forgot
+            .as_ref()
+            .is_ok_and(|name| name.is_empty() || self.state.details.as_ref().is_some_and(|network| network.name == *name));
         let said = match forgot {
             Ok(name) if !name.is_empty() => {
                 tr!(l, "已忘记「{name}」", "已忘記「{name}」", "“{name}” is forgotten")
@@ -264,7 +222,12 @@ impl App {
                 )
             }
         };
-        self.state.details = None;
+        if succeeded_here && self.screen() == Screen::WlanNetwork {
+            let _ = self.back(now);
+        }
+        if self.screen() != Screen::WlanNetwork {
+            self.state.details = None;
+        }
         self.state.asking_delete = false;
         self.state.confirm = 0.0;
         self.refresh();

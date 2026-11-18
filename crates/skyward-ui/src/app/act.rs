@@ -29,6 +29,9 @@ impl App {
                 return Vec::new();
             }
             Action::NavBack => {
+                if self.browser_immersive() {
+                    return self.set_browser_immersive(false);
+                }
                 if self.screen() == Screen::Browser && self.state.browser.at > 0 {
                     return self.browser_act(Action::BrowserBack, now);
                 }
@@ -48,8 +51,13 @@ impl App {
                 return self.arrive_at(Screen::Choose(place));
             }
             Action::OpenControlCenter => {
+                let effects = if self.browser_immersive() {
+                    self.set_browser_immersive(false)
+                } else {
+                    Vec::new()
+                };
                 self.open_shade(now, true);
-                return Vec::new();
+                return effects;
             }
             Action::CloseControlCenter => {
                 self.settle_shade(false, now, 0.0);
@@ -667,6 +675,13 @@ impl App {
                         ]),
                         now,
                     ),
+                    s if s.password() && network.remembered => {
+                        return vec![Effect::JoinRememberedWlan {
+                            ssid: network.ssid,
+                            name: network.name,
+                            security: s,
+                        }];
+                    }
                     s if s.password() => self.ask_password(network),
                     _ => {
                         return vec![Effect::JoinWlan {
@@ -701,6 +716,7 @@ impl App {
                     frequency: 0,
                     bands: Default::default(),
                     security: j.security,
+                    remembered: false,
                 });
                 if j.stage == Joining::WrongPassword {
                     self.ask_password(network);
@@ -935,7 +951,7 @@ impl App {
                 }];
             }
             Action::ForgetNetwork => {
-                if self.state.details.is_some() {
+                if self.state.details.as_ref().is_some_and(|network| network.remembered) {
                     self.state.asking_delete = true;
                     self.state.confirm = 0.0;
                     self.refresh();
@@ -950,19 +966,12 @@ impl App {
                     return vec![Effect::PauseDownload];
                 }
             }
-            Action::AskDeleteDownload => {
-                if matches!(self.state.have, Have::Whole(_)) && self.state.download.as_ref().is_none_or(|j| j.outcome.is_some()) {
-                    self.state.asking_delete = true;
-                    self.state.confirm = 0.0;
-                    self.refresh();
-                }
-            }
-            Action::OpenPlugin(i) => {
-                self.state.plugin_chosen = i;
+            Action::AskDeleteDownload
+                if matches!(self.state.have, Have::Whole(_)) && self.state.download.as_ref().is_none_or(|j| j.outcome.is_some()) =>
+            {
+                self.state.asking_delete = true;
+                self.state.confirm = 0.0;
                 self.refresh();
-            }
-            Action::OpenPluginFolder => {
-                return vec![Effect::ReadDir(PLUGIN_FOLDER.to_string())];
             }
             _ => {}
         }
@@ -1457,7 +1466,12 @@ impl App {
                 ),
             },
             Confirm::ForgetNetwork => {
-                let name = self.state.details.take().map(|n| n.name);
+                let name = self
+                    .state
+                    .details
+                    .as_ref()
+                    .filter(|network| self.state.asking_delete && network.remembered)
+                    .map(|network| network.name.clone());
                 self.state.asking_delete = false;
                 self.state.confirm = 0.0;
                 match name {

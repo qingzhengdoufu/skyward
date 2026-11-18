@@ -13,6 +13,8 @@ pub mod release;
 pub mod supplicant;
 pub mod time;
 pub mod wlan;
+#[cfg(unix)]
+pub mod wlan_store;
 
 /// Work stopped because it was asked to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

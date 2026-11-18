@@ -13,6 +13,7 @@ use skyward_net::supplicant::{self, Bss, Control, Event as Told, Saved, Security
 use skyward_net::wlan::{self, Joined, Link, Next, Power, Stage, Traffic, Wlan};
 use skyward_sys::worker::{self, Teller, Told as InboxEvents};
 use std::fs;
+use std::io::Write;
 use std::net::Ipv4Addr;
 use std::os::fd::RawFd;
 use std::os::unix::fs::PermissionsExt;
@@ -49,10 +50,6 @@ const HOME: &str = "/skyward/run/supplicant";
 /// [`supplicant::SAVED_MOST`].
 const RECORD: &str = "/metadata/skyward/wlan";
 
-/// What a write of the record goes into first, to be moved over the file
-/// whole.
-const RECORD_NEW: &str = "/metadata/skyward/wlan.new";
-
 /// The user the supplicant takes on as it starts, who has to be able to
 /// make its socket.
 const WIFI: u32 = 1010;
@@ -88,7 +85,7 @@ pub enum Command {
         ssid: Vec<u8>,
         name: String,
         security: Security,
-        password: String,
+        password: Option<String>,
         remember: bool,
     },
     Leave,
@@ -123,7 +120,7 @@ enum Report {
     Forgotten(Result<String, String>),
 }
 
-/// What was told about the kept networks since the screen last asked. It is
+/// What was told about forgetting a network since the screen last asked. It is
 /// stashed out of the one channel [`Worker::told`] drains, so that asking for
 /// it cannot take away what that call was going to return.
 #[derive(Default)]
@@ -387,6 +384,21 @@ impl Station {
                 password,
                 remember,
             } => {
+                let password =
+                    match password.or_else(|| supplicant::saved_for(&self.saved, &ssid, security).map(|saved| saved.password.clone())) {
+                        Some(password) => password,
+                        None => {
+                            self.command(Command::Leave);
+                            mark_remembered(&mut self.state.networks, &self.saved);
+                            self.state.joined = Some(Joined {
+                                ssid,
+                                name,
+                                security,
+                                stage: Stage::WrongPassword,
+                            });
+                            return;
+                        }
+                    };
                 self.unaddress();
                 // Kept only once the network gives an address: a password
                 // that turns out wrong is one no later start should try.
@@ -465,6 +477,7 @@ impl Station {
         }
         save_record(&kept)?;
         self.saved = kept;
+        mark_remembered(&mut self.state.networks, &self.saved);
         // A network whose password is gone must not stay up on it: the
         // supplicant is told to drop what it holds, and the address it gave
         // goes with it.
@@ -486,10 +499,14 @@ impl Station {
         }
         self.state.power = Power::Starting;
         (self.tell)(Report::Wlan(self.state.clone()));
+        self.saved = read_record();
         match self.start() {
             Ok(r) => {
                 self.running = Some(r);
                 self.state.power = Power::On;
+                if let Err(error) = self.reconcile_saved_connection() {
+                    let _ = skyward_sys::kmsg(&format!("WLAN: could not reconcile saved connection: {error:#}"));
+                }
                 self.command(Command::Scan);
             }
             Err(e) => {
@@ -501,7 +518,7 @@ impl Station {
 
     fn start(&self) -> Result<Running> {
         let mac = bring_up(&self.cfg, &self.modules)?;
-        let mut child = start_supplicant(&self.cfg, self.libraries.as_deref())?;
+        let mut child = start_supplicant(&self.cfg, self.libraries.as_deref(), &self.saved)?;
         let socket = Path::new(HOME).join("sockets").join(&self.cfg.interface);
         let connected = (|| -> Result<(Control, Control)> {
             let control = Control::open(&socket)?;
@@ -604,12 +621,19 @@ impl Station {
             found.extend(page);
         }
         self.state.networks = wlan::networks(&found);
+        mark_remembered(&mut self.state.networks, &self.saved);
         let _ = skyward_sys::kmsg(&format!("WLAN: scan returned {} access points", found.len()));
         r.found = found;
         Ok(())
     }
 
     fn joining(&mut self, told: &Told) {
+        if matches!(told, Told::Connected) && self.state.joined.is_none() {
+            if let Err(error) = self.reconcile_saved_connection() {
+                let _ = skyward_sys::kmsg(&format!("WLAN: could not read saved connection: {error:#}"));
+            }
+            return;
+        }
         let Some(j) = &mut self.state.joined else { return };
         match j.on(told) {
             Next::Show => {}
@@ -619,6 +643,17 @@ impl Station {
                 // The network turned the password down: there is nothing
                 // worth keeping.
                 self.keep = None;
+                let ssid = self.state.joined.as_ref().map(|joined| joined.ssid.clone());
+                if let Some(ssid) = ssid {
+                    let kept: Vec<_> = self.saved.iter().filter(|saved| saved.ssid != ssid).cloned().collect();
+                    if kept.len() != self.saved.len() {
+                        if let Err(error) = save_record(&kept) {
+                            let _ = skyward_sys::kmsg(&format!("WLAN: could not remove refused credential: {error:#}"));
+                        }
+                        self.saved = kept;
+                        mark_remembered(&mut self.state.networks, &self.saved);
+                    }
+                }
                 if let Some(r) = &self.running
                     && let Err(e) = r.control.order("REMOVE_NETWORK all")
                 {
@@ -626,6 +661,25 @@ impl Station {
                 }
             }
         }
+    }
+
+    fn reconcile_saved_connection(&mut self) -> Result<()> {
+        let Some(running) = &self.running else { return Ok(()) };
+        let status = running.control.ask("STATUS-NO_EVENTS")?;
+        let Some(saved) = supplicant::connected_saved(&status, &self.saved) else {
+            return Ok(());
+        };
+        if self.state.joined.as_ref().is_some_and(|joined| joined.ssid == saved.ssid) {
+            return Ok(());
+        }
+        self.state.joined = Some(Joined {
+            ssid: saved.ssid.clone(),
+            name: saved.name.clone(),
+            security: saved.security,
+            stage: Stage::Joining,
+        });
+        self.joining(&Told::Connected);
+        Ok(())
     }
 
     /// Ask the network for an address, on a thread of its own.
@@ -731,9 +785,7 @@ impl Station {
     /// This is called only once the network gave an address: a password typed
     /// wrong, or a network that would not have us, is never written down.
     /// A record that cannot be written is said and nothing more — a phone
-    /// that cannot remember a network still has one joined now, and the page
-    /// goes on offering what is actually kept rather than what this tried to
-    /// keep.
+    /// that cannot remember a network still has one joined now.
     fn keep_saved(&mut self, network: Saved) {
         let name = network.name.clone();
         let mut next = self.saved.clone();
@@ -751,6 +803,7 @@ impl Station {
         match save_record(&next) {
             Ok(()) => {
                 self.saved = next;
+                mark_remembered(&mut self.state.networks, &self.saved);
             }
             Err(e) => {
                 let _ = skyward_sys::kmsg(&format!("{name} is not kept: {e:#}"));
@@ -1017,9 +1070,8 @@ fn read_through_mount(partition: &str, path: &str) -> Option<Result<Vec<u8>>> {
 /// for — a phone whose `/metadata` will not mount still has a radio, and a
 /// network joined by hand still works, it is only not remembered.
 fn read_record() -> Vec<Saved> {
-    match fs::read_to_string(RECORD) {
-        Ok(text) => supplicant::saved_read(&text),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    match skyward_net::wlan_store::read(Path::new(RECORD)) {
+        Ok(saved) => saved,
         Err(e) => {
             let _ = skyward_sys::kmsg(&format!("the networks kept were not read: {e:#}"));
             Vec::new()
@@ -1039,26 +1091,13 @@ fn read_record() -> Vec<Saved> {
 /// cut off in the middle leaves either the old record or the new one and never
 /// half of one.
 fn save_record(saved: &[Saved]) -> Result<()> {
-    with_metadata(|| {
-        if saved.is_empty() {
-            // Nothing kept is the record not being there: a file holding no
-            // networks is one an earlier version would still have to parse.
-            let removed = match fs::remove_file(RECORD) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e).with_context(|| format!("take away {RECORD}")),
-            };
-            return removed;
-        }
-        if let Some(folder) = Path::new(RECORD).parent() {
-            fs::create_dir_all(folder).with_context(|| format!("make {}", folder.display()))?;
-        }
-        fs::write(RECORD_NEW, supplicant::saved_text(saved)).with_context(|| format!("write {RECORD_NEW}"))?;
-        fs::File::open(RECORD_NEW)
-            .and_then(|f| f.sync_all())
-            .with_context(|| format!("flush {RECORD_NEW}"))?;
-        fs::rename(RECORD_NEW, RECORD).with_context(|| format!("move {RECORD_NEW} over {RECORD}"))
-    })
+    with_metadata(|| skyward_net::wlan_store::write(Path::new(RECORD), saved))
+}
+
+fn mark_remembered(networks: &mut [wlan::Network], saved: &[Saved]) {
+    for network in networks {
+        network.remembered = supplicant::saved_for(saved, &network.ssid, network.security).is_some();
+    }
 }
 
 /// Do `work` on `/metadata` with it made writable, and read-only again after
@@ -1086,7 +1125,7 @@ fn with_metadata<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
 /// and rename, and a start cut off part-way through would leave half a
 /// configuration. So the record is what outlives a start, and this file is
 /// made afresh in RAM from it each time.
-fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
+fn start_supplicant(cfg: &Config, libraries: Option<&Path>, kept: &[Saved]) -> Result<Child> {
     let home = Path::new(HOME);
     let sockets = home.join("sockets");
     fs::create_dir_all(&sockets).with_context(|| format!("make {}", sockets.display()))?;
@@ -1095,14 +1134,21 @@ fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
     fs::set_permissions(&sockets, fs::Permissions::from_mode(0o770))
         .with_context(|| format!("keep {} to the supplicant", sockets.display()))?;
     let settings = home.join("wpa_supplicant.conf");
-    let kept = read_record();
     if !kept.is_empty() {
         let _ = skyward_sys::kmsg(&format!("{} networks are joined by themselves at this start", kept.len()));
     }
-    let text = supplicant::config_text(&sockets.display().to_string(), &kept);
-    fs::write(&settings, text).with_context(|| format!("write {}", settings.display()))?;
-    fs::set_permissions(&settings, fs::Permissions::from_mode(0o644))
+    let text = supplicant::config_text(&sockets.display().to_string(), kept);
+    let mut temporary = tempfile::Builder::new().prefix(".supplicant-").tempfile_in(home)?;
+    temporary.write_all(text.as_bytes())?;
+    std::os::unix::fs::chown(temporary.path(), Some(0), Some(WIFI))?;
+    temporary
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o640))
         .with_context(|| format!("open {} to the supplicant", settings.display()))?;
+    temporary
+        .persist(&settings)
+        .map_err(|error| error.error)
+        .with_context(|| format!("publish {}", settings.display()))?;
     let socket = sockets.join(&cfg.interface);
     // One an earlier run left would answer nothing.
     if socket.exists() {

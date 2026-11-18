@@ -225,7 +225,7 @@ pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str
 /// not derivable from anything the phone holds. What that costs is said
 /// where the switch that keeps it is offered — `/metadata` is a plain
 /// filesystem, so this is a password written down.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Saved {
     /// The network's name as the access point sends it, which need not be
     /// UTF-8, and which is what tells two networks apart: a name shown on
@@ -251,7 +251,27 @@ impl Saved {
     pub fn same(&self, other: &Saved) -> bool {
         self.ssid == other.ssid
     }
+}
 
+impl std::fmt::Debug for Saved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Saved").field("ssid", &self.ssid).field("security", &self.security).finish_non_exhaustive()
+    }
+}
+
+/// Reuse a credential only for the same byte-exact SSID and protection.
+pub fn saved_for<'a>(kept: &'a [Saved], ssid: &[u8], security: Security) -> Option<&'a Saved> {
+    kept.iter().find(|saved| saved.ssid == ssid && saved.security == security)
+}
+
+/// Reconcile a supplicant connection made before its event socket was attached.
+pub fn connected_saved<'a>(status: &str, kept: &'a [Saved]) -> Option<&'a Saved> {
+    let fields = fields(status);
+    if fields.get("wpa_state") != Some(&"COMPLETED") {
+        return None;
+    }
+    let ssid = unescape(fields.get("ssid")?).ok()?;
+    kept.iter().find(|saved| saved.ssid == ssid)
 }
 
 /// `kept` written as the file that holds it, one network to a line: the
@@ -290,7 +310,8 @@ pub fn saved_read(text: &str) -> Vec<Saved> {
         let (Some(ssid), Some(security), Some(password)) = (fields.next(), fields.next(), fields.next()) else { continue };
         let Some(ssid) = unhex(ssid) else { continue };
         let Some(security) = Security::of_tag(security) else { continue };
-        if ssid.is_empty() || !security.joinable() {
+        if ssid.is_empty() || ssid.len() > 32 || !security.joinable()
+            || network_commands(0, &ssid, security, password, false).is_err() {
             continue;
         }
         let entry = Saved { name: String::from_utf8_lossy(&ssid).into_owned(), ssid, security, password: password.to_string() };
@@ -648,6 +669,33 @@ mod tests {
         assert_eq!(read, all);
         assert_eq!(read[0].name, "Skyward客厅", "the name to show comes back with it");
         assert_eq!(read[2].ssid, b"\xff\xfe", "a name that is not UTF-8 is kept as its bytes");
+    }
+
+    #[test]
+    fn stored_credentials_are_matched_exactly_and_never_debug_printed() {
+        let record = [kept(b"Home", Security::Psk, "private-password")];
+        assert!(saved_for(&record, b"Home", Security::Psk).is_some());
+        assert!(saved_for(&record, b"home", Security::Psk).is_none());
+        assert!(saved_for(&record, b"Home", Security::Open).is_none());
+        assert!(saved_for(&record, b"Home", Security::Sae).is_none());
+        assert!(!format!("{:?}", record[0]).contains("private-password"));
+    }
+
+    #[test]
+    fn already_connected_saved_network_is_reconciled_without_a_password_in_status() {
+        let record = [kept("Home客厅".as_bytes(), Security::Psk, "12345678")];
+        let status = "wpa_state=COMPLETED\nssid=Home\\xe5\\xae\\xa2\\xe5\\x8e\\x85\n";
+        assert_eq!(connected_saved(status, &record), Some(&record[0]));
+        assert!(connected_saved("wpa_state=SCANNING\nssid=Home\n", &record).is_none());
+        assert!(connected_saved("wpa_state=COMPLETED\nssid=Unknown\n", &record).is_none());
+        assert!(connected_saved("wpa_state=COMPLETED\n", &record).is_none());
+    }
+
+    #[test]
+    fn invalid_stored_credentials_do_not_block_valid_networks() {
+        let record = [kept(b"Short", Security::Psk, "short"), kept(&[b'x'; 33], Security::Open, ""),
+            kept(b"Valid", Security::Psk, "12345678")];
+        assert_eq!(saved_read(&saved_text(&record)), [record[2].clone()]);
     }
 
     #[test]

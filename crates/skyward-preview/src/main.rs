@@ -244,6 +244,8 @@ fn main() -> Result<()> {
                     ("settings", Screen::Settings),
                     ("advanced", Screen::Advanced),
                     ("wlan", Screen::Wlan),
+                    ("wlan-remembered", Screen::WlanNetwork),
+                    ("wlan-forget", Screen::WlanNetwork),
                     ("backup", Screen::ImageBackup),
                     ("contents", Screen::Backup),
                     ("online", Screen::SkywardUpdate),
@@ -270,6 +272,12 @@ fn main() -> Result<()> {
                     app.state.data = Data::Open;
                     app.state.usb_drive = Some(UsbDrive::Shown);
                     app.state.wlan = Some(joined(Joining::Connected(router_link())));
+                    if name == "wlan-remembered" || name == "wlan-forget" {
+                        let wlan = app.state.wlan.as_mut().unwrap();
+                        wlan.networks[0].remembered = true;
+                        app.state.details = Some(wlan.networks[0].clone());
+                        app.state.asking_delete = name == "wlan-forget";
+                    }
                     app.state.panel_taps = true;
                     app.state.double_tap_supported = true;
                     app.state.efs_backup_available = false;
@@ -2490,6 +2498,7 @@ fn nearby() -> Vec<Network> {
             frequency,
             bands,
             security,
+            remembered: false,
         }
     };
     vec![

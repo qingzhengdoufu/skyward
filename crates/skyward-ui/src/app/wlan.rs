@@ -55,6 +55,14 @@ impl App {
         if self.state.wlan.as_ref() == Some(&w) {
             return;
         }
+        if let Some(details) = &mut self.state.details
+            && let Some(network) = w
+                .networks
+                .iter()
+                .find(|network| network.ssid == details.ssid && network.security == details.security)
+        {
+            details.remembered = network.remembered;
+        }
         self.state.wlan = Some(w);
         if matches!(
             self.screen(),

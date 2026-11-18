@@ -177,7 +177,11 @@ impl App {
                 self.state.joining = None;
                 self.state.password.clear();
             }
-            Screen::WlanNetwork => self.state.details = None,
+            Screen::WlanNetwork => {
+                self.state.details = None;
+                self.state.asking_delete = false;
+                self.state.confirm = 0.0;
+            }
             Screen::WlanAdd => {
                 if let Some(a) = self.state.adding.as_mut().filter(|a| a.choosing) {
                     a.choosing = false;
@@ -408,11 +412,6 @@ impl App {
                 self.state.image_partition = None;
                 self.state.confirm = 0.0;
                 vec![Effect::ReadImagePartitions]
-            }
-            Screen::Plugins => {
-                self.state.plugins = None;
-                self.state.plugin_chosen = 0;
-                vec![Effect::ReadPlugins]
             }
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
             Screen::Choose(place) if self.state.place_open(place) => {

@@ -246,11 +246,9 @@ fn immersive_browser_uses_every_display_pixel_and_has_no_hidden_chrome_hits() {
             "no clock, status, dock or navigation is composited over the webpage"
         );
         for (x, y) in [
-            (3.0, density * 20.0),
-            (w as f32 - 3.0, density * 20.0),
-            (3.0, h as f32 - 3.0),
-            (w as f32 - 3.0, h as f32 - 3.0),
-            (w as f32 / 2.0, h as f32 - density * 16.0),
+            (density * 20.0, density * 48.0),
+            (w as f32 - density * 20.0, density * 48.0),
+            (w as f32 / 2.0, h as f32 - density * 32.0),
         ] {
             assert!(matches!(
                 app.touch(Touch::Down(x, y), &f, 1100).as_slice(),
@@ -275,11 +273,14 @@ fn immersive_top_pull_and_hardware_back_always_restore_a_recovery_exit() {
     app.set_browser_immersive(true);
     app.frame(&f, &i);
     assert!(app.touch(Touch::Down(500.0, 5.0), &f, 1000).is_empty());
-    assert!(app.touch(Touch::Up, &f, 1010).is_empty());
+    assert!(matches!(
+        app.touch(Touch::Up, &f, 1010).as_slice(),
+        [Effect::BrowserPluginTap { .. }]
+    ));
     assert!(app.browser_immersive(), "a short tap at the reserved edge does not exit");
     app.touch(Touch::Down(500.0, 5.0), &f, 1100);
     let effects = app.touch(Touch::Move(500.0, 200.0), &f, 1120);
-    assert_eq!(effects, [Effect::BrowserPluginExitFullscreen]);
+    assert!(effects.contains(&Effect::BrowserPluginExitFullscreen));
     app.touch(Touch::Up, &f, 1130);
     app.tick(3000);
     assert_eq!(app.screen(), Screen::ControlCenter);
@@ -292,6 +293,100 @@ fn immersive_top_pull_and_hardware_back_always_restore_a_recovery_exit() {
     assert_eq!(app.key(Key::Back, 4000), [Effect::BrowserPluginExitFullscreen]);
     assert!(!app.browser_immersive());
     assert_eq!(app.screen(), Screen::Browser, "back exits immersion before leaving the page");
+}
+
+#[test]
+fn immersive_exit_works_from_all_edges_and_volume_up_without_navigating_the_page() {
+    let (f, i) = (fonts(), info());
+    for landscape in [false, true] {
+        for edge in 0..4 {
+            let mut app = App::new(Screen::Browser, W, H, PPD);
+            app.set_navigation(true);
+            app.state.browser.full_active = true;
+            app.state.browser.view = BrowserView::Full;
+            app.state.browser.landscape_mode = landscape;
+            app.set_browser_immersive(true);
+            app.frame(&f, &i);
+            let dp = PPD;
+            let (start, end) = match edge {
+                0 => ((500.0, dp * 30.0), (dp * 20.0 + 500.0, dp * 58.0)),
+                1 => ((500.0, H as f32 - dp * 10.0), (500.0, H as f32 - dp * 40.0)),
+                2 => ((dp * 5.0, 500.0), (dp * 35.0, 500.0)),
+                _ => ((W as f32 - dp * 5.0, 500.0), (W as f32 - dp * 35.0, 500.0)),
+            };
+            assert!(app.touch(Touch::Down(start.0, start.1), &f, 1000).is_empty());
+            let effects = app.touch(Touch::Move(end.0, end.1), &f, 1010);
+            assert!(effects.contains(&Effect::BrowserPluginExitFullscreen));
+            assert!(!effects.iter().any(|effect| matches!(effect, Effect::BrowserPluginTouch { .. })));
+            app.touch(Touch::Up, &f, 1020);
+            app.tick(3000);
+            assert!(!app.browser_immersive());
+            assert_eq!(app.screen(), if edge == 0 { Screen::ControlCenter } else { Screen::Browser });
+            assert!(app.nav_height() > 0);
+        }
+    }
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    app.set_browser_immersive(true);
+    assert_eq!(app.key(Key::VolumeUp, 5000), [Effect::BrowserPluginExitFullscreen]);
+    assert!(app.key_up(Key::VolumeUp, 5010).is_empty());
+    assert_eq!(app.screen(), Screen::Browser);
+    assert!(!app.browser_immersive());
+}
+
+#[test]
+fn opening_control_center_explicitly_leaves_immersion() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.set_browser_immersive(true);
+    assert!(
+        app.act(Action::OpenControlCenter, 1000)
+            .contains(&Effect::BrowserPluginExitFullscreen)
+    );
+    assert!(!app.state.browser.immersive);
+    assert_eq!(app.screen(), Screen::ControlCenter);
+}
+
+#[test]
+fn immersive_edge_taps_pass_through_but_cancelled_drags_do_not_click() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    app.set_browser_immersive(true);
+    app.frame(&f, &i);
+    let (x, y) = (PPD * 5.0, 500.0);
+    assert!(app.touch(Touch::Down(x, y), &f, 1000).is_empty());
+    let rect = app.browser_viewport();
+    let expected = (((x - rect.x) / rect.w * 1000.0) as u16, ((y - rect.y) / rect.h * 1000.0) as u16);
+    assert_eq!(
+        app.touch(Touch::Up, &f, 1010),
+        [Effect::BrowserPluginTap {
+            x: expected.0,
+            y: expected.1
+        }]
+    );
+    assert!(app.touch(Touch::Up, &f, 1020).is_empty(), "release is not replayed");
+    app.touch(Touch::Down(x, y), &f, 1100);
+    assert!(app.touch(Touch::Move(x, y + PPD * 30.0), &f, 1110).is_empty());
+    assert!(app.touch(Touch::Up, &f, 1120).is_empty(), "an aborted edge swipe is not a click");
+    assert!(app.browser_immersive());
+    let middle = W as f32 / 2.0;
+    assert!(matches!(
+        app.touch(Touch::Down(middle, y), &f, 1200).as_slice(),
+        [Effect::BrowserPluginTouch { phase: 0, .. }]
+    ));
+    assert!(matches!(
+        app.touch(Touch::Up, &f, 1210).as_slice(),
+        [Effect::BrowserPluginTouch { phase: 2, .. }]
+    ));
+    app.touch(Touch::Down(x, y), &f, 1300);
+    let exit = app.touch(Touch::Move(x + PPD * 30.0, y + PPD * 20.0), &f, 1310);
+    assert!(exit.contains(&Effect::BrowserPluginExitFullscreen));
+    assert!(app.touch(Touch::Move(x + PPD * 60.0, y), &f, 1320).is_empty());
+    assert!(app.touch(Touch::Up, &f, 1330).is_empty());
+    assert!(!app.browser_immersive());
 }
 
 #[test]
@@ -6502,6 +6597,7 @@ fn network(name: &str, signal: i32, security: Security) -> Network {
         frequency: 5805,
         bands,
         security,
+        remembered: false,
     }
 }
 fn joined(name: &str, stage: Joining) -> Wlan {
@@ -6554,6 +6650,107 @@ fn wlan_lists_only_nearby_networks_and_keeps_remembering_independent_of_connecti
     assert!(connected.contains(&Action::OpenJoined));
     assert!(connected.contains(&Action::Toggle(Switch::RememberWlan)));
     assert!(!connected.contains(&Action::Confirm(Confirm::ForgetNetwork)));
+}
+
+#[test]
+fn selecting_a_remembered_network_reuses_its_credential_and_a_refusal_asks_again() {
+    let mut app = App::new(Screen::Wlan, W, H, PPD);
+    let mut home = network("Home", -40, Security::Psk);
+    home.remembered = true;
+    app.set_wlan(Wlan {
+        power: Power::On,
+        networks: vec![home],
+        joined: None,
+    });
+    assert_eq!(
+        app.act(Action::JoinNetwork(0), 100),
+        [Effect::JoinRememberedWlan {
+            ssid: b"Home".to_vec(),
+            name: "Home".into(),
+            security: Security::Psk,
+        }]
+    );
+    assert_eq!(app.screen(), Screen::Wlan);
+    app.set_wlan(joined("Home", Joining::WrongPassword));
+    app.act(Action::JoinNetwork(0), 200);
+    assert_eq!(app.screen(), Screen::WlanPassword);
+    assert!(app.state.password.is_empty());
+}
+
+#[test]
+fn forgetting_a_network_waits_for_the_result_and_preserves_details_on_failure() {
+    let (f, i) = (fonts(), info());
+    for connected_now in [false, true] {
+        let mut app = App::new(Screen::Wlan, W, H, PPD);
+        let mut wlan = if connected_now {
+            connected("Home")
+        } else {
+            joined("Home", Joining::Joining)
+        };
+        wlan.networks[0].remembered = true;
+        if !connected_now {
+            wlan.joined = None;
+        }
+        app.set_wlan(wlan);
+        app.act(Action::NetworkDetails(0), 1000);
+        assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::ForgetNetwork));
+        assert!(
+            app.confirmed(Confirm::ForgetNetwork, 1010).is_empty(),
+            "no confirmation was requested"
+        );
+        assert!(app.act(Action::ForgetNetwork, 1020).is_empty());
+        assert!(
+            app.frame(&f, &i)
+                .hits
+                .iter()
+                .any(|hit| hit.action == Action::Confirm(Confirm::ForgetNetwork))
+        );
+        assert_eq!(app.confirmed(Confirm::ForgetNetwork, 1030), [Effect::ForgetWlan("Home".into())]);
+        assert!(app.state.details.is_some(), "the asynchronous result has not arrived");
+        app.frame(&f, &i);
+        app.wlan_forgotten(Err("read-only metadata".into()), 1040);
+        assert_eq!(app.screen(), Screen::WlanNetwork);
+        assert!(app.state.details.is_some());
+        assert!(!app.state.asking_delete);
+        app.frame(&f, &i);
+        app.act(Action::ForgetNetwork, 1050);
+        assert_eq!(app.confirmed(Confirm::ForgetNetwork, 1060), [Effect::ForgetWlan("Home".into())]);
+        app.wlan_forgotten(Ok("Another network".into()), 1070);
+        assert_eq!(
+            app.screen(),
+            Screen::WlanNetwork,
+            "an old completion cannot close different details"
+        );
+        app.wlan_forgotten(Ok("Home".into()), 1080);
+        app.tick(3000);
+        assert_eq!(app.screen(), Screen::Wlan);
+        assert!(app.state.details.is_none());
+        app.frame(&f, &i);
+    }
+}
+
+#[test]
+fn leaving_network_details_cancels_only_the_confirmation_not_the_saved_credential() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Wlan, W, H, PPD);
+    let mut wlan = connected("Home");
+    wlan.networks[0].remembered = true;
+    app.set_wlan(wlan);
+    app.act(Action::NetworkDetails(0), 1000);
+    app.act(Action::ForgetNetwork, 1010);
+    assert!(app.back(1020).is_empty());
+    app.tick(3000);
+    assert_eq!(app.screen(), Screen::Wlan);
+    assert!(!app.state.asking_delete);
+    app.act(Action::NetworkDetails(0), 3100);
+    assert!(
+        !app.frame(&f, &i)
+            .hits
+            .iter()
+            .any(|hit| hit.action == Action::Confirm(Confirm::ForgetNetwork))
+    );
+    assert_eq!(app.act(Action::LeaveNetwork, 3110), [Effect::LeaveWlan]);
+    assert!(app.state.wlan.as_ref().unwrap().networks[0].remembered);
 }
 
 #[test]

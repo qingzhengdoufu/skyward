@@ -20,8 +20,6 @@ mod browser_events;
 #[cfg(target_os = "android")]
 mod find;
 #[cfg(target_os = "android")]
-mod plugins;
-#[cfg(target_os = "android")]
 mod remembered;
 #[cfg(target_os = "android")]
 mod vbmeta;

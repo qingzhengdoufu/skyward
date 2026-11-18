@@ -509,6 +509,10 @@ impl App {
             return fx;
         }
         self.stir(now);
+        if key == Key::VolumeUp && self.browser_immersive() {
+            self.button = Some((key, Press::Spent));
+            return self.set_browser_immersive(false);
+        }
         if matches!(key, Key::Power | Key::VolumeDown) {
             self.chord = Some((key, now));
             return fx;

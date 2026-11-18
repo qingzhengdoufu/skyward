@@ -3032,7 +3032,6 @@ impl Pages<'_> {
                 }
             }
             Effect::FindVbmeta { storage, usb } => self.app.set_vbmeta_copies(crate::vbmeta::find(storage, usb)),
-            Effect::ReadPlugins => self.app.set_plugins(crate::plugins::read(self.app.state.lang)),
             Effect::RememberPassword(code) => match code {
                 Some(credential) => match crate::remembered::save(&credential) {
                     Ok(()) => self.app.state.remembered = Some(credential),
@@ -3121,7 +3120,9 @@ impl Pages<'_> {
                 let asked = wlan_worker(&self.wlan)
                     .map(|w| w.forget(name.clone()))
                     .map_err(|e| format!("{e:#}"));
-                self.app.wlan_forgotten(asked.map(|()| name), now);
+                if let Err(error) = asked {
+                    self.app.wlan_forgotten(Err(error), now);
+                }
             }
             Effect::WriteSkyward { build, slot } => {
                 if self.installer.is_some() || self.partition_busy() {
@@ -3307,7 +3308,14 @@ impl Pages<'_> {
                 ssid,
                 name,
                 security,
-                password: password.0,
+                password: Some(password.0),
+                remember: self.app.state.remember_wlan,
+            }),
+            Effect::JoinRememberedWlan { ssid, name, security } => wlan_worker(&self.wlan)?.send(wlan::Command::Join {
+                ssid,
+                name,
+                security,
+                password: None,
                 remember: self.app.state.remember_wlan,
             }),
             Effect::LeaveWlan => wlan_worker(&self.wlan)?.send(wlan::Command::Leave),

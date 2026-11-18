@@ -126,7 +126,6 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::WlanNetwork => wlan_network(cx),
         Screen::WlanAdd => wlan_add(cx),
         Screen::PowerOff => power_off(cx),
-        Screen::Plugins => plugins(cx),
         Screen::Vbmeta => vbmeta(cx),
     }
 }
@@ -625,17 +624,8 @@ pub fn settings(cx: &Ctx) -> Frame {
         y = widgets::footnote(&mut c, t, f, rows.bottom, note);
     }
     y = widgets::section(&mut c, t, f, y, l.pick(["调试", "偵錯", "Debugging"]));
-    let debug = widgets::list(
-        &mut c,
-        t,
-        f,
-        y,
-        &[
-            Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
-            Row::new(l.pick(PLUGINS)).icon(PURPLE, Icon::More),
-        ],
-    );
-    out.extend(hits(&debug.rows, &[Action::Open(Screen::Terminal), Action::Open(Screen::Plugins)]));
+    let debug = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal)]);
+    out.extend(hits(&debug.rows, &[Action::Open(Screen::Terminal)]));
     y = widgets::section(&mut c, t, f, debug.bottom, l.pick(["关于", "關於", "About"]));
     let mut rows = vec![Row::new(l.pick(ABOUT)).trail(Trail::Value(VERSION))];
     let mut opens = vec![Action::Open(Screen::About)];
@@ -5064,6 +5054,7 @@ pub fn wlan_network(cx: &Ctx) -> Frame {
             security,
         ];
         let y = widgets::detail_grid(&mut c, t, f, y, &items);
+        let y = wlan_forget(cx, &mut c, y, &mut out, network.remembered);
         return Frame::new(t, fit(c, t, y), out, title, top);
     };
     let mut items = vec![detail(
@@ -5114,12 +5105,38 @@ pub fn wlan_network(cx: &Ctx) -> Frame {
         t,
         f,
         y + t.m.card_gap,
-        &[Row::new(l.pick(["删除网络", "刪除網路", "Forget network"]))
+        &[Row::new(l.pick(["断开连接", "中斷連線", "Disconnect"])).trail(Trail::None)],
+    );
+    out.extend(hits(&forget.rows, &[Action::LeaveNetwork]));
+    let y = wlan_forget(cx, &mut c, forget.bottom, &mut out, network.remembered);
+    Frame::new(t, fit(c, t, y), out, title, top)
+}
+
+fn wlan_forget(cx: &Ctx, canvas: &mut Canvas, y: f32, out: &mut Vec<Hit>, remembered: bool) -> f32 {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    if !remembered {
+        return y;
+    }
+    let rows = widgets::list(
+        canvas,
+        t,
+        f,
+        y + t.m.card_gap,
+        &[Row::new(l.pick(["忘记网络", "忘記網路", "Forget network"]))
             .tint(t.pal.danger)
             .trail(Trail::None)],
     );
-    out.extend(hits(&forget.rows, &[Action::LeaveNetwork]));
-    Frame::new(t, fit(c, t, forget.bottom), out, title, top)
+    out.extend(hits(&rows.rows, &[Action::ForgetNetwork]));
+    if !s.asking_delete {
+        return rows.bottom;
+    }
+    let (label, danger) = confirm_label(Confirm::ForgetNetwork, s);
+    let track = widgets::confirm(canvas, t, f, rows.bottom + t.m.dp(24.0), label, danger, s.confirm);
+    out.push(Hit {
+        rect: track,
+        action: Action::Confirm(Confirm::ForgetNetwork),
+    });
+    track.y + track.h
 }
 
 /// The file manager, every entry of the folder shown that its search box
@@ -6672,112 +6689,6 @@ pub fn power_off(cx: &Ctx) -> Frame {
 }
 
 const POWER_OFF: Text = ["关机", "關機", "Power off"];
-
-/// The plugins kept on the phone: where they go, what one has to be, and
-/// what was found. Nothing runs a plugin yet, and the page says so rather
-/// than showing switches for something that would do nothing.
-pub fn plugins(cx: &Ctx) -> Frame {
-    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
-    let mut c = long_page(cx);
-    let mut out = Vec::new();
-    let top = t.m.content_top;
-    let mut y = widgets::section_first(&mut c, t, f, top, l.pick(["已安装的插件", "已安裝的外掛", "Plugins installed"]));
-    match &s.plugins {
-        None => {
-            y = widgets::footnote(
-                &mut c,
-                t,
-                f,
-                y,
-                l.pick(["正在读取插件目录", "正在讀取外掛目錄", "Reading the plugins folder"]),
-            )
-        }
-        Some(Err(why)) => {
-            y = widgets::footnote(
-                &mut c,
-                t,
-                f,
-                y,
-                &tr!(
-                    l,
-                    "无法读取插件目录：{why}",
-                    "無法讀取外掛目錄：{why}",
-                    "The plugins folder can't be read: {why}"
-                ),
-            )
-        }
-        Some(Ok(rows)) if rows.is_empty() => {
-            y = widgets::footnote(
-                &mut c,
-                t,
-                f,
-                y,
-                l.pick(["还没有安装任何插件。", "還沒有安裝任何外掛。", "No plugins are installed yet."]),
-            )
-        }
-        Some(Ok(rows)) => {
-            let titles: Vec<String> = rows
-                .iter()
-                .map(|r| match &r.manifest {
-                    Ok(p) => p.title.clone().unwrap_or_else(|| r.name.clone()),
-                    Err(_) => r.name.clone(),
-                })
-                .collect();
-            let subs: Vec<String> = rows
-                .iter()
-                .map(|r| match &r.manifest {
-                    Ok(p) => p.version.as_ref().map_or_else(
-                        || l.pick(["已安装", "已安裝", "Installed"]).to_string(),
-                        |v| tr!(l, "版本 {v}", "版本 {v}", "Version {v}"),
-                    ),
-                    Err(why) => why.clone(),
-                })
-                .collect();
-            let list: Vec<Row> = titles
-                .iter()
-                .zip(&subs)
-                .map(|(t, s)| Row::new(t).icon(PURPLE, Icon::More).subtitle(s).trail(Trail::None))
-                .collect();
-            let drawn = widgets::list(&mut c, t, f, y, &list);
-            let opens: Vec<Action> = (0..rows.len()).map(Action::OpenPlugin).collect();
-            out.extend(hits(&drawn.rows, &opens));
-            y = drawn.bottom;
-        }
-    }
-    // What a plugin is, so that one can be made against this page before
-    // anything runs it.
-    y = widgets::section(&mut c, t, f, y, l.pick(["什么是插件", "什麼是外掛", "What a plugin is"]));
-    let where_ = l.pick([
-        "插件是一个文件夹，放在内部存储的 Skyward/plugins 中，里面有一个 plugin.json 写明名字、版本和用途。",
-        "外掛是一個資料夾，放在內部儲存空間的 Skyward/plugins 中，裡面有一個 plugin.json 寫明名稱、版本和用途。",
-        "A plugin is a folder in Skyward/plugins on internal storage, holding a plugin.json that names it, its version and what it is for.",
-    ]);
-    let what = l.pick([
-        "本版本只读取并列出插件，还不会运行它们。这是一个为之后的插件功能留出的位置。",
-        "本版本只讀取並列出外掛，還不會執行它們。這是一個為之後的外掛功能留出的位置。",
-        "This release only reads and lists plugins; it does not run them yet. It is the place the plugin feature will grow into.",
-    ]);
-    y = widgets::footnote(&mut c, t, f, y, where_);
-    y = widgets::footnote(&mut c, t, f, y, what);
-    // What can be done today, which is looking at the folder.
-    let open = widgets::list(
-        &mut c,
-        t,
-        f,
-        y + t.m.card_gap,
-        &[Row::new(l.pick([
-            "在文件管理中打开插件目录",
-            "在檔案管理中開啟外掛目錄",
-            "Open the plugins folder in File manager",
-        ]))
-        .trail(Trail::None)],
-    );
-    out.extend(hits(&open.rows, &[Action::OpenPluginFolder]));
-    y = open.bottom;
-    Frame::new(t, fit(c, t, y), out, l.pick(PLUGINS), top)
-}
-
-const PLUGINS: Text = ["插件", "外掛", "Plugins"];
 
 /// The slot's vbmeta image: what it is, the copies kept of it, making one,
 /// and putting one back. A copy older than the phone's rollback index is

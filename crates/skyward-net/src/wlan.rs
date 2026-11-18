@@ -39,6 +39,8 @@ pub struct Network {
     /// The bands its access points are on.
     pub bands: Bands,
     pub security: Security,
+    /// A matching credential is kept by recovery; never carries the password.
+    pub remembered: bool,
 }
 
 /// The bands a network's access points are on.
@@ -149,6 +151,7 @@ pub fn networks(found: &[Bss]) -> Vec<Network> {
                 frequency: bss.frequency,
                 bands: Bands::of(bss.frequency),
                 security: bss.security,
+                remembered: false,
             }),
         }
     }

@@ -211,9 +211,6 @@ pub enum Screen {
     WlanAdd,
     /// Turning the phone off, and what that means: the swipe that does it.
     PowerOff,
-    /// The plugins installed, as much of them as the recovery reads now:
-    /// what one is, where they go, and what was found.
-    Plugins,
     /// The vbmeta image of the slot the phone runs from: the copies kept of
     /// it, making one, and putting one back.
     Vbmeta,
@@ -378,10 +375,6 @@ pub enum Action {
     /// Delete the full package downloaded, from internal storage. A swipe
     /// then confirms it.
     AskDeleteDownload,
-    /// Open the plugin at this place in the list of those found.
-    OpenPlugin(usize),
-    /// Open the folder the plugins are kept in, in the file manager.
-    OpenPluginFolder,
     Open(Screen),
     /// Open the mounted USB drive in the full file manager, not the installer.
     OpenUsbManager,
@@ -883,6 +876,12 @@ pub enum Effect {
         security: Security,
         password: Secret,
     },
+    /// Join using the recovery's stored credential, without sending it to UI.
+    JoinRememberedWlan {
+        ssid: Vec<u8>,
+        name: String,
+        security: Security,
+    },
     LeaveWlan,
     /// Ask the update server for the newest system, telling what it
     /// answered with [`App::update_checked`].
@@ -928,9 +927,6 @@ pub enum Effect {
         storage: bool,
         usb: bool,
     },
-    /// Read the plugins kept on the phone, telling what is found with
-    /// [`App::set_plugins`].
-    ReadPlugins,
     /// Forget the network named `name`, with what was kept of it, telling
     /// how it went with [`App::wlan_forgotten`].
     ForgetWlan(String),
@@ -1485,7 +1481,7 @@ pub(super) fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
-    immersive_pull: Option<(f32, f32)>,
+    immersive_pull: Option<browser::ImmersivePull>,
     shade_pull: Option<shade::ShadePull>,
     shade: Option<shade::Shade>,
     parked: Option<Vec<(Screen, f32, Focus)>>,
