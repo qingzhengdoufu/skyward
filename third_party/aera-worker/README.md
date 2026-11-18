@@ -6,8 +6,9 @@ worker.cpp, protocol.hpp and platform_sandbox.hpp retain Apache-2.0 notices.
 
 Local ARP3 adds an initial bounded native viewport handshake, a 1440x3200
 maximum double buffer, 4x mobile CSS scale, and worker termination diagnostics.
-The worker is dynamically linked against the original pinned musl/WPE 2.52.6
-runtime. Runtime dependencies and sandbox checks are not weakened.
+The worker is dynamically linked against the pinned musl/WPE 2.52.6 runtime.
+Test29 replaces the engine with a separately built WebRTC-enabled version.
+Sandbox checks are not weakened.
 
 Build helpers are in D:/k80ptwrp/audit-tools/prepare-native-worker.py and
 compile-native-worker.sh. A newly packed runtime needs new compressed and
@@ -35,3 +36,14 @@ The unchanged jail still limits aggregate resident memory to 1536 MiB.
 This is pressure management, not evidence that every playback leak is fixed.
 Landscape swaps the native backing dimensions, while recovery rotates pixels
 and inversely maps touches; the DRM configuration is unchanged.
+
+Test29 enables real WebRTC/MediaStream support and uses matched Alpine
+GStreamer 1.26.3 libraries/plugins, replacing the earlier mixed media subset.
+ICE, DTLS, SRTP, SCTP, RTP, Opus and OpenH264 dependencies are included.
+The accepted GPU stack and silent audio sink remain byte-identical to test28.
+Normal browsing logs interface booleans once in an isolated script world;
+it does not create a probe connection or read page state. The separate offline
+capability test creates a receive-only local offer and always closes its peer.
+Run node third_party/aera-worker/rtc_probe_test.cjs for the probe's failure,
+timeout and cleanup tests. Physical sandbox/GPU/service acceptance remains
+separate from the ARM64 QEMU tests; see docs/MIRO-TEST29.md.

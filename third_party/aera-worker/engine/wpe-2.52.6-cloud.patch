@@ -1,0 +1,159 @@
+--- a/Source/WebKit/PlatformWPE.cmake
++++ b/Source/WebKit/PlatformWPE.cmake
+@@ -478,6 +478,9 @@
+ 
+ if (ANDROID)
+     list(APPEND WebKit_PRIVATE_LIBRARIES intl)
++elseif (CMAKE_C_COMPILER_TARGET MATCHES "musl")
++    find_library(SKYWARD_INTL_LIBRARY NAMES intl REQUIRED)
++    list(APPEND WebKit_PRIVATE_LIBRARIES ${SKYWARD_INTL_LIBRARY})
+ endif ()
+ 
+ if (USE_ATK)
+--- a/Source/WTF/wtf/PlatformWPE.cmake
++++ b/Source/WTF/wtf/PlatformWPE.cmake
+@@ -55,6 +55,7 @@
+     glib/GWeakPtr.h
+     glib/RunLoopSourcePriority.h
+     glib/Sandbox.h
++    glib/AERASandbox.h
+     glib/SocketConnection.h
+     glib/SysprofAnnotator.h
+     glib/WTFGType.h
+--- /dev/null
++++ b/Source/WTF/wtf/glib/AERASandbox.h
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++#include <cerrno>
++#include <cstdlib>
++#include <fcntl.h>
++#include <initializer_list>
++#include <linux/capability.h>
++#include <sys/prctl.h>
++#include <sys/stat.h>
++#include <sys/statfs.h>
++#include <sys/statvfs.h>
++#include <sys/syscall.h>
++#include <unistd.h>
++
++namespace aera_sandbox {
++// Defense-in-depth recognition of the platform jail. The trusted launcher
++// establishes the mounts and inherited filter; no environment opt-out exists.
++// This is not a substitute for the launcher's policy or its device tests.
++inline bool Validate() {
++  gid_t groups[1] = {};
++  const int group_count = getgroups(1, groups);
++  if (getuid() != 99090 || geteuid() != 99090 || getgid() != 99090 ||
++      getegid() != 99090 || group_count < 0 || group_count > 1 ||
++      (group_count == 1 && groups[0] != 3003) ||
++      prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1 ||
++      prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != 2 ||
++      getenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS")) return false;
++  struct __user_cap_header_struct h = {_LINUX_CAPABILITY_VERSION_3, 0};
++  struct __user_cap_data_struct c[2] = {};
++  if (syscall(SYS_capget, &h, c) || c[0].effective || c[1].effective ||
++      c[0].permitted || c[1].permitted || c[0].inheritable || c[1].inheritable) return false;
++  for (int i = 0; i <= 40; ++i) {
++    errno = 0;
++    const int state = prctl(PR_CAPBSET_READ, i, 0, 0, 0);
++    if (state == 0) continue;
++    if (state < 0 && errno == EINVAL) break;
++    return false;
++  }
++  struct stat root = {}; struct statfs fs = {}; struct statvfs flags = {};
++  if (stat("/", &root) || root.st_uid || (root.st_mode & 0777) != 0755 ||
++      statfs("/", &fs) || (fs.f_type != 0x01021994 && fs.f_type != 0x858458f6) ||
++      statvfs("/", &flags) || !(flags.f_flag & ST_RDONLY)) return false;
++  for (const char *path : {"/data", "/dev/block", "/sys", "/proc/1"}) {
++    struct stat info = {};
++    if (lstat(path, &info) != -1 || errno != ENOENT) return false;
++  }
++  // exec resets dumpability, so every auxiliary process repeats this check
++  // before initializing WebKit or accepting content.
++  return prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0;
++}
++} // namespace aera_sandbox
+--- a/Source/WTF/wtf/glib/Sandbox.cpp
++++ b/Source/WTF/wtf/glib/Sandbox.cpp
+@@ -24,6 +24,7 @@
+  */
+ 
+ #include "config.h"
++#include "AERASandbox.h"
+ #include <wtf/glib/Sandbox.h>
+ 
+ #include <gio/gio.h>
+@@ -82,6 +83,13 @@
+ 
+ bool shouldUseBubblewrap()
+ {
++#if PLATFORM(WPE)
++    if (getuid() == 99090) {
++        if (!aera_sandbox::Validate())
++            abort();
++        return false;
++    }
++#endif
+ #if ENABLE(BUBBLEWRAP_SANDBOX)
+     return !isInsideFlatpak() && !isInsideSnap() && !isInsideUnsupportedContainer();
+ #else
+--- a/Source/WebKit/NetworkProcess/soup/NetworkProcessMainSoup.cpp
++++ b/Source/WebKit/NetworkProcess/soup/NetworkProcessMainSoup.cpp
+@@ -31,6 +31,7 @@
+ #include "NetworkProcess.h"
+ #include "NetworkSession.h"
+ #include <WebCore/NetworkStorageSession.h>
++#include <wtf/glib/AERASandbox.h>
+ 
+ #if USE(GCRYPT)
+ #include <pal/crypto/gcrypt/Initialization.h>
+@@ -63,6 +64,8 @@
+ 
+ int NetworkProcessMain(int argc, char** argv)
+ {
++    if (getuid() == 99090 && !aera_sandbox::Validate())
++        return 78;
+     return AuxiliaryProcessMain<NetworkProcessMainSoup>(argc, argv);
+ }
+ 
+--- a/Source/WebKit/WebProcess/wpe/WebProcessMainWPE.cpp
++++ b/Source/WebKit/WebProcess/wpe/WebProcessMainWPE.cpp
+@@ -30,6 +30,7 @@
+ #include "AuxiliaryProcessMain.h"
+ #include "WebProcess.h"
+ #include <glib.h>
++#include <wtf/glib/AERASandbox.h>
+ 
+ #if USE(GCRYPT)
+ #include <pal/crypto/gcrypt/Initialization.h>
+@@ -97,6 +98,8 @@
+ 
+ int WebProcessMain(int argc, char** argv)
+ {
++    if (getuid() == 99090 && !aera_sandbox::Validate())
++        return 78;
+     return AuxiliaryProcessMain<WebProcessMainWPE>(argc, argv);
+ }
+ 
+--- a/Source/WebKit/WPEPlatform/wpe/headless/WPEViewHeadless.cpp
++++ b/Source/WebKit/WPEPlatform/wpe/headless/WPEViewHeadless.cpp
+@@ -119,7 +119,7 @@
+     auto now = g_get_monotonic_time();
+     if (!priv->lastFrameTime)
+         priv->lastFrameTime = now;
+-    auto next = priv->lastFrameTime + (G_USEC_PER_SEC / 60);
++    auto next = priv->lastFrameTime + (G_USEC_PER_SEC / 120);
+     priv->lastFrameTime = now;
+     if (next <= now)
+         g_source_set_ready_time(priv->frameSource.get(), 0);
+--- a/Source/WebCore/loader/DocumentLoader.cpp
++++ b/Source/WebCore/loader/DocumentLoader.cpp
+@@ -53,6 +53,7 @@
+ #include "DocumentWriter.h"
+ #include "ElementChildIteratorInlines.h"
+ #include "Event.h"
++#include "EventLoop.h"
+ #include "EventNames.h"
+ #include "ExtensionStyleSheets.h"
+ #include "FormSubmission.h"

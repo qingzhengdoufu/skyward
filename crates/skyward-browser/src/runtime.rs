@@ -10,11 +10,11 @@ use std::{
     path::Path,
 };
 
-pub const COMPRESSED_BYTES: u64 = 41_666_116;
-pub const EXPANDED_BYTES: u64 = 210_918_920;
-pub const MEMBERS: u32 = 448;
-pub const COMPRESSED_SHA256: &str = "1c70823d9a70bc6e7a2ea9da08c156aa03505755aeb3fb7d8a5db553ef6996cb";
-pub const EXPANDED_SHA256: &str = "2113fc9c3d3dd3c6b2d499c33732c0ce22c5bab9c52a00b0dee68cd8839d8f5c";
+pub const COMPRESSED_BYTES: u64 = 45_859_860;
+pub const EXPANDED_BYTES: u64 = 223_699_149;
+pub const MEMBERS: u32 = 474;
+pub const COMPRESSED_SHA256: &str = "1060a5724ff7709cf961fab1edf1ce3be7a3d970ed3ed90d09406e78a3bf421d";
+pub const EXPANDED_SHA256: &str = "2d8777e89e65ffdcd60c3e4aa0a217c70a26d6202e5f34503e99e150af48fe7a";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Inventory {

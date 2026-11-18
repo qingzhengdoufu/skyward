@@ -4,6 +4,7 @@
 #include "protocol.hpp"
 #include "platform_sandbox.hpp"
 #include "frame_layout.hpp"
+#include "rtc_probe.hpp"
 #include <cairo/cairo.h>
 #include <wpe/webkit.h>
 #include <wpe/wpe-platform.h>
@@ -89,6 +90,7 @@ struct Session {
   std::unordered_map<std::string, gint64> playing_documents;
   bool landscape = false;
   bool fullscreen = false;
+  bool capabilities_probed = false;
   WebKitUserScript *viewport_script = nullptr;
   gint64 frame_warning_us = 0;
   std::vector<uint8_t> staged;
@@ -174,6 +176,25 @@ static void Status(Session *s, const char *error = nullptr) {
   const char *text = error ? error : webkit_web_view_get_uri(s->web);
   g_strlcpy(m.text, text ? text : "", sizeof(m.text));
   Send(s, m);
+}
+
+static void CapabilityProbeDone(GObject *object, GAsyncResult *result, gpointer) {
+  GError *error = nullptr;
+  auto *value = webkit_web_view_call_async_javascript_function_finish(
+      WEBKIT_WEB_VIEW(object), result, &error);
+  if (value && jsc_value_is_object(value)) {
+    const auto flag = [value](const char *key) {
+      auto *item = jsc_value_object_get_property(value, key);
+      const bool enabled = item && jsc_value_is_boolean(item) && jsc_value_to_boolean(item);
+      g_clear_object(&item);
+      return enabled;
+    };
+    fprintf(stderr, "Browser interfaces: secure=%d rtc=%d datachannel=%d websocket=%d mediatrack=%d (H264 offer not tested)\n",
+        flag("secure"), flag("rtc"), flag("datachannel"), flag("websocket"),
+        flag("mediatrack"));
+  } else fprintf(stderr, "Browser interfaces: probe unavailable\n");
+  g_clear_object(&value);
+  g_clear_error(&error);
 }
 
 static void ApplyDesktopMode(Session *s, bool enabled) {
@@ -616,9 +637,14 @@ int main(int argc, char **argv) {
   if (!wpe_display_connect(display, &error)) { fprintf(stderr, "Browser display: %s\n", error ? error->message : "failed"); return 78; }
   auto *settings = webkit_settings_new_with_settings("enable-developer-extras", FALSE,
       "enable-javascript", TRUE, "enable-webgl", FALSE,
+      "enable-webrtc", TRUE,
       "enable-fullscreen", TRUE,
       "enable-smooth-scrolling", TRUE,
       "media-playback-requires-user-gesture", TRUE, nullptr);
+  fprintf(stderr, "Browser settings: webrtc=%d media_stream=%d webgl=%d\n",
+      webkit_settings_get_enable_webrtc(settings),
+      webkit_settings_get_enable_media_stream(settings),
+      webkit_settings_get_enable_webgl(settings));
   webkit_settings_set_user_agent(settings,
       "Mozilla/5.0 (Linux; Android 16; CPH2653 Build/BP2A.250605.031.A2) "
       "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -777,6 +803,13 @@ int main(int argc, char **argv) {
   g_signal_connect(s.web, "load-changed", G_CALLBACK(+[](WebKitWebView *, WebKitLoadEvent event, gpointer data) {
     auto *session = static_cast<Session *>(data);
     if (event == WEBKIT_LOAD_STARTED) { session->playing_documents.clear(); UpdateMediaState(session); }
+    const char *uri = webkit_web_view_get_uri(session->web);
+    if (event == WEBKIT_LOAD_FINISHED && !session->capabilities_probed && uri && g_str_has_prefix(uri, "https://")) {
+      session->capabilities_probed = true;
+      webkit_web_view_call_async_javascript_function(session->web,
+          kRtcInterfaceProbe, -1, nullptr, "skyward-capabilities", nullptr,
+          nullptr, CapabilityProbeDone, nullptr);
+    }
   }), &s);
   g_signal_connect(s.view, "buffer-rendered", G_CALLBACK(+[](WPEView *, WPEBuffer *buffer, gpointer data) {
     auto *s = static_cast<Session *>(data);
