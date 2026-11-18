@@ -23,6 +23,10 @@ mod ffs;
 #[cfg(target_os = "android")]
 mod run;
 
+/// The same OTA engine lifecycle is exercised on the phone and in Unix tests.
+#[cfg(any(target_os = "android", all(test, unix)))]
+mod engine;
+
 pub use image::{ImageKind, Ramdisk};
 #[cfg(target_os = "android")]
 pub use run::{Detach, Installer};
