@@ -9,7 +9,7 @@ use skyward_net::dhcp::{self, Kept, Lease};
 use skyward_net::http::Servers;
 use skyward_net::iface;
 use skyward_net::reach::{self, Reach};
-use skyward_net::supplicant::{self, Bss, Control, Event as Told, Saved, SavedNetwork, Security};
+use skyward_net::supplicant::{self, Bss, Control, Event as Told, Saved, Security};
 use skyward_net::wlan::{self, Joined, Link, Next, Power, Stage, Traffic, Wlan};
 use skyward_sys::worker::{self, Teller, Told as InboxEvents};
 use std::fs;
@@ -116,12 +116,10 @@ enum Asked {
 }
 
 /// What the thread tells the screen: how the WLAN stands, how fast data went
-/// over it in the last second, which networks the phone keeps, or how
-/// forgetting one went.
+/// over it in the last second, or how forgetting a network went.
 enum Report {
     Wlan(Wlan),
     Traffic(Traffic),
-    Saved(Vec<SavedNetwork>),
     Forgotten(Result<String, String>),
 }
 
@@ -130,7 +128,6 @@ enum Report {
 /// it cannot take away what that call was going to return.
 #[derive(Default)]
 struct Stashed {
-    saved: Option<Vec<SavedNetwork>>,
     forgotten: Option<Result<String, String>>,
 }
 
@@ -185,16 +182,6 @@ impl Worker {
         self.send(Command::Forget { name });
     }
 
-    /// The networks the phone keeps, if they changed since the last call.
-    ///
-    /// This reads what [`Worker::told`] stashed rather than draining the
-    /// channel itself: two drains of one channel would each take part of what
-    /// the other was going to return, and which part would depend on the
-    /// order the screen happened to ask in.
-    pub fn saved(&self) -> Option<Vec<SavedNetwork>> {
-        self.stashed().saved.take()
-    }
-
     /// How forgetting a network went, if it ended since the last call.
     pub fn forgotten(&self) -> Option<Result<String, String>> {
         self.stashed().forgotten.take()
@@ -225,7 +212,6 @@ impl Worker {
             match report {
                 Report::Wlan(w) => wlan = Some(w),
                 Report::Traffic(t) => traffic = Some(t),
-                Report::Saved(s) => stashed.saved = Some(s),
                 Report::Forgotten(f) => stashed.forgotten = Some(f),
             }
         }
@@ -479,7 +465,6 @@ impl Station {
         }
         save_record(&kept)?;
         self.saved = kept;
-        (self.tell)(Report::Saved(self.saved.iter().map(Saved::shown).collect()));
         // A network whose password is gone must not stay up on it: the
         // supplicant is told to drop what it holds, and the address it gave
         // goes with it.
@@ -766,7 +751,6 @@ impl Station {
         match save_record(&next) {
             Ok(()) => {
                 self.saved = next;
-                (self.tell)(Report::Saved(self.saved.iter().map(Saved::shown).collect()));
             }
             Err(e) => {
                 let _ = skyward_sys::kmsg(&format!("{name} is not kept: {e:#}"));

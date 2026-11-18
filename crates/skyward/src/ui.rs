@@ -2385,13 +2385,10 @@ impl Pages<'_> {
     /// What the WLAN told; its page scans again now and then while it
     /// shows, as the stock settings do.
     pub(super) fn wlan_told(&mut self) -> Result<()> {
-        if let Some(w) = &self.wlan {
-            if let Some(saved) = w.saved() {
-                self.app.set_saved(saved);
-            }
-            if let Some(forgotten) = w.forgotten() {
-                self.app.wlan_forgotten(forgotten, monotonic_ms());
-            }
+        if let Some(w) = &self.wlan
+            && let Some(forgotten) = w.forgotten()
+        {
+            self.app.wlan_forgotten(forgotten, monotonic_ms());
         }
         if let Some((told, traffic)) = self.wlan.as_ref().map(wlan::Worker::told) {
             if let Some(w) = told {

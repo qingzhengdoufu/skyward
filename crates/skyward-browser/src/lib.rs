@@ -9,4 +9,4 @@ pub mod session;
 pub const AERA_COMMIT: &str = "e438f6de62090a79e81daf00b449b48da7377753";
 pub const RUNTIME_FILE: &str = "/skyward/browser/runtime.xz";
 pub const LAUNCHER: &str = "/system/bin/skyward-browser-jail";
-pub const LAUNCHER_SHA256: &str = "a149479f2b952f6762a1721e3979715b7501c8a2e8afc15d30571f6162e0da17";
+pub const LAUNCHER_SHA256: &str = "881a1d81f43edb5d8013fa194788ffb02f2eb18eb71bb5894541a210ae80accb";

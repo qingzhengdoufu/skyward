@@ -29,7 +29,6 @@ use skyward_install::{Event, ImageKind, Outcome, Reflash, Refusal, Stage};
 use skyward_net::download::{Failure, Progress};
 use skyward_net::github::{Build, Newest};
 use skyward_net::release::{Release, Unanswered};
-pub use skyward_net::supplicant::SavedNetwork;
 use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan};
 use skyward_systems::{Overview, Who};
@@ -374,8 +373,6 @@ pub enum Action {
     /// Forget the network the WLAN page's details are of: its password and
     /// how it is protected, from what the phone keeps. A swipe then does it.
     ForgetNetwork,
-    /// Forget the saved network at this place in the list of those kept.
-    ForgetSaved(usize),
     /// Pause the system update package's download, keeping what came of it.
     PauseDownload,
     /// Delete the full package downloaded, from internal storage. A swipe

@@ -4932,53 +4932,11 @@ pub fn wlan(cx: &Ctx) -> Frame {
                 });
             }
             y = list.bottom;
-            // What the phone keeps is not what the scan found: a network
-            // kept is one it has joined, so it is listed apart, with no
-            // signal to show and a button that forgets it.
-            if !s.saved.is_empty() {
-                let y2 = widgets::section(&mut c, t, f, y, l.pick(SAVED_NETWORKS));
-                let kept: Vec<Row> = s
-                    .saved
-                    .iter()
-                    .map(|n| {
-                        Row::new(&n.name).subtitle(fmt::security(l, n.security)).trail(Trail::Network {
-                            locked: locked(n.security),
-                        })
-                    })
-                    .collect();
-                let kept_list = widgets::list(&mut c, t, f, y2, &kept);
-                for (rect, i) in kept_list.rows.iter().zip(0..s.saved.len()) {
-                    out.push(Hit {
-                        rect: widgets::round_button(t, *rect),
-                        action: Action::ForgetSaved(i),
-                    });
-                }
-                y = kept_list.bottom;
-            }
-            // The swipe that asks whether it is meant stands under the list,
-            // never over it, so nothing but the swipe itself can forget.
-            if let Some(name) = &s.forget_pending {
-                let what = tr!(
-                    l,
-                    "忘记「{name}」？手机将不再自动连接它，密码也不再保留。",
-                    "忘記「{name}」？手機將不再自動連線它，密碼也不再保留。",
-                    "Forget “{name}”? The phone will no longer join it by itself, and its password won't be kept."
-                );
-                let note = widgets::footnote(&mut c, t, f, y, &what);
-                let (label, danger) = confirm_label(Confirm::ForgetNetwork, s);
-                let track = widgets::confirm(&mut c, t, f, note + t.m.dp(24.0), label, danger, s.confirm);
-                out.push(Hit {
-                    rect: track,
-                    action: Action::Confirm(Confirm::ForgetNetwork),
-                });
-                y = track.y + track.h;
-            }
         }
     }
     Frame::new(t, fit(c, t, y), out, l.pick(WLAN), top)
 }
 
-const SAVED_NETWORKS: Text = ["已保存的网络", "已儲存的網路", "Saved networks"];
 const REMEMBER_WLAN: Text = ["记住网络", "記住網路", "Remember networks"];
 
 const ADD_NETWORK: Text = ["添加网络", "新增網路", "Add network"];

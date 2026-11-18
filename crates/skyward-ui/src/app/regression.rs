@@ -6536,6 +6536,27 @@ fn connected(name: &str) -> Wlan {
     )
 }
 #[test]
+fn wlan_lists_only_nearby_networks_and_keeps_remembering_independent_of_connection() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Wlan, W, H, PPD);
+    app.set_wlan(Wlan {
+        power: Power::On,
+        networks: vec![network("Nearby", -40, Security::Psk)],
+        joined: None,
+    });
+    let actions = |app: &mut App| app.frame(&f, &i).hits.iter().map(|h| h.action).collect::<Vec<_>>();
+    let disconnected = actions(&mut app);
+    assert!(disconnected.contains(&Action::JoinNetwork(0)));
+    assert!(disconnected.contains(&Action::AddNetwork));
+    assert!(disconnected.contains(&Action::Toggle(Switch::RememberWlan)));
+    app.set_wlan(connected("Nearby"));
+    let connected = actions(&mut app);
+    assert!(connected.contains(&Action::OpenJoined));
+    assert!(connected.contains(&Action::Toggle(Switch::RememberWlan)));
+    assert!(!connected.contains(&Action::Confirm(Confirm::ForgetNetwork)));
+}
+
+#[test]
 fn the_wlan_comes_up_with_the_recovery_rather_than_by_a_switch() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Home, W, H, PPD);

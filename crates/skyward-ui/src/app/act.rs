@@ -941,14 +941,6 @@ impl App {
                     self.refresh();
                 }
             }
-            Action::ForgetSaved(i) => {
-                if let Some(saved) = self.state.saved.get(i) {
-                    self.state.forget_pending = Some(saved.name.clone());
-                    self.state.asking_delete = true;
-                    self.state.confirm = 0.0;
-                    self.refresh();
-                }
-            }
             Action::PauseDownload => {
                 if self.state.download.as_ref().is_some_and(|j| j.outcome.is_none() && !j.stopping) {
                     if let Some(job) = self.state.download.as_mut() {
@@ -1465,15 +1457,9 @@ impl App {
                 ),
             },
             Confirm::ForgetNetwork => {
-                let name = self
-                    .state
-                    .details
-                    .take()
-                    .map(|n| n.name)
-                    .or_else(|| self.state.forget_pending.take());
+                let name = self.state.details.take().map(|n| n.name);
                 self.state.asking_delete = false;
                 self.state.confirm = 0.0;
-                self.state.forget_pending = None;
                 match name {
                     Some(name) => fx.push(Effect::ForgetWlan(name)),
                     None => self.say(

@@ -246,15 +246,6 @@ impl App {
 }
 
 impl App {
-    /// A network joined has its password kept, or the one kept for it is
-    /// taken away: what the WLAN page offers to forget changed.
-    pub fn set_saved(&mut self, saved: Vec<SavedNetwork>) {
-        self.state.saved = saved;
-        self.refresh();
-    }
-}
-
-impl App {
     /// Forgetting a network ended: the page says what came of it, and what
     /// is kept is read again.
     pub fn wlan_forgotten(&mut self, forgot: Result<String, String>, now: u64) {
@@ -273,7 +264,6 @@ impl App {
                 )
             }
         };
-        self.state.forget_pending = None;
         self.state.details = None;
         self.state.asking_delete = false;
         self.state.confirm = 0.0;

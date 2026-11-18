@@ -276,11 +276,6 @@ pub struct State {
     /// that means: the second confirmation stands over the page, and the
     /// swipe it holds is the only place the write comes from.
     pub avb_confirming: bool,
-    /// The network the details page shows and the swipe asks to forget.
-    pub forget_pending: Option<String>,
-    /// The networks whose passwords the phone keeps, as the runtime last
-    /// read them: what the WLAN page offers to forget one of.
-    pub saved: Vec<SavedNetwork>,
     /// The plugins kept on the phone, as the runtime last read them; none
     /// until it has.
     pub plugins: Option<Result<Vec<PluginRow>, String>>,
@@ -407,8 +402,6 @@ impl Default for State {
             vbmeta_pending: None,
             vbmeta_notice: None,
             avb_confirming: false,
-            forget_pending: None,
-            saved: Vec::new(),
             plugins: None,
             plugin_chosen: 0,
         }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Uses AERA's syscall policy, private runtime and dedicated browser storage.
 #include "jail_policy.hpp"
+#include "resource_limits.hpp"
 #include <libminijail.h>
 #include <algorithm>
 #include <cstdio>
@@ -69,17 +70,29 @@ static void PersistentStorage() {
 }
 
 // Observe only the private process group. Terminate the whole tree when it
-// exceeds its aggregate resident-memory or process bound on cgroup-v2 phones.
+// exceeds its aggregate resident-memory, process or thread bound.
 static bool WithinLimits(pid_t group) {
   DIR *entries = opendir("/proc");
   if (!entries) { perror("browser supervisor: inspect process group"); return false; }
   unsigned count = 0;
+  unsigned tasks = 0;
   uint64_t pages = 0;
   while (dirent *entry = readdir(entries)) {
     char *end = nullptr;
     long pid = strtol(entry->d_name, &end, 10);
     if (pid <= 0 || !end || *end || getpgid(pid) != group) continue;
     ++count;
+    const std::string task_path = std::string("/proc/") + entry->d_name + "/task";
+    DIR *threads = opendir(task_path.c_str());
+    if (threads) {
+      while (dirent *thread = readdir(threads))
+        if (thread->d_name[0] >= '0' && thread->d_name[0] <= '9') ++tasks;
+      closedir(threads);
+    } else if (errno != ENOENT && errno != ESRCH) {
+      closedir(entries);
+      perror("browser supervisor: inspect threads");
+      return false;
+    }
     const std::string path = std::string("/proc/") + entry->d_name + "/statm";
     FILE *file = fopen(path.c_str(), "re");
     unsigned long unused = 0, resident = 0;
@@ -87,9 +100,10 @@ static bool WithinLimits(pid_t group) {
   }
   closedir(entries);
   const uint64_t bytes = pages * static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
-  const bool within = count <= 96 && bytes <= (1536ULL << 20);
-  if (!within) fprintf(stderr, "browser supervisor: resource limit, processes=%u/96, resident=%llu/1610612736 bytes\n",
-      count, static_cast<unsigned long long>(bytes));
+  const bool within = skyward_browser_limits::Within(count, tasks, bytes);
+  if (!within) fprintf(stderr, "browser supervisor: resource limit, processes=%u/%u, tasks=%u/%u, resident=%llu/%llu bytes\n",
+      count, skyward_browser_limits::kProcesses, tasks, skyward_browser_limits::kTasks,
+      static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(skyward_browser_limits::kResidentBytes));
   return within;
 }
 
@@ -152,7 +166,7 @@ int main(int argc, char **argv) {
   // Only the supervised child changes access: every exit path is restored
   // by the parent, including a partial setup failure.
   GiveDevices();
-  rlimit files{512, 512}, processes{96, 96}, core{0, 0}, size{64ULL << 20, 64ULL << 20};
+  rlimit files{512, 512}, processes{skyward_browser_limits::kTasks, skyward_browser_limits::kTasks}, core{0, 0}, size{64ULL << 20, 64ULL << 20};
   Check(setrlimit(RLIMIT_NOFILE, &files), "browser file limit");
   Check(setrlimit(RLIMIT_NPROC, &processes), "browser process limit");
   Check(setrlimit(RLIMIT_CORE, &core), "browser core limit");

@@ -252,27 +252,6 @@ impl Saved {
         self.ssid == other.ssid
     }
 
-    /// What of this network a page is told: its name and its protection, and
-    /// never the password, which no page draws.
-    pub fn shown(&self) -> SavedNetwork {
-        SavedNetwork { ssid: self.ssid.clone(), name: self.name.clone(), security: self.security }
-    }
-}
-
-/// A network whose password the phone keeps, as a page that offers to forget
-/// one of them shows it.
-///
-/// This is not the same thing as what a scan found ([`crate::wlan::Network`]):
-/// a network kept is one the phone has joined, so it has no signal strength
-/// and no band, and it is the name as bytes that tells two of them apart.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SavedNetwork {
-    /// The name as the access point sends it, which need not be UTF-8.
-    pub ssid: Vec<u8>,
-    /// That name with what is not UTF-8 put right, which two networks can
-    /// share: it is for showing, never for telling them apart.
-    pub name: String,
-    pub security: Security,
 }
 
 /// `kept` written as the file that holds it, one network to a line: the
