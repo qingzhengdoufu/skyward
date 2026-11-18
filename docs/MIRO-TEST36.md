@@ -80,3 +80,35 @@ build snapshot are backed up privately under:
 E:/K80Pro-Skyward-Backups/miro-test36-official-ota-native.
 The earlier full dependency/sysroot snapshot remains in miro-test29-cloud-native.
 No public release/push is authorized for this browser-enabled build.
+
+## Device Acceptance After Reconnection
+
+The user reconnected the phone and explicitly authorized flashing test36,
+booting Android and then shutting down the PC. They subsequently requested
+both test36 IMG and the official ZIP copied to phone storage. This section
+supersedes the earlier disconnected/offline-only status above.
+
+Only recovery_a was flashed after product miro, slot A, unlocked bootloader,
+bootloader-mode and partition-size checks. Full recovery_a SHA256, on-disk
+ELF and running /proc/389/exe match the independently verified test36 image.
+Runtime and jail digests match too. No slot setting or vbmeta was changed.
+WiFi auto-connects, obtains DHCP, reaches the internet and synchronizes time.
+An actual 800 ms control-center WiFi hold opens WLAN and scans successfully;
+PID stays 389 and the final crash buffer is empty. No decryption password was
+entered on this boot; no new decryption acceptance claim is made.
+
+Both phone Download files were SHA256-verified before reboot:
+- skyward-v1.0.0-miro-test36-aera.img:
+  2aa50f329ec3fa2607c1e2c15607b58af791ff890dec2bffc778e244de6d6b99
+- miro-ota_full-OS4.0.3.0.XOMCNXM-user-17.0-526d60ce11.zip:
+  451ed9001b4ec5bcb801173068faa44c48b316e0a1b0b1fb29ee286e0fa1bb44
+
+ADB reboot returned to Android, sys.boot_completed=1, product miro, slot _a.
+The official ZIP has NOT been installed; actual OTA compatibility remains
+untested. No data format, system flash or AVB operation occurred. Browser
+work remains paused/unresolved. Source tree is committed and private.
+
+Evidence: D:/k80ptwrp/out/test36-flash-20261119-053316.
+Updated private source/history and acceptance evidence are saved under the
+E backup's device-acceptance folder. PC shutdown follows only after that
+backup is verified; this document itself does not claim shutdown occurred.
