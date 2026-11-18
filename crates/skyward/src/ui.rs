@@ -1774,18 +1774,10 @@ impl<'a> Pages<'a> {
         self.take_in(drive_told, now)?;
         self.offer_storage(now)
     }
-    /// What time passing asks for: the motor's clicks and ticks, and the
-    /// status bar's clock drawn again as its minute turns.
+    /// Timed UI actions use the same effect handling as touches and keys.
     pub(super) fn tick(&mut self, now: u64) -> Result<()> {
-        for fx in self.app.tick(now) {
-            match fx {
-                Effect::Haptic => self.click()?,
-                Effect::Ticks => self.ticks()?,
-                other => {
-                    unreachable!("time passing asks for nothing but the motor, not {other:?}")
-                }
-            }
-        }
+        let effects = self.app.tick(now);
+        self.dispatch_effects(effects, now)?;
         let time = clock(self.app.state.time_zone)?;
         if time != self.shown_clock {
             self.shown_clock = time;
@@ -2710,14 +2702,17 @@ impl Pages<'_> {
                 Incoming::Input(Event::Pinch(scale, at)) => self.app.browser_pinch(scale, at),
                 Incoming::Input(Event::PinchStart) => self.app.browser_cancel_touch(),
             };
-            let mut queue = VecDeque::from(effects);
-            while let Some(fx) = queue.pop_front() {
-                eprintln!("effect {:?} (payload omitted)", std::mem::discriminant(&fx));
-                queue.extend(self.effect(fx, now)?);
-            }
+            self.dispatch_effects(effects, now)?;
         }
         Ok(())
     }
+    fn dispatch_effects(&mut self, effects: Vec<Effect>, now: u64) -> Result<()> {
+        crate::effect_queue::dispatch(effects, |fx| {
+            eprintln!("effect {:?} (payload omitted)", std::mem::discriminant(&fx));
+            self.effect(fx, now)
+        })
+    }
+
     /// Do what a page asks for, and give what the pages ask for in answer
     /// to it.
     pub(super) fn effect(&mut self, fx: Effect, now: u64) -> Result<Vec<Effect>> {

@@ -17,6 +17,8 @@ mod browser_aera;
 mod cdp;
 #[cfg(any(target_os = "android", test))]
 mod browser_events;
+#[cfg(any(target_os = "android", test))]
+mod effect_queue;
 #[cfg(target_os = "android")]
 mod find;
 #[cfg(target_os = "android")]

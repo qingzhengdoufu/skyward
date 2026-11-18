@@ -666,9 +666,17 @@ fn control_tiles_hold_to_open_without_toggling_or_clicking_on_release() {
                     .any(|effect| matches!(effect, Effect::Wlan(_) | Effect::FileTransfer(_)))
             );
             assert_eq!(app.screen(), page);
+            if page == Screen::Wlan {
+                assert!(
+                    effects.contains(&Effect::ScanWlan),
+                    "timed navigation must reach the runtime scan handler"
+                );
+            }
             assert!(app.shade.is_none());
             assert_eq!((app.state.vibrate, app.state.file_transfer, app.state.double_tap), old);
             assert!(app.touch(Touch::Up, &f, 3500).is_empty());
+            let mut canvas = Canvas::new(W, H);
+            app.compose(&mut canvas, &f, &i, "12:00", 3500);
             assert!(app.tick(3600).is_empty());
         }
     }
