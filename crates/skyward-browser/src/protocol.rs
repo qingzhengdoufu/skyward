@@ -66,7 +66,7 @@ impl Message {
 
     pub fn validate_worker(&self) -> Result<()> {
         let valid = match self.kind {
-            32 => valid_viewport(self.x, self.y) && self.value == self.x as u32 * self.y as u32 * 4,
+            32 => valid_frame(self.x, self.y) && self.value == self.x as u32 * self.y as u32 * 4,
             33 => self.value <= 100 && (0..=1).contains(&self.x) && (0..=1).contains(&self.y),
             34 | 36 | 42 | 43 => true,
             35 => self.value <= 10,
@@ -86,11 +86,11 @@ impl Message {
     pub fn validate_command(&self) -> Result<()> {
         let valid = match self.kind {
             1 => address(&self.text).is_ok(),
-            2..=5 | 10..=11 | 15 => true,
+            2..=5 | 10..=11 | 15 | 20 => true,
             9 => self.value <= 0x10ffff && !(0xd800..=0xdfff).contains(&self.value),
             16 => valid_viewport(self.x, self.y),
-            17..=19 => self.value <= 100,
-            6..=8 => (0..VIEW_WIDTH).contains(&self.x) && (0..VIEW_HEIGHT).contains(&self.y) && self.value < 2,
+            18..=19 => self.value <= 1,
+            6..=8 => (0..VIEW_HEIGHT).contains(&self.x) && (0..VIEW_HEIGHT).contains(&self.y) && self.value < 2,
             12 => (50..=300).contains(&self.value),
             13 => self.sequence > 0,
             14 => self.value <= 2,
@@ -103,6 +103,10 @@ impl Message {
 
 pub fn valid_viewport(width: i32, height: i32) -> bool {
     (320..=WIDTH as i32).contains(&width) && (400..=HEIGHT as i32).contains(&height) && width % 4 == 0 && height % 4 == 0
+}
+
+pub fn valid_frame(width: i32, height: i32) -> bool {
+    valid_viewport(width, height) || valid_viewport(height, width)
 }
 
 pub fn address(input: &str) -> Result<String> {
@@ -177,11 +181,25 @@ mod tests {
         frame.value = 1440 * 2492 * 4;
         frame.sequence = 1;
         assert_eq!(frame.frame_offset().unwrap(), FRAME_BYTES);
+        std::mem::swap(&mut frame.x, &mut frame.y);
+        assert_eq!(frame.frame_offset().unwrap(), FRAME_BYTES);
         for (width, height) in [(1441, 2492), (1440, 3204), (1440, 2493), (0, 800)] {
             let mut viewport = Message::command(16);
             viewport.x = width;
             viewport.y = height;
             assert!(viewport.validate_command().is_err());
+        }
+    }
+
+    #[test]
+    fn retired_volume_command_is_rejected_and_mode_commands_are_boolean() {
+        assert!(Message::command(17).validate_command().is_err());
+        for kind in [18, 19] {
+            let mut command = Message::command(kind);
+            command.value = 1;
+            assert!(command.validate_command().is_ok());
+            command.value = 2;
+            assert!(command.validate_command().is_err());
         }
     }
 

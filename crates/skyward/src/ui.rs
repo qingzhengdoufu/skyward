@@ -2679,6 +2679,7 @@ impl Pages<'_> {
             Some(c) => c.requests()?,
             None => Vec::new(),
         };
+        self.inputs.set_pinch_enabled(self.app.browser_accepts_pinch());
         let incoming = self
             .arriving
             .take()
@@ -2709,6 +2710,8 @@ impl Pages<'_> {
                     self.app.key(k, now)
                 }
                 Incoming::Input(Event::Key(k, false)) => self.app.key_up(k, now),
+                Incoming::Input(Event::Pinch(scale, at)) => self.app.browser_pinch(scale, at),
+                Incoming::Input(Event::PinchStart) => self.app.browser_cancel_touch(),
             };
             let mut queue = VecDeque::from(effects);
             while let Some(fx) = queue.pop_front() {
@@ -2723,14 +2726,14 @@ impl Pages<'_> {
     pub(super) fn effect(&mut self, fx: Effect, now: u64) -> Result<Vec<Effect>> {
         let cfg = self.cfg;
         match fx {
-            Effect::SetMediaVolume(percent) => {
-                if let Some(worker) = &self.browser_stream {
-                    worker.command(crate::browser::Control::Volume { percent });
-                }
-            }
             Effect::BrowserPluginDesktop { enabled } => {
                 if let Some(worker) = &self.browser_stream {
                     worker.command(crate::browser::Control::Desktop { enabled });
+                }
+            }
+            Effect::BrowserPluginCancelTouch => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::CancelTouch);
                 }
             }
             Effect::BrowserPluginLandscape { enabled } => {
@@ -2878,8 +2881,11 @@ impl Pages<'_> {
                 let _ = out;
                 match crate::browser::Worker::start(task, self.servers.clone()) {
                     Ok(worker) => {
-                        worker.command(crate::browser::Control::Volume {
-                            percent: (self.app.state.media_volume * 100.0).round() as u8,
+                        worker.command(crate::browser::Control::Desktop {
+                            enabled: self.app.state.browser.desktop_mode,
+                        });
+                        worker.command(crate::browser::Control::Landscape {
+                            enabled: self.app.state.browser.landscape_mode,
                         });
                         self.browser_stream = Some(worker);
                     }

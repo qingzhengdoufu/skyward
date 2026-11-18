@@ -458,37 +458,7 @@ fn hidden_browser_failure_never_restarts_or_switches_the_users_page() {
     ));
 }
 
-#[test]
-fn status_volume_drag_does_not_open_control_center_or_send_page_touches() {
-    let f = fonts();
-    for (w, h, ppd) in [(720, 1600, 1.875), (W, H, PPD), (W, H, 3.75)] {
-        let mut app = App::new(Screen::Browser, w, h, ppd);
-        app.state.browser.full_active = true;
-        let rect = app.volume_rect();
-        assert_eq!(
-            app.touch(Touch::Down(rect.x, rect.centre().1), &f, 1000),
-            vec![Effect::SetMediaVolume(0)]
-        );
-        assert_eq!(
-            app.touch(Touch::Move(rect.x + rect.w, rect.centre().1), &f, 1010),
-            vec![Effect::SetMediaVolume(100)]
-        );
-        let m = app.theme().m;
-        assert_eq!(
-            app.touch(
-                Touch::Move(rect.x + m.dp(15.0) + (rect.w - m.dp(16.0)) / 2.0, rect.centre().1),
-                &f,
-                1015
-            ),
-            vec![Effect::SetMediaVolume(50)]
-        );
-        app.touch(Touch::Up, &f, 1020);
-        assert!(app.shade.is_none());
-        assert_eq!(app.state.media_volume, 0.5);
-        assert_eq!(app.volume(true, 1030), vec![Effect::SetMediaVolume(45)]);
-    }
-}
-
+#[cfg(feature = "aera-browser")]
 #[test]
 fn control_center_keeps_its_hits_when_a_full_browser_is_active() {
     let f = fonts();
@@ -498,7 +468,7 @@ fn control_center_keeps_its_hits_when_a_full_browser_is_active() {
     app.state.data = Data::Open;
     app.state.wlan = Some(connected("Skyward"));
     app.act(Action::OpenControlCenter, 0);
-    app.tick(400);
+    app.tick(2000);
     let frame = app.frame(&f, &info());
     let wifi = frame
         .hits
@@ -507,10 +477,79 @@ fn control_center_keeps_its_hits_when_a_full_browser_is_active() {
         .map(|hit| hit.rect)
         .expect("control center keeps the WLAN hit");
     let (x, y) = wifi.centre();
-    app.touch(Touch::Down(x, y), &f, 500);
-    let effects = app.touch(Touch::Up, &f, 510);
-    assert!(effects.is_empty());
+    app.browser_plugin_pixels(4, 4, vec![255; 64]);
+    assert!(app.frame.is_some(), "background frames must keep control-center hit regions");
+    app.touch(Touch::Down(x, y), &f, 2100);
+    app.browser_plugin_pixels(4, 4, vec![128; 64]);
+    let effects = app.touch(Touch::Up, &f, 2110);
+    assert_eq!(effects, vec![Effect::Wlan(false)]);
     assert!(app.shade.is_some() && app.screen() == Screen::ControlCenter);
+    assert_eq!(app.state.wlan.as_ref().unwrap().power, Power::Off);
+    let brightness = app
+        .frame(&f, &info())
+        .hits
+        .iter()
+        .find(|hit| hit.action == Action::Slider(Slider::Brightness))
+        .unwrap()
+        .rect;
+    let cy = brightness.centre().1;
+    app.touch(Touch::Down(brightness.x + brightness.w * 0.25, cy), &f, 2200);
+    app.browser_plugin_pixels(4, 4, vec![64; 64]);
+    app.touch(Touch::Move(brightness.x + brightness.w * 0.75, cy), &f, 2210);
+    app.touch(Touch::Up, &f, 2220);
+    assert!((app.state.brightness - 0.75).abs() < 0.001);
+}
+
+#[test]
+fn media_playback_blocks_idle_sleep_but_pause_and_manual_power_still_work() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.state.screen_off = 0;
+    app.tick(0);
+    app.browser_plugin_media_playing(true, 1000);
+    app.tick(60_000);
+    assert!(app.display_on() && app.idle_due().is_none());
+    app.sleep(60_001);
+    app.tick(60_002);
+    assert!(!app.display_on(), "media events must not override manual sleep");
+    app.wake(60_003);
+    app.browser_plugin_media_playing(false, 60_100);
+    app.tick(75_101);
+    assert!(!app.display_on());
+}
+
+#[cfg(feature = "aera-browser")]
+#[test]
+fn video_failure_does_not_fall_back_to_a_text_renderer_or_restart_forever() {
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.state.data = Data::Open;
+    app.act(Action::Open(Screen::Browser), 0);
+    app.browser_plugin_media_playing(true, 1);
+    for at in 2..=3 {
+        assert!(matches!(
+            app.browser_plugin_failed("media interrupted".into(), at).as_slice(),
+            [Effect::BrowserPluginStart { .. }]
+        ));
+    }
+    assert!(app.browser_plugin_failed("media interrupted".into(), 4).is_empty());
+    assert!(!app.state.browser.full_active && app.state.browser.prefer_full);
+    assert!(matches!(app.state.browser.view, BrowserView::Failed { .. }));
+    assert!(matches!(
+        app.act(Action::BrowserReload, 5).as_slice(),
+        [Effect::BrowserPluginStart { .. }]
+    ));
+}
+
+#[test]
+fn browser_pinch_is_bounded_and_cannot_operate_the_control_center() {
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.state.browser.full_active = true;
+    app.state.browser.desktop_mode = true;
+    assert_eq!(app.browser_pinch(1.25, 1000), vec![Effect::BrowserPluginPinch { scale: 1.25 }]);
+    assert!(app.browser_pinch(f32::NAN, 1001).is_empty());
+    assert!(app.browser_pinch(0.0, 1001).is_empty());
+    app.act(Action::OpenControlCenter, 1010);
+    assert!(app.browser_pinch(1.5, 1020).is_empty());
 }
 
 #[test]

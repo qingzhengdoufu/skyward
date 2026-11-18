@@ -168,15 +168,6 @@ impl Cdp {
         Ok(())
     }
 
-    pub fn media_volume(&mut self, percent: u8) -> Result<()> {
-        let expression = format!(
-            "document.querySelectorAll('video,audio').forEach(e=>e.volume={}/100)",
-            percent.min(100)
-        );
-        self.call("Runtime.evaluate", json!({"expression": expression}))?;
-        Ok(())
-    }
-
     pub fn key(&mut self, value: u32) -> Result<()> {
         let (key, code) = match value {
             8 => ("Backspace", "Backspace"),

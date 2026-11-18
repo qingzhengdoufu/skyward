@@ -47,7 +47,6 @@ pub struct Settings {
     pub dark: bool,
     /// The brightness slider's place, from 0 at its left end to 1.
     pub brightness: f32,
-    pub media_volume: f32,
     /// How long the screen stays on with nothing touched, in seconds; 0
     /// keeps it on.
     pub screen_off: u64,
@@ -151,7 +150,6 @@ impl Settings {
             spoken: Some(state.lang.tag().to_string()),
             dark: state.dark,
             brightness: state.brightness,
-            media_volume: state.media_volume,
             screen_off: SCREEN_OFF[state.screen_off].map_or(0, |ms| ms / 1000),
             time_zone: TIME_ZONES[state.time_zone].2.to_string(),
             vibrate: state.vibrate,
@@ -218,9 +216,6 @@ impl Settings {
             state.language_chosen = true;
         }
         state.dark = self.dark;
-        if (0.0..=1.0).contains(&self.media_volume) {
-            state.media_volume = self.media_volume;
-        }
         if (0.0..=1.0).contains(&self.brightness) {
             state.brightness = self.brightness;
         }
@@ -365,24 +360,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn media_volume_survives_restart_and_old_settings_keep_a_quiet_default() {
-        let state = State {
-            media_volume: 0.42,
-            ..State::default()
-        };
+    fn retired_media_setting_is_ignored_without_losing_existing_preferences() {
+        let settings = Settings::read(r#"{"media_volume":0.8,"brightness":0.6,"dark":true}"#).unwrap();
         let mut back = State::default();
-        Settings::read(&Settings::of(&state).text()).unwrap().apply(&mut back);
-        assert_eq!(back.media_volume, 0.42);
-        Settings::read("{}").unwrap().apply(&mut back);
-        assert_eq!(back.media_volume, 0.15);
-        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
-            Settings {
-                media_volume: value,
-                ..Settings::default()
-            }
-            .apply(&mut back);
-            assert_eq!(back.media_volume, 0.15);
-        }
+        settings.apply(&mut back);
+        assert_eq!(back.brightness, 0.6);
+        assert!(back.dark);
+        assert!(!settings.text().contains("media_volume"));
     }
 
     #[test]

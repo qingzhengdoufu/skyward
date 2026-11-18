@@ -2,7 +2,6 @@ use crate::{
     app::*,
     canvas::Canvas,
     color::Rgba,
-    geom::Rect,
     icons::Icon,
     pages::{Band, Ctx},
     widgets::{self, Row, Trail},
@@ -341,16 +340,9 @@ pub fn control(cx: &Ctx) -> Frame {
         rect: slider,
         action: Action::Slider(Slider::Brightness),
     });
-    let audio = Rect::new(x, slider.y + slider.h + m.dp(10.0), width, m.dp(42.0));
-    c.fill_round_rect(audio.x, audio.y, audio.w, audio.h, m.dp(8.0), panel);
-    let filled = (audio.w * s.media_volume.clamp(0.0, 1.0)).max(m.dp(8.0));
-    c.fill_round_rect(audio.x, audio.y, filled, audio.h, m.dp(8.0), Rgba::rgb(158, 158, 160));
-    let (speaker_x, speaker_y) = (audio.x + m.dp(22.0), audio.y + audio.h / 2.0);
-    crate::icons::glyph(&mut c, Icon::Volume, speaker_x, speaker_y, m.dp(20.0), t.pal.text);
-    out.push(Hit { rect: audio, action: Action::Slider(Slider::MediaVolume) });
     let handle = crate::geom::Rect::new(
         m.w as f32 / 2.0 - m.dp(18.0),
-        audio.y + audio.h + m.dp(10.0),
+        slider.y + slider.h + m.dp(10.0),
         m.dp(36.0),
         m.dp(4.0),
     );

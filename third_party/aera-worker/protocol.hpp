@@ -15,6 +15,7 @@ constexpr int kMaxWidth = 1440, kMaxHeight = 3200;
 inline int kWidth = kMaxWidth, kHeight = kMaxHeight;
 inline int kViewWidth = kMaxWidth / 4, kViewHeight = kMaxHeight / 4;
 constexpr double kDeviceScale = 4.0;
+inline int kPortraitWidth = kMaxWidth, kPortraitHeight = kMaxHeight;
 inline uint32_t kFrameBytes = kWidth * kHeight * 4;
 constexpr uint32_t kFrameSlots = 2;
 constexpr uint32_t kSlotBytes = kMaxWidth * kMaxHeight * 4;
@@ -24,7 +25,7 @@ constexpr uint32_t FrameSlot(uint32_t sequence) {
 }
 enum class Kind : uint32_t { kOpen = 1, kBack, kForward, kReload, kStop,
   kTouchDown, kTouchMove, kTouchUp, kKey, kAck, kClose, kSetZoom,
-  kDownloadCancel, kSetCookiePolicy, kClearBrowsingData, kViewport, kVolume, kDesktop, kLandscape,
+  kDownloadCancel, kSetCookiePolicy, kClearBrowsingData, kViewport, kDesktop = 18, kLandscape, kTouchCancel,
   kFrame = 32, kStatus, kError, kKeyboardShow, kKeyboardHide,
   kDownloadStarted, kDownloadProgress, kDownloadFinished,
   kDownloadFailed, kDownloadCancelled, kBrowsingDataCleared,
@@ -57,7 +58,6 @@ inline bool Valid(const Message &m, bool from_worker) {
            m.kind == Kind::kBrowsingDataCleared ||
            m.kind == Kind::kBrowsingDataFailed;
   switch (m.kind) {
-    case Kind::kVolume: return m.value <= 100;
     case Kind::kDesktop: case Kind::kLandscape: return m.value <= 1;
     case Kind::kViewport: return m.x >= 320 && m.x <= kMaxWidth && m.y >= 400 && m.y <= kMaxHeight && m.x % 4 == 0 && m.y % 4 == 0;
     case Kind::kTouchDown: case Kind::kTouchMove: case Kind::kTouchUp:
@@ -67,6 +67,7 @@ inline bool Valid(const Message &m, bool from_worker) {
     case Kind::kDownloadCancel: return m.sequence > 0;
     case Kind::kSetCookiePolicy: return m.value <= 2;
     case Kind::kClearBrowsingData: return true;
+    case Kind::kTouchCancel: return true;
     case Kind::kOpen: case Kind::kBack: case Kind::kForward: case Kind::kReload:
     case Kind::kStop: case Kind::kKey: case Kind::kAck: case Kind::kClose: return true;
     default: return false;

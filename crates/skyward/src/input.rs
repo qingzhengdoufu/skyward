@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use evdev::raw_stream::RawDevice;
 use evdev::{AbsoluteAxisCode, EventSummary, InputEvent, KeyCode, PropType, SynchronizationCode};
 use skyward_config::Write;
@@ -14,6 +14,9 @@ use std::path::PathBuf;
 pub enum Event {
     /// A touch and when the panel reported it, on [`monotonic_ms`]'s clock.
     Touch(Touch, u64),
+    /// Incremental two-finger scale; single-finger recovery controls are unchanged.
+    Pinch(f32, u64),
+    PinchStart,
     /// A button going down, or coming back up.
     Key(Key, bool),
 }
@@ -35,7 +38,12 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-const KEYS: [KeyCode; 4] = [KeyCode::KEY_POWER, KeyCode::KEY_VOLUMEUP, KeyCode::KEY_VOLUMEDOWN, KeyCode::KEY_BACK];
+const KEYS: [KeyCode; 4] = [
+    KeyCode::KEY_POWER,
+    KeyCode::KEY_VOLUMEUP,
+    KeyCode::KEY_VOLUMEDOWN,
+    KeyCode::KEY_BACK,
+];
 
 fn key_of(code: KeyCode) -> Option<Key> {
     match code {
@@ -52,10 +60,13 @@ fn gone(e: &io::Error) -> bool {
     e.raw_os_error() == Some(libc::ENODEV)
 }
 
-/// Slot 0's value of a multitouch axis. The kernel keeps multitouch values
+/// A slot's value of a multitouch axis. The kernel keeps multitouch values
 /// per slot, apart from the axis state the ABS queries return, and hands
 /// them out through EVIOCGMTSLOTS: the axis code, then one value per slot.
-fn slot0_value(dev: &RawDevice, axis: AbsoluteAxisCode, slots: usize) -> io::Result<i32> {
+fn slot_value(dev: &RawDevice, axis: AbsoluteAxisCode, slots: usize, index: usize) -> io::Result<i32> {
+    if index >= slots || slots > 256 {
+        return Err(io::Error::new(ErrorKind::InvalidData, "invalid touch slot extent"));
+    }
     let mut buf = vec![0i32; 1 + slots];
     buf[0] = i32::from(axis.0);
     // _IOC(_IOC_READ, 'E', 0x0a, size)
@@ -63,11 +74,10 @@ fn slot0_value(dev: &RawDevice, axis: AbsoluteAxisCode, slots: usize) -> io::Res
     if unsafe { libc::ioctl(dev.as_raw_fd(), request as _, buf.as_mut_ptr()) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(buf[1])
+    Ok(buf[index + 1])
 }
 
-/// The direct-touch panel. Only the first finger is followed (multitouch
-/// protocol B, slot 0).
+/// Protocol B slot 0 retains recovery's single-finger input; slot 1 adds pinch.
 struct Panel {
     dev: RawDevice,
     path: PathBuf,
@@ -79,9 +89,23 @@ struct Panel {
     was_down: bool,
     raw: (i32, i32),
     moved: bool,
+    second: Contact,
+    pinch: Option<f32>,
+    pinching: bool,
     /// The kernel dropped events that were not read in time; what arrives
     /// up to the next report is incomplete.
     dropped: bool,
+}
+
+#[derive(Default)]
+struct Contact {
+    down: bool,
+    raw: (i32, i32),
+}
+
+fn pinch_scale(previous: Option<f32>, distance: f32) -> Option<f32> {
+    let previous = previous?;
+    (previous.is_finite() && distance.is_finite() && previous >= 24.0 && distance >= 24.0).then(|| (distance / previous).clamp(0.5, 2.0))
 }
 
 impl Panel {
@@ -108,29 +132,59 @@ impl Panel {
             return Err(io::Error::last_os_error()).context("stamp touch events with the monotonic clock");
         }
         set_nonblocking(dev.as_raw_fd()).context("make touch non-blocking")?;
-        let mut panel =
-            Panel { dev, path, x_range, y_range, slots, slot: 0, down: false, was_down: false, raw: (0, 0), moved: false, dropped: false };
+        let mut panel = Panel {
+            dev,
+            path,
+            x_range,
+            y_range,
+            slots,
+            slot: 0,
+            down: false,
+            was_down: false,
+            raw: (0, 0),
+            moved: false,
+            second: Contact::default(),
+            pinch: None,
+            pinching: false,
+            dropped: false,
+        };
         // The kernel drops a position equal to the one a slot already holds,
         // so a touch landing where the last one lifted carries no position;
         // start from what the panel holds now.
         panel.resync().context("read the touch state")?;
-        eprintln!("touch {:?}: x {:?} y {:?}, {slots} slots, slot 0 at {:?}", panel.dev.name().unwrap_or("?"), x_range, y_range, panel.raw);
+        eprintln!(
+            "touch {:?}: x {:?} y {:?}, {slots} slots, slot 0 at {:?}",
+            panel.dev.name().unwrap_or("?"),
+            x_range,
+            y_range,
+            panel.raw
+        );
         Ok(panel)
     }
 
-    /// Read the current slot and slot 0's finger back from the panel.
+    /// Read the active slot and the first two fingers back from the panel.
     fn resync(&mut self) -> io::Result<()> {
         self.slot = self.dev.get_abs_state()?[usize::from(AbsoluteAxisCode::ABS_MT_SLOT.0)].value;
-        self.down = slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_TRACKING_ID, self.slots)? >= 0;
+        self.down = slot_value(&self.dev, AbsoluteAxisCode::ABS_MT_TRACKING_ID, self.slots, 0)? >= 0;
         self.raw = (
-            slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_X, self.slots)?,
-            slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_Y, self.slots)?,
+            slot_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_X, self.slots, 0)?,
+            slot_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_Y, self.slots, 0)?,
         );
         self.moved = true;
+        self.second = Contact::default();
+        if self.slots > 1 {
+            self.second.down = slot_value(&self.dev, AbsoluteAxisCode::ABS_MT_TRACKING_ID, self.slots, 1)? >= 0;
+            self.second.raw = (
+                slot_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_X, self.slots, 1)?,
+                slot_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_Y, self.slots, 1)?,
+            );
+        }
+        self.pinch = None;
+        self.pinching = false;
         Ok(())
     }
 
-    fn read(&mut self, w: f32, h: f32, out: &mut Vec<Event>) -> io::Result<()> {
+    fn read(&mut self, w: f32, h: f32, out: &mut Vec<Event>, pinch_enabled: bool) -> io::Result<()> {
         let events: Vec<InputEvent> = match self.dev.fetch_events() {
             Ok(events) => events.collect(),
             Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
@@ -149,6 +203,31 @@ impl Panel {
                     let span = |r: (i32, i32)| (r.1 - r.0).max(1) as f32;
                     let x = (self.raw.0 - self.x_range.0) as f32 / span(self.x_range) * w;
                     let y = (self.raw.1 - self.y_range.0) as f32 / span(self.y_range) * h;
+                    if pinch_enabled && self.second.down && self.down {
+                        if !self.pinching {
+                            out.push(Event::PinchStart);
+                        }
+                        self.pinching = true;
+                        let dx = (self.raw.0 - self.second.raw.0) as f32 / span(self.x_range) * w;
+                        let dy = (self.raw.1 - self.second.raw.1) as f32 / span(self.y_range) * h;
+                        let distance = dx.hypot(dy);
+                        if let Some(scale) = pinch_scale(self.pinch, distance) {
+                            out.push(Event::Pinch(scale, at));
+                        }
+                        self.pinch = Some(distance);
+                        self.was_down = false;
+                        self.moved = false;
+                        continue;
+                    }
+                    if self.pinching {
+                        if !self.down && !self.second.down {
+                            self.pinching = false;
+                            self.pinch = None;
+                        }
+                        self.was_down = false;
+                        self.moved = false;
+                        continue;
+                    }
                     match (self.was_down, self.down) {
                         (false, true) => out.push(Event::Touch(Touch::Down(x, y), at)),
                         (true, true) if self.moved => out.push(Event::Touch(Touch::Move(x, y), at)),
@@ -160,6 +239,9 @@ impl Panel {
                 }
                 _ if self.dropped => {}
                 EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_SLOT, v) => self.slot = v,
+                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_TRACKING_ID, v) if self.slot == 1 => self.second.down = v >= 0,
+                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v) if self.slot == 1 => self.second.raw.0 = v,
+                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_Y, v) if self.slot == 1 => self.second.raw.1 = v,
                 EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_TRACKING_ID, v) if self.slot == 0 => self.down = v >= 0,
                 EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v) if self.slot == 0 => {
                     self.raw.0 = v;
@@ -191,6 +273,7 @@ pub struct Inputs {
     touch_writes: Vec<Write>,
     w: f32,
     h: f32,
+    pinch_enabled: bool,
 }
 
 impl Inputs {
@@ -217,6 +300,7 @@ impl Inputs {
             touch_writes,
             w: w as f32,
             h: h as f32,
+            pinch_enabled: false,
         };
         inputs.scan()?;
         if inputs.panel.is_none() {
@@ -239,7 +323,11 @@ impl Inputs {
                 .supported_absolute_axes()
                 .is_some_and(|a| a.contains(AbsoluteAxisCode::ABS_MT_POSITION_X) && a.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y));
             let keys = dev.supported_keys().is_some_and(|k| KEYS.iter().any(|c| k.contains(*c)));
-            eprintln!("input {}: {:?} direct={direct} multitouch={mt} keys={keys}", path.display(), dev.name().unwrap_or("?"));
+            eprintln!(
+                "input {}: {:?} direct={direct} multitouch={mt} keys={keys}",
+                path.display(),
+                dev.name().unwrap_or("?")
+            );
             if direct && mt && self.panel.is_none() {
                 self.wakeful.add(dev.as_raw_fd())?;
                 self.panel = Some(Panel::new(path, dev)?);
@@ -280,6 +368,9 @@ impl Inputs {
         self.panel.is_some()
     }
 
+    pub fn set_pinch_enabled(&mut self, enabled: bool) {
+        self.pinch_enabled = enabled;
+    }
 
     /// Readable while a device has something queued, or /dev/input changed.
     pub fn fd(&self) -> RawFd {
@@ -293,7 +384,7 @@ impl Inputs {
         }
         let mut out = Vec::new();
         if let Some(panel) = &mut self.panel {
-            match panel.read(self.w, self.h, &mut out) {
+            match panel.read(self.w, self.h, &mut out, self.pinch_enabled) {
                 Ok(()) => {}
                 Err(e) if gone(&e) => {
                     eprintln!("input {}: removed", panel.path.display());
@@ -311,9 +402,10 @@ impl Inputs {
                     // the UI times its own.
                     for e in events {
                         if let EventSummary::Key(_, code, value @ (0 | 1)) = e.destructure()
-                            && let Some(k) = key_of(code) {
-                                out.push(Event::Key(k, value == 1));
-                            }
+                            && let Some(k) = key_of(code)
+                        {
+                            out.push(Event::Key(k, value == 1));
+                        }
                     }
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {}
@@ -329,5 +421,20 @@ impl Inputs {
             self.seen.remove(&path);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod pinch_tests {
+    use super::pinch_scale;
+
+    #[test]
+    fn pinch_distance_has_a_floor_and_finite_bounded_scale() {
+        assert_eq!(pinch_scale(None, 100.0), None);
+        assert_eq!(pinch_scale(Some(100.0), 125.0), Some(1.25));
+        assert_eq!(pinch_scale(Some(100.0), 50.0), Some(0.5));
+        assert_eq!(pinch_scale(Some(100.0), 400.0), Some(2.0));
+        assert_eq!(pinch_scale(Some(0.0), 10.0), None);
+        assert_eq!(pinch_scale(Some(100.0), f32::NAN), None);
     }
 }

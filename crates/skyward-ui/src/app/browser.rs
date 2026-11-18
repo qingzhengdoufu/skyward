@@ -135,6 +135,7 @@ pub struct Browser {
     pub prefer_full: bool,
     pub full_failures: u8,
     pub media_playing: bool,
+    pub media_session: bool,
     pub desktop_mode: bool,
     pub landscape_mode: bool,
     pub full_zoom: f32,
@@ -174,6 +175,7 @@ impl Default for Browser {
             prefer_full: false,
             full_failures: 0,
             media_playing: false,
+            media_session: false,
             desktop_mode: false,
             landscape_mode: false,
             full_zoom: 1.0,
@@ -204,6 +206,35 @@ impl Default for Browser {
 }
 
 impl App {
+    pub fn browser_pinch(&mut self, scale: f32, now: u64) -> Vec<Effect> {
+        if !self.browser_accepts_pinch() || !scale.is_finite() || scale <= 0.0 {
+            return Vec::new();
+        }
+        self.drag = Drag::Idle;
+        self.stir(now);
+        vec![Effect::BrowserPluginPinch {
+            scale: f64::from(scale.clamp(0.5, 2.0)),
+        }]
+    }
+
+    pub fn browser_accepts_pinch(&self) -> bool {
+        self.display_on
+            && !self.charge_shown()
+            && self.shade.is_none()
+            && self.screen() == Screen::Browser
+            && self.state.browser.full_active
+    }
+
+    pub fn browser_cancel_touch(&mut self) -> Vec<Effect> {
+        self.nav_press = None;
+        if matches!(self.drag, Drag::BrowserTouch { .. }) {
+            self.drag = Drag::Idle;
+            return vec![Effect::BrowserPluginCancelTouch];
+        }
+        self.drag = Drag::Idle;
+        Vec::new()
+    }
+
     pub(super) fn browser_commit_ime(&mut self, index: usize) -> Vec<Effect> {
         if self.state.browser.ime.spelling.is_empty() {
             return Vec::new();
@@ -517,6 +548,7 @@ impl App {
             Action::BrowserMenu => self.open(Screen::BrowserMenu),
             Action::BrowserDesktopToggle if self.state.browser.full_active => {
                 self.state.browser.desktop_mode = !self.state.browser.desktop_mode;
+                self.open(Screen::Browser);
                 return vec![
                     Effect::BrowserPluginDesktop {
                         enabled: self.state.browser.desktop_mode,
@@ -526,6 +558,7 @@ impl App {
             }
             Action::BrowserLandscapeToggle if self.state.browser.full_active => {
                 self.state.browser.landscape_mode = !self.state.browser.landscape_mode;
+                self.open(Screen::Browser);
                 return vec![Effect::BrowserPluginLandscape {
                     enabled: self.state.browser.landscape_mode,
                 }];
@@ -608,6 +641,7 @@ impl App {
             }
             Action::BrowserFullLoad => return self.browser_plugin_start_at(self.state.browser.url.clone()),
             Action::BrowserBasic => {
+                self.state.browser.media_playing = false;
                 self.state.browser.prefer_full = false;
                 self.state.browser.full_active = false;
                 let url = self.state.browser.url.clone();
@@ -621,6 +655,7 @@ impl App {
             }
             Action::BrowserPluginStart => return self.browser_plugin_start_at(self.state.browser.url.clone()),
             Action::BrowserPluginStop => {
+                self.state.browser.media_playing = false;
                 self.state.browser.full_active = false;
                 self.state.browser.prefer_full = false;
                 self.state.browser.full_progress = None;
@@ -713,6 +748,8 @@ impl App {
     }
 
     pub(super) fn browser_read(&mut self, url: String) -> Vec<Effect> {
+        self.state.browser.media_playing = false;
+        self.state.browser.media_session = false;
         if self.state.browser.prefer_full && !self.state.browser.full_active {
             return self.browser_plugin_start_at(url);
         }
@@ -1043,6 +1080,8 @@ impl App {
             return Vec::new();
         }
         let b = &mut self.state.browser;
+        let was_playing = b.media_playing;
+        b.media_playing = false;
         b.full_failures = b.full_failures.saturating_add(1);
         b.full_text = false;
         b.ime.clear();
@@ -1071,6 +1110,14 @@ impl App {
         }
         self.state.browser.full_active = false;
         self.state.browser.full_progress = None;
+        if was_playing || self.state.browser.media_session {
+            self.state.browser.prefer_full = true;
+            self.state.browser.view = BrowserView::Failed { url, why };
+            if visible {
+                self.refresh();
+            }
+            return Vec::new();
+        }
         if visible && self.state.data.storage_open() {
             self.state.browser.prefer_full = false;
             self.open(Screen::Browser);
@@ -1128,7 +1175,9 @@ impl App {
         });
         self.state.browser.full_progress = Some(1.0);
         self.state.browser.view = BrowserView::Full;
-        self.refresh();
+        if self.browser_fullscreen() {
+            self.refresh();
+        }
     }
 
     pub fn browser_plugin_focus(&mut self, focus: bool) {
@@ -1159,10 +1208,8 @@ impl App {
             return;
         }
         self.state.browser.media_playing = playing;
-        if playing {
-            self.stir(now);
-        }
-        self.refresh();
+        self.state.browser.media_session |= playing;
+        self.stir(now);
     }
 
     pub fn browser_offered_download(&mut self, url: String, name: String, now: u64) -> Vec<Effect> {
@@ -1182,7 +1229,9 @@ impl App {
             if self.screen() != Screen::BrowserAddress {
                 self.state.browser.address = url;
             }
-            self.refresh();
+            if matches!(self.screen(), Screen::Browser | Screen::BrowserAddress | Screen::BrowserMenu) {
+                self.refresh();
+            }
         }
     }
 

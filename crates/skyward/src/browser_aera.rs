@@ -67,7 +67,24 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
     };
     let backing = size;
     let mut browser = Browser::start(root, &dns, backing)?;
+    let initial = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
+    let mut landscape = false;
+    for command in &initial {
+        if let Control::Desktop { enabled } | Control::Landscape { enabled } = command {
+            if matches!(command, Control::Landscape { .. }) {
+                landscape = *enabled;
+            }
+            let mut message = Message::command(if matches!(command, Control::Desktop { .. }) { 18 } else { 19 });
+            message.value = u32::from(*enabled);
+            browser.session.send(&message)?;
+        }
+    }
     navigate(&browser, url)?;
+    inputs.lock().expect("browser controls are not poisoned").extend(
+        initial
+            .into_iter()
+            .filter(|command| !matches!(command, Control::Desktop { .. } | Control::Landscape { .. })),
+    );
     let mut zoom = 100.0f64;
     let mut latest = None;
     let mut changed = false;
@@ -79,10 +96,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
         let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
         for command in commands {
             match command {
-                Control::Touch { phase, x, y } => touch(&browser, phase, x, y, backing)?,
+                Control::Touch { phase, x, y } => touch(&browser, phase, x, y, backing, landscape)?,
                 Control::Tap { x, y } => {
-                    touch(&browser, 0, x, y, backing)?;
-                    touch(&browser, 2, x, y, backing)?;
+                    touch(&browser, 0, x, y, backing, landscape)?;
+                    touch(&browser, 2, x, y, backing, landscape)?;
                 }
                 Control::Viewport { width, height } => {
                     ensure!(
@@ -108,21 +125,19 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 }
                 Control::Navigate { url } => navigate(&browser, &skyward_net::web::full_url(&url))?,
                 Control::Reload => browser.session.send(&Message::command(4))?,
-                Control::Volume { percent } => {
-                    let mut message = Message::command(17);
-                    message.value = u32::from(percent.min(100));
-                    browser.session.send(&message)?;
-                }
                 Control::Desktop { enabled } => {
+                    zoom = 100.0;
                     let mut message = Message::command(18);
                     message.value = enabled as u32;
                     browser.session.send(&message)?;
                 }
                 Control::Landscape { enabled } => {
+                    landscape = enabled;
                     let mut message = Message::command(19);
                     message.value = enabled as u32;
                     browser.session.send(&message)?;
                 }
+                Control::CancelTouch => browser.session.send(&Message::command(20))?,
                 Control::Pinch { scale } => {
                     ensure!(scale.is_finite() && scale > 0.0, "invalid AERA zoom");
                     zoom = (zoom * scale).clamp(50.0, 300.0);
@@ -132,7 +147,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 }
                 Control::Scroll { dy } => {
                     let (start, end) = if dy < 0 { (800, 250) } else { (250, 800) };
-                    touch(&browser, 0, 500, start, backing)?;
+                    touch(&browser, 0, 500, start, backing, landscape)?;
                     for step in 1..=8 {
                         touch(
                             &browser,
@@ -140,9 +155,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                             500,
                             (i32::from(start) + (i32::from(end) - i32::from(start)) * step / 8) as u16,
                             backing,
+                            landscape,
                         )?;
                     }
-                    touch(&browser, 2, 500, end, backing)?;
+                    touch(&browser, 2, 500, end, backing, landscape)?;
                 }
             }
         }
@@ -155,10 +171,10 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
             match message.kind {
                 32 => {
                     ensure!(
-                        (message.x as u32, message.y as u32) == backing,
+                        [(backing.0, backing.1), (backing.1, backing.0)].contains(&(message.x as u32, message.y as u32)),
                         "native browser frame differs from viewport"
                     );
-                    latest = Some(browser.session.copy_frame(&message)?);
+                    latest = Some((browser.session.copy_frame(&message)?, message.x as u32, message.y as u32));
                     changed = true;
                 }
                 33 => {
@@ -190,9 +206,13 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
         );
         if changed
             && Instant::now() >= publish_at
-            && let Some(bgra) = &latest
+            && let Some((bgra, width, height)) = &latest
         {
-            let rgba = skyward_browser::session::rgba_sized(bgra, backing.0, backing.1, size.0, size.1)?;
+            let rgba = if (*width, *height) == (backing.1, backing.0) {
+                skyward_browser::session::rgba_clockwise(bgra, *width, *height)?
+            } else {
+                skyward_browser::session::rgba_sized(bgra, *width, *height, size.0, size.1)?
+            };
             tell(Event::Pixels {
                 width: size.0,
                 height: size.1,
@@ -252,10 +272,15 @@ fn navigate(browser: &Browser, url: &str) -> Result<()> {
     browser.session.send(&message)
 }
 
-fn touch(browser: &Browser, phase: u8, x: u16, y: u16, backing: (u32, u32)) -> Result<()> {
+fn touch(browser: &Browser, phase: u8, x: u16, y: u16, backing: (u32, u32), landscape: bool) -> Result<()> {
     ensure!(phase <= 2, "invalid AERA touch phase");
     let mut message = Message::command(6 + u32::from(phase));
-    message.x = (u32::from(x.min(999)) * (backing.0 / 4) / 1000) as i32;
-    message.y = (u32::from(y.min(999)) * (backing.1 / 4) / 1000) as i32;
+    let (x, y, width, height) = if landscape {
+        (y.min(999), 999 - x.min(999), backing.1, backing.0)
+    } else {
+        (x.min(999), y.min(999), backing.0, backing.1)
+    };
+    message.x = (u32::from(x) * (width / 4) / 1000) as i32;
+    message.y = (u32::from(y) * (height / 4) / 1000) as i32;
     browser.session.send(&message)
 }

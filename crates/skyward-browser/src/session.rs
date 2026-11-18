@@ -338,10 +338,38 @@ pub fn rgba_sized(bgra: &[u8], source_width: u32, source_height: u32, width: u32
     Ok(rgba)
 }
 
+/// Rotate a native landscape frame clockwise into the portrait display area.
+pub fn rgba_clockwise(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+    ensure!(
+        width > 0
+            && height > 0
+            && u64::from(width) * u64::from(height) <= (FRAME_BYTES / 4) as u64
+            && bgra.len() as u64 == u64::from(width) * u64::from(height) * 4,
+        "invalid rotated browser frame"
+    );
+    let mut out = vec![0; bgra.len()];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let from = (y * width as usize + x) * 4;
+            let to = (x * height as usize + height as usize - 1 - y) * 4;
+            out[to..to + 4].copy_from_slice(&[bgra[from + 2], bgra[from + 1], bgra[from], 255]);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn clockwise_rotation_keeps_pixels_and_channel_order_without_stretching() {
+        let pixels: Vec<u8> = (1..=6).flat_map(|v| [0, 0, v, 255]).collect();
+        let rotated = rgba_clockwise(&pixels, 3, 2).unwrap();
+        let red: Vec<_> = rotated.as_chunks::<4>().0.iter().map(|p| p[0]).collect();
+        assert_eq!(red, [4, 1, 5, 2, 6, 3]);
+        assert!(rgba_clockwise(&pixels[..20], 3, 2).is_err());
+    }
     #[test]
     fn frame_conversion_is_bounded_and_swaps_bgra_without_encoding() {
         let mut frame = vec![0; FRAME_BYTES];

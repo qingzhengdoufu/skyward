@@ -26,7 +26,6 @@ pub struct State {
     pub language_chosen: bool,
     pub dark: bool,
     pub brightness: f32,
-    pub media_volume: f32,
     /// How long the screen stays on with nothing touched, by its place in
     /// [`SCREEN_OFF`].
     pub screen_off: usize,
@@ -305,7 +304,6 @@ impl Default for State {
             language_chosen: false,
             dark: false,
             brightness: SLIDER_START,
-            media_volume: 0.15,
             screen_off: 3,
             time_zone: 0,
             vibrate: true,

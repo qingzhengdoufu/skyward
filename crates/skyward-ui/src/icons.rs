@@ -63,8 +63,6 @@ pub enum Icon {
     Wlan,
     /// A battery, as the stock Settings' battery shows it.
     Battery,
-    /// A compact speaker used by the media-volume slider.
-    Volume,
     /// Two phones, the one behind showing round the one in front.
     Systems,
 }
@@ -163,8 +161,13 @@ const RESTORE: &[Part] = &[
 const MOUNT: &[Part] = &[
     // The card's cut corner is rounded as its other corners are, by a thin
     // line round its edge.
-    add(Shape::Fill("M11.6,5.4H18.3C19.29,5.4 20.1,6.21 20.1,7.2V20.8C20.1,21.79 19.29,22.6 18.3,22.6H9.7C8.71,22.6 7.9,21.79 7.9,20.8V9.1Z")),
-    add(Shape::Line("M11.6,5.4H18.3C19.29,5.4 20.1,6.21 20.1,7.2V20.8C20.1,21.79 19.29,22.6 18.3,22.6H9.7C8.71,22.6 7.9,21.79 7.9,20.8V9.1Z", 1.0)),
+    add(Shape::Fill(
+        "M11.6,5.4H18.3C19.29,5.4 20.1,6.21 20.1,7.2V20.8C20.1,21.79 19.29,22.6 18.3,22.6H9.7C8.71,22.6 7.9,21.79 7.9,20.8V9.1Z",
+    )),
+    add(Shape::Line(
+        "M11.6,5.4H18.3C19.29,5.4 20.1,6.21 20.1,7.2V20.8C20.1,21.79 19.29,22.6 18.3,22.6H9.7C8.71,22.6 7.9,21.79 7.9,20.8V9.1Z",
+        1.0,
+    )),
     cut(Shape::Line("M12,8.2V10.9", 1.5)),
     cut(Shape::Line("M14.65,8.2V10.9", 1.5)),
     cut(Shape::Line("M17.3,8.2V10.9", 1.5)),
@@ -172,10 +175,18 @@ const MOUNT: &[Part] = &[
 
 const WIPE: &[Part] = &[
     add(Shape::Line("M7.2,8.6H20.8", 2.25)),
-    add(Shape::Line("M11.4,8.2V6.6C11.4,5.83 11.83,5.4 12.6,5.4H15.4C16.17,5.4 16.6,5.83 16.6,6.6V8.2", 2.0)),
+    add(Shape::Line(
+        "M11.4,8.2V6.6C11.4,5.83 11.83,5.4 12.6,5.4H15.4C16.17,5.4 16.6,5.83 16.6,6.6V8.2",
+        2.0,
+    )),
     // The bin, its top corners rounded by a thin line round it.
-    add(Shape::Fill("M8.6,11.1H19.4L18.55,21.05C18.43,22.45 17.6,23.1 16.2,23.1H11.8C10.4,23.1 9.57,22.45 9.45,21.05Z")),
-    add(Shape::Line("M8.6,11.1H19.4L18.55,21.05C18.43,22.45 17.6,23.1 16.2,23.1H11.8C10.4,23.1 9.57,22.45 9.45,21.05Z", 0.8)),
+    add(Shape::Fill(
+        "M8.6,11.1H19.4L18.55,21.05C18.43,22.45 17.6,23.1 16.2,23.1H11.8C10.4,23.1 9.57,22.45 9.45,21.05Z",
+    )),
+    add(Shape::Line(
+        "M8.6,11.1H19.4L18.55,21.05C18.43,22.45 17.6,23.1 16.2,23.1H11.8C10.4,23.1 9.57,22.45 9.45,21.05Z",
+        0.8,
+    )),
     cut(Shape::Line("M12.2,14.2V19.9", 1.6)),
     cut(Shape::Line("M15.8,14.2V19.9", 1.6)),
 ];
@@ -197,7 +208,10 @@ const GEAR: &[Part] = &[
     )),
 ];
 
-const POWER: &[Part] = &[add(Shape::Line("M10.14,9.48A6.9,6.9 0 1 0 17.86,9.48", 2.4)), add(Shape::Line("M14,5.9V13", 2.4))];
+const POWER: &[Part] = &[
+    add(Shape::Line("M10.14,9.48A6.9,6.9 0 1 0 17.86,9.48", 2.4)),
+    add(Shape::Line("M14,5.9V13", 2.4)),
+];
 
 const GLOBE: &[Part] = &[add(Shape::Fill(
     "M14,5.168C18.877,5.168 22.83,9.122 22.83,14C22.83,18.878 18.877,22.832 14,22.832C9.123,22.832 5.17,18.878 5.17,14\
@@ -218,28 +232,42 @@ const CLOCK: &[Part] = &[
 ];
 
 const TERMINAL: &[Part] = &[
-    add(Shape::Fill("M8.6,6.4H19.4A3.4,3.4 0 0 1 22.8,9.8V18.2A3.4,3.4 0 0 1 19.4,21.6H8.6A3.4,3.4 0 0 1 5.2,18.2V9.8A3.4,3.4 0 0 1 8.6,6.4Z")),
+    add(Shape::Fill(
+        "M8.6,6.4H19.4A3.4,3.4 0 0 1 22.8,9.8V18.2A3.4,3.4 0 0 1 19.4,21.6H8.6A3.4,3.4 0 0 1 5.2,18.2V9.8A3.4,3.4 0 0 1 8.6,6.4Z",
+    )),
     cut(Shape::Line("M9.4,10.6L12.5,13.3L9.4,16", 1.9)),
     cut(Shape::Line("M14.4,16.4H18.6", 1.9)),
 ];
 
 const USB: &[Part] = &[
-    add(Shape::Fill("M11.4,4.6H16.6A1.1,1.1 0 0 1 17.7,5.7V9.1A1.1,1.1 0 0 1 16.6,10.2H11.4A1.1,1.1 0 0 1 10.3,9.1V5.7A1.1,1.1 0 0 1 11.4,4.6Z")),
-    cut(Shape::Fill("M12.3,6.5H13A0.4,0.4 0 0 1 13.4,6.9V7.7A0.4,0.4 0 0 1 13,8.1H12.3A0.4,0.4 0 0 1 11.9,7.7V6.9A0.4,0.4 0 0 1 12.3,6.5Z")),
-    cut(Shape::Fill("M15,6.5H15.7A0.4,0.4 0 0 1 16.1,6.9V7.7A0.4,0.4 0 0 1 15.7,8.1H15A0.4,0.4 0 0 1 14.6,7.7V6.9A0.4,0.4 0 0 1 15,6.5Z")),
-    add(Shape::Fill("M11,9.4H17A2.6,2.6 0 0 1 19.6,12V15.7A2.6,2.6 0 0 1 17,18.3H11A2.6,2.6 0 0 1 8.4,15.7V12A2.6,2.6 0 0 1 11,9.4Z")),
+    add(Shape::Fill(
+        "M11.4,4.6H16.6A1.1,1.1 0 0 1 17.7,5.7V9.1A1.1,1.1 0 0 1 16.6,10.2H11.4A1.1,1.1 0 0 1 10.3,9.1V5.7A1.1,1.1 0 0 1 11.4,4.6Z",
+    )),
+    cut(Shape::Fill(
+        "M12.3,6.5H13A0.4,0.4 0 0 1 13.4,6.9V7.7A0.4,0.4 0 0 1 13,8.1H12.3A0.4,0.4 0 0 1 11.9,7.7V6.9A0.4,0.4 0 0 1 12.3,6.5Z",
+    )),
+    cut(Shape::Fill(
+        "M15,6.5H15.7A0.4,0.4 0 0 1 16.1,6.9V7.7A0.4,0.4 0 0 1 15.7,8.1H15A0.4,0.4 0 0 1 14.6,7.7V6.9A0.4,0.4 0 0 1 15,6.5Z",
+    )),
+    add(Shape::Fill(
+        "M11,9.4H17A2.6,2.6 0 0 1 19.6,12V15.7A2.6,2.6 0 0 1 17,18.3H11A2.6,2.6 0 0 1 8.4,15.7V12A2.6,2.6 0 0 1 11,9.4Z",
+    )),
     add(Shape::Line("M14,17.8V22.6", 2.4)),
 ];
 
 const USB_DRIVE: &[Part] = &[
-    add(Shape::Fill("M11.5,4.6H16.5A1,1 0 0 1 17.5,5.6V8.9A1,1 0 0 1 16.5,9.9H11.5A1,1 0 0 1 10.5,8.9V5.6A1,1 0 0 1 11.5,4.6Z")),
+    add(Shape::Fill(
+        "M11.5,4.6H16.5A1,1 0 0 1 17.5,5.6V8.9A1,1 0 0 1 16.5,9.9H11.5A1,1 0 0 1 10.5,8.9V5.6A1,1 0 0 1 11.5,4.6Z",
+    )),
     cut(Shape::Fill(
         "M12.35,6.4H13.05A0.35,0.35 0 0 1 13.4,6.75V7.55A0.35,0.35 0 0 1 13.05,7.9H12.35A0.35,0.35 0 0 1 12,7.55V6.75A0.35,0.35 0 0 1 12.35,6.4Z",
     )),
     cut(Shape::Fill(
         "M14.95,6.4H15.65A0.35,0.35 0 0 1 16,6.75V7.55A0.35,0.35 0 0 1 15.65,7.9H14.95A0.35,0.35 0 0 1 14.6,7.55V6.75A0.35,0.35 0 0 1 14.95,6.4Z",
     )),
-    add(Shape::Fill("M11.3,9.3H16.7A2.8,2.8 0 0 1 19.5,12.1V20.6A2.8,2.8 0 0 1 16.7,23.4H11.3A2.8,2.8 0 0 1 8.5,20.6V12.1A2.8,2.8 0 0 1 11.3,9.3Z")),
+    add(Shape::Fill(
+        "M11.3,9.3H16.7A2.8,2.8 0 0 1 19.5,12.1V20.6A2.8,2.8 0 0 1 16.7,23.4H11.3A2.8,2.8 0 0 1 8.5,20.6V12.1A2.8,2.8 0 0 1 11.3,9.3Z",
+    )),
     cut(Shape::Fill("M14,17.05A1.25,1.25 0 1 1 14,19.55A1.25,1.25 0 1 1 14,17.05Z")),
 ];
 
@@ -308,7 +336,9 @@ const FOLDER: &[Part] = &[add(Shape::Fill(
 const FOLDER_SCALE: f32 = 18.6 / 21.0;
 
 const LOG: &[Part] = &[
-    add(Shape::Fill("M10.3,4.8H17.7A3,3 0 0 1 20.7,7.8V20.2A3,3 0 0 1 17.7,23.2H10.3A3,3 0 0 1 7.3,20.2V7.8A3,3 0 0 1 10.3,4.8Z")),
+    add(Shape::Fill(
+        "M10.3,4.8H17.7A3,3 0 0 1 20.7,7.8V20.2A3,3 0 0 1 17.7,23.2H10.3A3,3 0 0 1 7.3,20.2V7.8A3,3 0 0 1 10.3,4.8Z",
+    )),
     cut(Shape::Line("M10.6,10H17.4", 1.8)),
     cut(Shape::Line("M10.6,13.9H17.4", 1.8)),
     cut(Shape::Line("M10.6,17.8H14.6", 1.8)),
@@ -340,17 +370,17 @@ const BATTERY: &[Part] = &[add(Shape::EvenOdd(
      C22.747,11.536 22.613,11.536 22.345,11.536C22.077,11.536 21.943,11.536 21.838,11.583C21.719,11.637 21.624,11.732 21.571,11.851Z",
 ))];
 
-const VOLUME: &[Part] = &[
-    add(Shape::Fill("M5.2,11H8.4L13.2,6V22L8.4,17H5.2Z")),
-    add(Shape::Line("M16.2,10A5.7,5.7 0 0 1 16.2,18", 1.8)),
-    add(Shape::Line("M19.4,7A10.2,10.2 0 0 1 19.4,21", 1.8)),
-];
-
 const SYSTEMS: &[Part] = &[
-    add(Shape::Fill("M8.6,5.2H15A2.4,2.4 0 0 1 17.4,7.6V17.2A2.4,2.4 0 0 1 15,19.6H8.6A2.4,2.4 0 0 1 6.2,17.2V7.6A2.4,2.4 0 0 1 8.6,5.2Z")),
+    add(Shape::Fill(
+        "M8.6,5.2H15A2.4,2.4 0 0 1 17.4,7.6V17.2A2.4,2.4 0 0 1 15,19.6H8.6A2.4,2.4 0 0 1 6.2,17.2V7.6A2.4,2.4 0 0 1 8.6,5.2Z",
+    )),
     // The gap that sets the phone in front apart from the one behind.
-    cut(Shape::Fill("M13,7.1H19.4A3.7,3.7 0 0 1 23.1,10.8V20.4A3.7,3.7 0 0 1 19.4,24.1H13A3.7,3.7 0 0 1 9.3,20.4V10.8A3.7,3.7 0 0 1 13,7.1Z")),
-    add(Shape::Fill("M13,8.4H19.4A2.4,2.4 0 0 1 21.8,10.8V20.4A2.4,2.4 0 0 1 19.4,22.8H13A2.4,2.4 0 0 1 10.6,20.4V10.8A2.4,2.4 0 0 1 13,8.4Z")),
+    cut(Shape::Fill(
+        "M13,7.1H19.4A3.7,3.7 0 0 1 23.1,10.8V20.4A3.7,3.7 0 0 1 19.4,24.1H13A3.7,3.7 0 0 1 9.3,20.4V10.8A3.7,3.7 0 0 1 13,7.1Z",
+    )),
+    add(Shape::Fill(
+        "M13,8.4H19.4A2.4,2.4 0 0 1 21.8,10.8V20.4A2.4,2.4 0 0 1 19.4,22.8H13A2.4,2.4 0 0 1 10.6,20.4V10.8A2.4,2.4 0 0 1 13,8.4Z",
+    )),
     cut(Shape::Line("M14.4,20.2H18", 1.3)),
 ];
 
@@ -378,7 +408,6 @@ fn outline(icon: Icon) -> (&'static [Part], f32) {
         Icon::Shield => (SHIELD, 1.0),
         Icon::Wlan => (WLAN, 1.0),
         Icon::Battery => (BATTERY, 1.0),
-        Icon::Volume => (VOLUME, 1.0),
         Icon::Systems => (SYSTEMS, 1.0),
     }
 }
@@ -450,7 +479,12 @@ fn draw(c: &mut Canvas, art: Art, cx: f32, cy: f32, size: f32, ink: Rgba) {
 /// What `art` covers of its box `size` across, made the first time it is
 /// asked for at that size.
 fn coverage(art: Art, size: f32) -> Arc<Coverage> {
-    let found = DRAWN.lock().expect("no one panics holding the drawings").iter().find(|m| m.art == art && m.size == size).map(|m| m.cover.clone());
+    let found = DRAWN
+        .lock()
+        .expect("no one panics holding the drawings")
+        .iter()
+        .find(|m| m.art == art && m.size == size)
+        .map(|m| m.cover.clone());
     if let Some(cover) = found {
         return cover;
     }
@@ -459,7 +493,11 @@ fn coverage(art: Art, size: f32) -> Arc<Coverage> {
         Art::Glyph(icon) => outline(icon),
     };
     let cover = Arc::new(rasterize(parts, scale, size));
-    DRAWN.lock().expect("no one panics holding the drawings").push(Made { art, size, cover: cover.clone() });
+    DRAWN.lock().expect("no one panics holding the drawings").push(Made {
+        art,
+        size,
+        cover: cover.clone(),
+    });
     cover
 }
 
@@ -471,7 +509,9 @@ fn rasterize(parts: &[Part], scale: f32, size: f32) -> Coverage {
     let side = size.ceil() as u32;
     let mut art = Pixmap::new(side, side).expect("a glyph's box holds pixels");
     let k = size / BOX * scale;
-    let at = Transform::from_translate(size / 2.0, size / 2.0).pre_scale(k, k).pre_translate(-BOX / 2.0, -BOX / 2.0);
+    let at = Transform::from_translate(size / 2.0, size / 2.0)
+        .pre_scale(k, k)
+        .pre_translate(-BOX / 2.0, -BOX / 2.0);
     for part in parts {
         let mut paint = Paint::default();
         paint.set_color(Color::WHITE);
@@ -480,12 +520,20 @@ fn rasterize(parts: &[Part], scale: f32, size: f32) -> Coverage {
             Shape::Fill(d) => art.fill_path(&path(d), &paint, FillRule::Winding, at, None),
             Shape::EvenOdd(d) => art.fill_path(&path(d), &paint, FillRule::EvenOdd, at, None),
             Shape::Line(d, width) => {
-                let stroke = Stroke { width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
+                let stroke = Stroke {
+                    width,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    ..Stroke::default()
+                };
                 art.stroke_path(&path(d), &paint, &stroke, at, None);
             }
         }
     }
-    Coverage { side, alpha: art.pixels().iter().map(|px| px.alpha()).collect() }
+    Coverage {
+        side,
+        alpha: art.pixels().iter().map(|px| px.alpha()).collect(),
+    }
 }
 
 /// The outline SVG path data `d` describes.
@@ -543,7 +591,14 @@ mod tests {
         let side = (BOX * UNIT) as u32;
         let mut c = Canvas::new(side, side);
         c.clear(Rgba::rgb(0, 0, 0));
-        glyph(&mut c, icon, side as f32 / 2.0, side as f32 / 2.0, side as f32, Rgba::rgb(255, 255, 255));
+        glyph(
+            &mut c,
+            icon,
+            side as f32 / 2.0,
+            side as f32 / 2.0,
+            side as f32,
+            Rgba::rgb(255, 255, 255),
+        );
         c
     }
 
@@ -572,7 +627,10 @@ mod tests {
             assert!(r > l && b > t, "{icon:?} covers nothing");
             // As the stock glyphs keep within the tile's middle 23 units,
             // and stand within three quarters of one of its middle.
-            assert!(l >= 2.5 && t >= 2.5 && r <= 25.5 && b <= 25.5, "{icon:?} reaches {l}, {t} to {r}, {b}");
+            assert!(
+                l >= 2.5 && t >= 2.5 && r <= 25.5 && b <= 25.5,
+                "{icon:?} reaches {l}, {t} to {r}, {b}"
+            );
             let (x, y) = ((l + r) / 2.0, (t + b) / 2.0);
             assert!((x - 14.0).abs() <= 0.75 && (y - 14.0).abs() <= 0.75, "{icon:?} stands at {x}, {y}");
         }
@@ -603,7 +661,15 @@ mod tests {
         let px = |x: f32, y: f32| -> [u8; 4] { c.data[(((y as u32) * c.w + x as u32) * 4) as usize..][..4].try_into().unwrap() };
         assert_eq!(px(1.0, 1.0), [0, 0, 0, 255], "its corners are clear");
         assert_eq!(px(1.0 + s / 2.0, 2.0)[2], 255, "the middle of its edge is the tile's");
-        assert_eq!(px(1.0 + s / 2.0, 1.0 + s * 8.0 / BOX), [255, 255, 255, 255], "the glyph is white over it");
-        assert_eq!(px(1.0 + s / 2.0, 1.0 + s / 2.0)[2], 255, "and the tile shows through what is cut out of the glyph");
+        assert_eq!(
+            px(1.0 + s / 2.0, 1.0 + s * 8.0 / BOX),
+            [255, 255, 255, 255],
+            "the glyph is white over it"
+        );
+        assert_eq!(
+            px(1.0 + s / 2.0, 1.0 + s / 2.0)[2],
+            255,
+            "and the tile shows through what is cut out of the glyph"
+        );
     }
 }

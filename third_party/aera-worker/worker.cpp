@@ -19,6 +19,7 @@
 #include <memory>
 #include <poll.h>
 #include <string>
+#include <unordered_map>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -83,7 +84,9 @@ struct Session {
   gint64 last_input_us = 0;
   gint64 visual_activity_until_us = 0;
   bool media_playing = false;
-  uint32_t volume = 15;
+  std::unordered_map<std::string, gint64> playing_documents;
+  bool landscape = false;
+  WebKitUserScript *viewport_script = nullptr;
   gint64 frame_warning_us = 0;
   std::vector<uint8_t> staged;
   struct DownloadRecord;
@@ -170,11 +173,6 @@ static void Status(Session *s, const char *error = nullptr) {
   Send(s, m);
 }
 
-static void ApplyMediaVolume(Session *s) {
-  char script[160];
-  snprintf(script, sizeof(script), "window.__skywardVolume=%u;document.querySelectorAll('video,audio').forEach(e=>e.volume=%u/100)", s->volume, s->volume);
-  webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
-}
 static void ApplyDesktopMode(Session *s, bool enabled) {
   webkit_settings_set_user_agent(
       webkit_web_view_get_settings(s->web),
@@ -182,15 +180,49 @@ static void ApplyDesktopMode(Session *s, bool enabled) {
           ? "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
           : "Mozilla/5.0 (Linux; Android 16; CPH2653 Build/BP2A.250605.031.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36");
   const char *script = enabled
-      ? "document.querySelector('meta[name=viewport]')?.setAttribute('content','width=1024,initial-scale=1')"
-      : "document.querySelector('meta[name=viewport]')?.setAttribute('content','width=device-width,initial-scale=1')";
+      ? "(()=>{let m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';document.head.append(m)}m.content='width=1024';})()"
+      : "(()=>{if(document.querySelector('meta[name=viewport]'))return;const m=document.createElement('meta');m.name='viewport';m.content='width=device-width,initial-scale=1';(document.head||document.documentElement).append(m);})()";
+  auto *content = webkit_web_view_get_user_content_manager(s->web);
+  if (s->viewport_script) {
+    webkit_user_content_manager_remove_script(content, s->viewport_script);
+    webkit_user_script_unref(s->viewport_script);
+  }
+  s->viewport_script = webkit_user_script_new(script, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+      WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END, nullptr, nullptr);
+  webkit_user_content_manager_add_script(content, s->viewport_script);
+  webkit_web_view_set_zoom_level(s->web, 1.0);
   webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
+
+static gboolean UpdateMediaState(gpointer data) {
+  auto *s = static_cast<Session *>(data);
+  const gint64 now = g_get_monotonic_time();
+  for (auto it = s->playing_documents.begin(); it != s->playing_documents.end();) {
+    if (now - it->second > 7000000) it = s->playing_documents.erase(it);
+    else ++it;
+  }
+  const bool playing = !s->playing_documents.empty();
+  if (s->media_playing != playing) {
+    s->media_playing = playing;
+    Message message;
+    message.kind = Kind::kStatus;
+    message.value = playing ? 1 : 0;
+    g_strlcpy(message.text, playing ? "media-playing" : "media-paused", sizeof(message.text));
+    Send(s, message);
+  }
+  return G_SOURCE_CONTINUE;
+}
 static void ApplyLandscape(Session *s, bool enabled) {
-  const char *script = enabled
-      ? "document.documentElement.classList.toggle('skyward-landscape',true);document.querySelectorAll('video').forEach(v=>v.requestFullscreen?.().catch(()=>{}))"
-      : "document.documentElement.classList.toggle('skyward-landscape',false);document.exitFullscreen?.().catch(()=>{})";
-  webkit_web_view_evaluate_javascript(s->web, script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+  if (s->landscape == enabled) return;
+  s->landscape = enabled;
+  kWidth = enabled ? kPortraitHeight : kPortraitWidth;
+  kHeight = enabled ? kPortraitWidth : kPortraitHeight;
+  kViewWidth = kWidth / 4; kViewHeight = kHeight / 4;
+  g_clear_object(&s->latest);
+  s->staged_ready = false;
+  s->has_frame = false;
+  wpe_toplevel_resize(wpe_view_get_toplevel(s->view), kViewWidth, kViewHeight);
+  fprintf(stderr, "Browser orientation: %s backing=%dx%d\n", enabled ? "landscape" : "portrait", kWidth, kHeight);
 }
 struct Session::DownloadRecord {
   Session *session = nullptr;
@@ -313,7 +345,7 @@ static void Publish(Session *s) {
   auto *buffer = s->latest;
   if (!WPE_IS_BUFFER_SHM(buffer) || wpe_buffer_get_width(buffer) != kWidth ||
       wpe_buffer_get_height(buffer) != kHeight) {
-    Status(s, "Unsupported browser frame."); g_main_loop_quit(s->loop); return;
+    g_clear_object(&s->latest); return;
   }
   auto *shm = WPE_BUFFER_SHM(buffer);
   const auto stride = wpe_buffer_shm_get_stride(shm);
@@ -449,13 +481,13 @@ static gboolean Input(gint fd, GIOCondition condition, gpointer data) {
       m.kind == Kind::kTouchUp)
     s->last_input_us = g_get_monotonic_time();
   switch (m.kind) {
-    case Kind::kVolume: {
-      s->volume = m.value;
-      ApplyMediaVolume(s);
-      break;
-    }
     case Kind::kDesktop: ApplyDesktopMode(s, m.value != 0); break;
     case Kind::kLandscape: ApplyLandscape(s, m.value != 0); break;
+    case Kind::kTouchCancel: {
+      auto *event = wpe_event_touch_new(WPE_EVENT_TOUCH_CANCEL, s->view, WPE_INPUT_SOURCE_TOUCHSCREEN,
+          g_get_monotonic_time() / 1000, static_cast<WPEModifiers>(0), 1, 0, 0);
+      wpe_view_event(s->view, event); wpe_event_unref(event); break;
+    }
     case Kind::kOpen: {
       const auto address = Address(m.text);
       if (!address.empty()) webkit_web_view_load_uri(s->web, address.c_str());
@@ -536,10 +568,13 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Native browser viewport handshake failed\n"); return 78;
   }
   kWidth = viewport.x; kHeight = viewport.y;
+  kPortraitWidth = kWidth; kPortraitHeight = kHeight;
   kViewWidth = kWidth / 4; kViewHeight = kHeight / 4;
   kFrameBytes = kWidth * kHeight * 4;
   fprintf(stderr, "Native browser backing %dx%d, CSS %dx%d, scale=4\n", kWidth, kHeight, kViewWidth, kViewHeight);
   Session s;
+  // Configure child WebProcesses before launch; leave the supervisor's hard bound intact.
+  setenv("MSE_MAX_BUFFER_SIZE", "video:64M,audio:8M,text:1M", 1);
   s.shared = static_cast<uint8_t *>(mmap(nullptr, kSharedBytes, PROT_READ | PROT_WRITE, MAP_SHARED, 3, 0));
   if (s.shared == MAP_FAILED) { perror("Map browser bridge"); return 78; }
   close(3);
@@ -562,7 +597,17 @@ int main(int argc, char **argv) {
       "Mozilla/5.0 (Linux; Android 16; CPH2653 Build/BP2A.250605.031.A2) "
       "AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/140.0.0.0 Mobile Safari/537.36");
-  auto *context = webkit_web_context_new();
+  auto *pressure = webkit_memory_pressure_settings_new();
+  webkit_memory_pressure_settings_set_memory_limit(pressure, 1024);
+  webkit_memory_pressure_settings_set_conservative_threshold(pressure, 0.35);
+  webkit_memory_pressure_settings_set_strict_threshold(pressure, 0.65);
+  webkit_memory_pressure_settings_set_kill_threshold(pressure, 1.0);
+  webkit_memory_pressure_settings_set_poll_interval(pressure, 1.0);
+  auto *context = WEBKIT_WEB_CONTEXT(g_object_new(WEBKIT_TYPE_WEB_CONTEXT,
+      "memory-pressure-settings", pressure, nullptr));
+  webkit_memory_pressure_settings_free(pressure);
+  webkit_web_context_set_cache_model(context, WEBKIT_CACHE_MODEL_DOCUMENT_VIEWER);
+  webkit_settings_set_enable_page_cache(settings, FALSE);
   webkit_web_context_register_uri_scheme(context, "aera",
       +[](WebKitURISchemeRequest *request, gpointer) {
         const char *uri = webkit_uri_scheme_request_get_uri(request);
@@ -599,46 +644,38 @@ int main(int argc, char **argv) {
   auto *content = webkit_user_content_manager_new();
   g_signal_connect(content, "script-message-received::aeraMedia",
       G_CALLBACK(+[](WebKitUserContentManager *, JSCValue *value, gpointer data) {
-        if (jsc_value_is_boolean(value)) {
-          auto *session = static_cast<Session *>(data);
-          const bool playing = jsc_value_to_boolean(value);
-          if (session->media_playing != playing) {
-            session->media_playing = playing;
-            Message message;
-            message.kind = playing ? Kind::kStatus : Kind::kStatus;
-            message.value = playing ? 1 : 0;
-            g_strlcpy(message.text, playing ? "media-playing" : "media-paused", sizeof(message.text));
-            Send(session, message);
-          }
+        if (!jsc_value_is_string(value)) return;
+        auto *session = static_cast<Session *>(data);
+        char *text = jsc_value_to_string(value);
+        if (text && strlen(text) >= 3 && strlen(text) <= 64 && text[1] == ':' && (text[0] == '0' || text[0] == '1')) {
+          if (text[0] == '0') session->playing_documents.erase(text + 2);
+          else if (session->playing_documents.size() < 128 || session->playing_documents.count(text + 2))
+            session->playing_documents[text + 2] = g_get_monotonic_time();
+          UpdateMediaState(session);
         }
+        g_free(text);
       }), &s);
   webkit_user_content_manager_register_script_message_handler(
       content, "aeraMedia", nullptr);
   static const char media_observer[] = R"JS((()=>{
-    window.__skywardVolume=15;
-    let active=false;
+    const id=Math.random().toString(36).slice(2)+Date.now().toString(36);
     const report=()=>{
-      const next=[...document.querySelectorAll('video')].some(
-        video=>!video.paused&&!video.ended&&video.readyState>=2);
-      if(next===active)return;
-      active=next;
-      window.webkit.messageHandlers.aeraMedia.postMessage(active);
+      const videos=[...document.querySelectorAll('video')];
+      const next=videos.some(video=>!video.paused&&!video.ended&&video.readyState>=2);
+      videos.forEach(video=>video.toggleAttribute('data-skyward-playing',!video.paused&&!video.ended));
+      window.webkit.messageHandlers.aeraMedia.postMessage((next?'1:':'0:')+id);
     };
-    const apply=e=>{if(e instanceof HTMLMediaElement)e.volume=(window.__skywardVolume??15)/100;};
     for(const event of ['playing','play','pause','ended','emptied','abort','loadedmetadata','error'])
-      document.addEventListener(event,e=>{if(event==='loadedmetadata')apply(e.target);report();},true);
-    document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('video,audio').forEach(apply),{once:true});
+      document.addEventListener(event,report,true);
+    window.addEventListener('pagehide',()=>window.webkit.messageHandlers.aeraMedia.postMessage('0:'+id));
+    setInterval(report,2000);
   })();)JS";
   auto *media_script = webkit_user_script_new(media_observer,
       WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
       WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, nullptr, nullptr);
   webkit_user_content_manager_add_script(content, media_script);
   webkit_user_script_unref(media_script);
-  static const char media_style[] = R"CSS((()=>{
-    const style=document.createElement('style');
-    style.textContent='video::-webkit-media-controls-start-playback-button,video::-webkit-media-controls-overlay-play-button{display:none!important}';
-    (document.head||document.documentElement).appendChild(style);
-  })();)CSS";
+  static const char media_style[] = "video[data-skyward-playing]::-webkit-media-controls-start-playback-button,video[data-skyward-playing]::-webkit-media-controls-overlay-play-button{display:none!important}";
   auto *media_css = webkit_user_style_sheet_new(media_style,
       WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER,
       nullptr, nullptr);
@@ -665,9 +702,6 @@ int main(int argc, char **argv) {
   // The engine's video/fullscreen UI stays within its isolated native viewport.
   g_signal_connect(s.web, "enter-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer) -> gboolean { return TRUE; }), nullptr);
   g_signal_connect(s.web, "leave-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer) -> gboolean { return TRUE; }), nullptr);
-  g_signal_connect(s.web, "load-changed", G_CALLBACK(+[](WebKitWebView *, WebKitLoadEvent event, gpointer data) {
-    if (event == WEBKIT_LOAD_COMMITTED || event == WEBKIT_LOAD_FINISHED) ApplyMediaVolume(static_cast<Session *>(data));
-  }), &s);
   g_signal_connect(network, "download-started", G_CALLBACK(DownloadStarted), &s);
   g_signal_connect(s.web, "permission-request", G_CALLBACK(+[](WebKitWebView *, WebKitPermissionRequest *r, gpointer) -> gboolean {
     webkit_permission_request_deny(r); return TRUE;
@@ -700,6 +734,10 @@ int main(int argc, char **argv) {
     auto *s = static_cast<Session *>(data); Status(s, "Browser process stopped."); g_main_loop_quit(s->loop);
   }), &s);
   s.view = webkit_web_view_get_wpe_view(s.web);
+  g_signal_connect(s.web, "load-changed", G_CALLBACK(+[](WebKitWebView *, WebKitLoadEvent event, gpointer data) {
+    auto *session = static_cast<Session *>(data);
+    if (event == WEBKIT_LOAD_STARTED) { session->playing_documents.clear(); UpdateMediaState(session); }
+  }), &s);
   g_signal_connect(s.view, "buffer-rendered", G_CALLBACK(+[](WPEView *, WPEBuffer *buffer, gpointer data) {
     auto *s = static_cast<Session *>(data);
     s->last_native_frame_us = g_get_monotonic_time();
@@ -713,13 +751,16 @@ int main(int argc, char **argv) {
   wpe_view_focus_in(s.view);
   const auto input = g_unix_fd_add(4, static_cast<GIOCondition>(G_IO_IN | G_IO_HUP | G_IO_ERR), Input, &s);
   const auto snapshots = g_timeout_add(8, SnapshotTick, &s);
+  const auto media_state = g_timeout_add_seconds(1, UpdateMediaState, &s);
   Status(&s);
   webkit_web_view_load_uri(s.web, "aera://start");
   g_main_loop_run(s.loop);
   if (g_main_context_find_source_by_id(nullptr, input)) g_source_remove(input);
   if (g_main_context_find_source_by_id(nullptr, snapshots)) g_source_remove(snapshots);
+  if (g_main_context_find_source_by_id(nullptr, media_state)) g_source_remove(media_state);
   g_clear_object(&s.latest);
   g_object_unref(s.web);
+  if (s.viewport_script) webkit_user_script_unref(s.viewport_script);
   webkit_user_content_manager_unregister_script_message_handler(
       content, "aeraMedia", nullptr);
   g_object_unref(content); s.network = nullptr; g_object_unref(network); g_object_unref(context);

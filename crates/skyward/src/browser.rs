@@ -59,7 +59,7 @@ pub enum Control {
     Pinch { scale: f64 },
     Text { text: String },
     Key { value: u32 },
-    Volume { percent: u8 },
+    CancelTouch,
     Desktop { enabled: bool },
     Landscape { enabled: bool },
     Scroll { dy: i64 },
@@ -354,7 +354,8 @@ impl Worker {
                                                 cdp.insert_text(&text)?;
                                             }
                                             Control::Key { value } => cdp.key(value)?,
-                                            Control::Volume { percent } => cdp.media_volume(percent)?,
+                                            Control::Desktop { .. } | Control::Landscape { .. } => {}
+                                            Control::CancelTouch => {}
                                             Control::Scroll { dy } => cdp.scroll(dy)?,
                                             Control::Reload => cdp.reload()?,
                                             Control::Navigate { url } => {

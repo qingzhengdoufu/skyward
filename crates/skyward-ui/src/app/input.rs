@@ -23,9 +23,6 @@ impl App {
         if let Some(effects) = self.navigation_touch(ev, now) {
             return effects;
         }
-        if let Some(effects) = self.media_volume_touch(ev, now) {
-            return effects;
-        }
         if self.shade_touch(ev, now) {
             return Vec::new();
         }
@@ -200,7 +197,7 @@ impl App {
                     .map(|(_, r)| r);
                 self.drag = match hit {
                     Some((Action::Slider(which), track)) => {
-                        fx.extend(self.set_slider(&t, which, track, x));
+                        self.set_slider(&t, which, track, x);
                         Drag::Slider(which, track)
                     }
                     Some((Action::Confirm(which), track)) if self.on_knob(track, x) => {
@@ -315,7 +312,7 @@ impl App {
                     self.dirty = true;
                 }
                 Drag::Slider(which, track) => {
-                    fx.extend(self.set_slider(&t, which, track, x));
+                    self.set_slider(&t, which, track, x);
                     self.drag = Drag::Slider(which, track);
                 }
                 Drag::Confirm { which, track, grab } => {
