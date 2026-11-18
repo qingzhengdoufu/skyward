@@ -195,6 +195,21 @@ pub fn is_skyward<R: Read + Seek>(file: &mut R) -> Result<bool> {
     Ok(device_config(file)?.is_some())
 }
 
+/// Whether `file`, the image at `path`, is a Skyward recovery, taking one
+/// this build cannot read for one that is not and saying in the log what it
+/// started with: a stock recovery, or any recovery packed another way, is a
+/// thing a phone may well hold in a slot, and what is done with one is
+/// nothing, so it is no reason to stop what was asked for.
+pub fn is_skyward_at<R: Read + Seek>(file: &mut R, path: &Path) -> Result<bool> {
+    Ok(match is_skyward(file) {
+        Ok(skyward) => skyward,
+        Err(error) => {
+            let _ = kmsg(&format!("install: {} holds an image this build cannot read, so it is not taken for Skyward: {error:#}", path.display()));
+            false
+        }
+    })
+}
+
 /// The device configuration a Skyward recovery carries in its ramdisk;
 /// none when `file` is no Skyward recovery.
 pub fn device_config<R: Read + Seek>(file: &mut R) -> Result<Option<Vec<u8>>> {
@@ -213,12 +228,24 @@ pub fn device_config<R: Read + Seek>(file: &mut R) -> Result<Option<Vec<u8>>> {
     if ![LZ4_LEGACY, LZ4_FRAME, GZIP, NEWC].iter().any(|magic| start.starts_with(magic)) {
         return Ok(None);
     }
+    let mut first = [0u8; 8];
+    first[..start.len().min(8)].copy_from_slice(&start[..start.len().min(8)]);
+    let (at, size) = (header.ramdisk_position(), header.ramdisk_size());
     let read = |entry: &mut dyn Read| {
         let mut config = Vec::new();
         entry.read_to_end(&mut config).context("read the device configuration")?;
         Ok(config)
     };
-    find(ramdisk, |name| name == skyward_config::ramdisk::CONFIG, read).context("read the ramdisk")
+    match find(ramdisk, |name| name == skyward_config::ramdisk::CONFIG, read) {
+        Ok(config) => Ok(config),
+        Err(error) => {
+            // The phone's own log is where the reason a stock recovery on the
+            // other slot is not read can be found afterwards, with what the
+            // ramdisk it was packed in started with.
+            let _ = kmsg(&format!("install: the ramdisk at {at} of {size} bytes, a version {} header, starts {first:02x?} and cannot be read: {error:#}", header.header_version()));
+            Err(error).context("read the ramdisk")
+        }
+    }
 }
 
 /// The partition `name` of `slot` among the links in `dir`.

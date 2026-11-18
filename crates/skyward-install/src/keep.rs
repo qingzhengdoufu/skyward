@@ -62,13 +62,16 @@ impl Kept {
 }
 
 /// What the partition at `path` holds, read past any pages cached of it,
-/// and all of it.
+/// and all of it. An image this build cannot read is taken for one that is
+/// not Skyward, and the log says what it started with, rather than failing
+/// the install: a stock recovery is a thing an install may well find, and
+/// what it does with one is nothing.
 fn read(path: &Path) -> Result<(Held, Vec<u8>)> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     image::drop_cache(&file).with_context(|| format!("drop the cached pages of {}", path.display()))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).with_context(|| format!("read {}", path.display()))?;
-    let skyward = image::is_skyward(&mut Cursor::new(&bytes)).with_context(|| format!("look into {}", path.display()))?;
+    let skyward = image::is_skyward_at(&mut Cursor::new(&bytes), path)?;
     Ok((Held { digest: Sha256::digest(&bytes).into(), skyward }, bytes))
 }
 
@@ -93,7 +96,7 @@ pub fn restore(before: [Held; 2], after: [Held; 2], own: [u8; 32], next: Slot) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::samples::recovery;
+    use crate::image::samples::{boot_image, recovery};
 
     const SKYWARD: Held = Held { digest: [1; 32], skyward: true };
     const OWN: [u8; 32] = SKYWARD.digest;
@@ -158,5 +161,52 @@ mod tests {
         let erased = partitions(&recovery(true), &[], 1 << 20);
         assert!(Kept::hold(erased.path(), Slot::B).unwrap().is_none(), "an erased partition");
         assert!(Kept::hold(erased.path(), Slot::A).unwrap().is_some());
+    }
+
+    /// A recovery image whose ramdisk cannot be read: a legacy LZ4 stream
+    /// whose first block says it unpacks to more than a block of that
+    /// framing does, as the stock recovery of some phones is packed.
+    fn unreadable() -> Vec<u8> {
+        boot_image(0, &[0x02, 0x21, 0x4c, 0x18, 0x00, 0x00, 0x00, 0x08])
+    }
+
+    #[test]
+    fn an_image_this_build_cannot_read_is_not_skyward_and_does_not_stop_the_install() {
+        let dir = partitions(&recovery(true), &unreadable(), 1 << 20);
+        assert!(Kept::hold(dir.path(), Slot::A).unwrap().is_some(), "the other slot's image being unreadable is no reason to stop");
+        assert!(Kept::hold(dir.path(), Slot::B).unwrap().is_none(), "and that image is not taken for Skyward");
+    }
+
+    #[test]
+    fn full_ota_restores_the_next_slots_exact_image_in_both_directions() {
+        let (skyward, stock) = (recovery(true), recovery(false));
+        let size = skyward.len().max(stock.len()) + 4096;
+        for current in [Slot::A, Slot::B] {
+            let dir = match current {
+                Slot::A => partitions(&skyward, &stock, size),
+                Slot::B => partitions(&stock, &skyward, size),
+            };
+            let kept = Kept::hold(dir.path(), current).unwrap().unwrap();
+            let before = std::fs::read(image::device(dir.path(), PARTITION, current)).unwrap();
+            let next = current.other();
+            // An OTA replaces the next slot, including an unfamiliar stock ramdisk.
+            let mut replaced = unreadable();
+            replaced.resize(size, 0);
+            std::fs::write(image::device(dir.path(), PARTITION, next), replaced).unwrap();
+            let wanted = kept.wanted(next).unwrap();
+            assert_eq!(wanted, [next]);
+            kept.write(&wanted, &mut |_, _| {}).unwrap();
+            for slot in [current, next] {
+                assert_eq!(std::fs::read(image::device(dir.path(), PARTITION, slot)).unwrap(), before);
+            }
+            assert!(kept.wanted(next).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn preservation_still_reports_partition_read_failures() {
+        let dir = partitions(&recovery(true), &recovery(false), 1 << 20);
+        std::fs::remove_file(image::device(dir.path(), PARTITION, Slot::B)).unwrap();
+        assert!(Kept::hold(dir.path(), Slot::A).is_err());
     }
 }
