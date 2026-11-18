@@ -102,6 +102,9 @@ impl App {
     /// In the file manager, back climbs a folder until it reaches the root,
     /// and in a place, until it reaches the place's top.
     pub(super) fn back(&mut self, now: u64) -> Vec<Effect> {
+        if self.browser_immersive() {
+            return self.set_browser_immersive(false);
+        }
         if self.shade.is_some() && self.screen() == Screen::ControlCenter {
             self.settle_shade(false, now, 0.0);
             return Vec::new();

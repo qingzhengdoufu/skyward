@@ -69,6 +69,7 @@ impl Message {
             32 => valid_frame(self.x, self.y) && self.value == self.x as u32 * self.y as u32 * 4,
             33 => self.value <= 100 && (0..=1).contains(&self.x) && (0..=1).contains(&self.y),
             34 | 36 | 42 | 43 => true,
+            44 => self.value <= 1,
             35 => self.value <= 10,
             37..=41 => self.sequence > 0 && (0..=100).contains(&self.x) && self.y >= 0,
             _ => false,
@@ -86,7 +87,7 @@ impl Message {
     pub fn validate_command(&self) -> Result<()> {
         let valid = match self.kind {
             1 => address(&self.text).is_ok(),
-            2..=5 | 10..=11 | 15 | 20 => true,
+            2..=5 | 10..=11 | 15 | 20 | 21 => true,
             9 => self.value <= 0x10ffff && !(0xd800..=0xdfff).contains(&self.value),
             16 => valid_viewport(self.x, self.y),
             18..=19 => self.value <= 1,
@@ -201,6 +202,18 @@ mod tests {
             command.value = 2;
             assert!(command.validate_command().is_err());
         }
+    }
+
+    #[test]
+    fn fullscreen_events_are_boolean_and_exit_has_a_fixed_command() {
+        assert!(Message::command(21).validate_command().is_ok());
+        let mut event = Message::command(44);
+        for value in [0, 1] {
+            event.value = value;
+            assert!(event.validate_worker().is_ok());
+        }
+        event.value = 2;
+        assert!(event.validate_worker().is_err());
     }
 
     #[test]

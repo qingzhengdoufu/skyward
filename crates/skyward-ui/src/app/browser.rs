@@ -138,6 +138,7 @@ pub struct Browser {
     pub media_session: bool,
     pub desktop_mode: bool,
     pub landscape_mode: bool,
+    pub immersive: bool,
     pub full_zoom: f32,
     pub full_text: bool,
     pub full_touch: (u16, u16),
@@ -178,6 +179,7 @@ impl Default for Browser {
             media_session: false,
             desktop_mode: false,
             landscape_mode: false,
+            immersive: false,
             full_zoom: 1.0,
             full_text: false,
             full_touch: (500, 500),
@@ -206,6 +208,63 @@ impl Default for Browser {
 }
 
 impl App {
+    pub(super) fn set_browser_immersive(&mut self, enabled: bool) -> Vec<Effect> {
+        if !self.state.browser.full_active || self.state.browser.immersive == enabled {
+            return Vec::new();
+        }
+        let mut effects = self.browser_cancel_touch();
+        self.immersive_pull = None;
+        self.state.browser.immersive = enabled;
+        self.state.browser.picture = None;
+        self.state.browser.full_shot = None;
+        self.keys = false;
+        self.adjusting = false;
+        self.drop_button();
+        self.end_turn();
+        self.settle_page();
+        self.refresh();
+        if !enabled {
+            effects.push(Effect::BrowserPluginExitFullscreen);
+        }
+        effects
+    }
+
+    pub fn browser_plugin_fullscreen(&mut self, enabled: bool) -> Vec<Effect> {
+        if enabled && !matches!(self.screen(), Screen::Browser | Screen::BrowserAddress) {
+            return vec![Effect::BrowserPluginExitFullscreen];
+        }
+        self.set_browser_immersive(enabled)
+    }
+
+    pub(super) fn immersive_touch(&mut self, event: Touch, now: u64) -> Option<Vec<Effect>> {
+        if !self.browser_immersive() {
+            self.immersive_pull = None;
+            return None;
+        }
+        if let Touch::Down(x, y) = event
+            && y < self.theme().m.dp(12.0)
+        {
+            self.immersive_pull = Some((x, y));
+            self.stir(now);
+            return Some(Vec::new());
+        }
+        let (start_x, start_y) = self.immersive_pull?;
+        match event {
+            Touch::Move(x, y) if y - start_y > self.theme().m.dp(40.0) && y - start_y > (x - start_x).abs() => {
+                let effects = self.set_browser_immersive(false);
+                self.open_shade(now, true);
+                self.drag = Drag::Held;
+                self.stir(now);
+                Some(effects)
+            }
+            Touch::Up => {
+                self.immersive_pull = None;
+                Some(Vec::new())
+            }
+            _ => Some(Vec::new()),
+        }
+    }
+
     pub fn browser_pinch(&mut self, scale: f32, now: u64) -> Vec<Effect> {
         if !self.browser_accepts_pinch() || !scale.is_finite() || scale <= 0.0 {
             return Vec::new();
@@ -546,6 +605,11 @@ impl App {
                 self.refresh();
             }
             Action::BrowserMenu => self.open(Screen::BrowserMenu),
+            Action::BrowserImmersiveToggle if self.state.browser.full_active => {
+                let enabled = !self.state.browser.immersive;
+                self.open(Screen::Browser);
+                return self.set_browser_immersive(enabled);
+            }
             Action::BrowserDesktopToggle if self.state.browser.full_active => {
                 self.state.browser.desktop_mode = !self.state.browser.desktop_mode;
                 self.open(Screen::Browser);
@@ -641,6 +705,7 @@ impl App {
             }
             Action::BrowserFullLoad => return self.browser_plugin_start_at(self.state.browser.url.clone()),
             Action::BrowserBasic => {
+                self.state.browser.immersive = false;
                 self.state.browser.media_playing = false;
                 self.state.browser.prefer_full = false;
                 self.state.browser.full_active = false;
@@ -655,6 +720,7 @@ impl App {
             }
             Action::BrowserPluginStart => return self.browser_plugin_start_at(self.state.browser.url.clone()),
             Action::BrowserPluginStop => {
+                self.state.browser.immersive = false;
                 self.state.browser.media_playing = false;
                 self.state.browser.full_active = false;
                 self.state.browser.prefer_full = false;
@@ -1168,6 +1234,12 @@ impl App {
         {
             return;
         }
+        if matches!(self.screen(), Screen::Browser | Screen::BrowserAddress) {
+            let area = self.browser_viewport();
+            if (width, height) != (area.w as u32, area.h as u32) {
+                return;
+            }
+        }
         self.state.browser.picture = Some(BrowserPicture {
             width,
             height,
@@ -1318,6 +1390,7 @@ fn is_browser_action(action: Action) -> bool {
             | Action::BrowserMenu
             | Action::BrowserDesktopToggle
             | Action::BrowserLandscapeToggle
+            | Action::BrowserImmersiveToggle
             | Action::BrowserBookmark
             | Action::BrowserHistoryList
             | Action::BrowserBookmarksList

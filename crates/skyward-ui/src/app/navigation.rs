@@ -5,7 +5,7 @@ const GROUP_DP: f32 = 252.0;
 
 impl App {
     pub(super) fn nav_height(&self) -> u32 {
-        if !self.navigation || self.screen() == Screen::Fastboot {
+        if !self.navigation || self.screen() == Screen::Fastboot || self.browser_immersive() {
             0
         } else {
             (self.px_per_dp * NAV_DP).round() as u32

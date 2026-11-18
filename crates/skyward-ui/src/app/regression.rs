@@ -210,6 +210,143 @@ fn browser_bottom_controls_float_over_a_fullscreen_viewport_without_receiving_we
     assert_eq!(app.screen(), Screen::BrowserAddress);
 }
 
+#[cfg(feature = "aera-browser")]
+#[test]
+fn immersive_browser_uses_every_display_pixel_and_has_no_hidden_chrome_hits() {
+    let (f, i) = (fonts(), info());
+    for (w, h, density) in [(720, 1600, 1.875), (W, H, 3.75)] {
+        let mut app = App::new(Screen::Browser, w, h, density);
+        app.set_navigation(true);
+        app.state.browser.full_active = true;
+        app.state.browser.view = BrowserView::Full;
+        app.state.data = Data::Open;
+        app.act(Action::BrowserMenu, 100);
+        assert!(
+            app.frame(&f, &i)
+                .hits
+                .iter()
+                .any(|hit| hit.action == Action::BrowserImmersiveToggle)
+        );
+        app.act(Action::BrowserImmersiveToggle, 200);
+        assert!(app.browser_immersive());
+        assert_eq!(app.nav_height(), 0);
+        let area = app.browser_viewport();
+        assert_eq!(area, Rect::new(0.0, 0.0, w as f32, h as f32));
+        app.browser_plugin_pixels(w, h, vec![72; w as usize * h as usize * 4]);
+        app.state.browser.full_progress = Some(1.0);
+        app.end_turn();
+        let frame = app.frame(&f, &i);
+        assert_eq!(frame.browser_area, Some(area));
+        assert!(frame.dock.is_none() && frame.hits.is_empty());
+        assert!(!frame.back && !frame.header && frame.fixed);
+        let mut canvas = Canvas::new(w, h);
+        app.compose(&mut canvas, &f, &i, "12:00", 1000);
+        assert!(
+            canvas.data.as_chunks::<4>().0.iter().all(|pixel| *pixel == [72; 4]),
+            "no clock, status, dock or navigation is composited over the webpage"
+        );
+        for (x, y) in [
+            (3.0, density * 20.0),
+            (w as f32 - 3.0, density * 20.0),
+            (3.0, h as f32 - 3.0),
+            (w as f32 - 3.0, h as f32 - 3.0),
+            (w as f32 / 2.0, h as f32 - density * 16.0),
+        ] {
+            assert!(matches!(
+                app.touch(Touch::Down(x, y), &f, 1100).as_slice(),
+                [Effect::BrowserPluginTouch { phase: 0, .. }]
+            ));
+            assert!(matches!(
+                app.touch(Touch::Up, &f, 1110).as_slice(),
+                [Effect::BrowserPluginTouch { phase: 2, .. }]
+            ));
+            assert_eq!(app.screen(), Screen::Browser);
+        }
+    }
+}
+
+#[test]
+fn immersive_top_pull_and_hardware_back_always_restore_a_recovery_exit() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    app.set_browser_immersive(true);
+    app.frame(&f, &i);
+    assert!(app.touch(Touch::Down(500.0, 5.0), &f, 1000).is_empty());
+    assert!(app.touch(Touch::Up, &f, 1010).is_empty());
+    assert!(app.browser_immersive(), "a short tap at the reserved edge does not exit");
+    app.touch(Touch::Down(500.0, 5.0), &f, 1100);
+    let effects = app.touch(Touch::Move(500.0, 200.0), &f, 1120);
+    assert_eq!(effects, [Effect::BrowserPluginExitFullscreen]);
+    app.touch(Touch::Up, &f, 1130);
+    app.tick(3000);
+    assert_eq!(app.screen(), Screen::ControlCenter);
+    assert!(!app.state.browser.immersive && app.shade.is_some());
+    assert!(app.nav_height() > 0);
+    app.dismiss_shade();
+    assert_eq!(app.screen(), Screen::Browser);
+    assert!(app.frame(&f, &i).dock.is_some());
+    app.set_browser_immersive(true);
+    assert_eq!(app.key(Key::Back, 4000), [Effect::BrowserPluginExitFullscreen]);
+    assert!(!app.browser_immersive());
+    assert_eq!(app.screen(), Screen::Browser, "back exits immersion before leaving the page");
+}
+
+#[test]
+fn immersive_engine_viewport_stays_fixed_when_keyboard_or_another_page_opens() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    app.set_browser_immersive(true);
+    let area = app.browser_viewport();
+    app.browser_plugin_focus(true);
+    assert_eq!(app.screen(), Screen::BrowserAddress);
+    assert_eq!(app.browser_viewport(), area);
+    assert!(app.nav_height() > 0, "keyboard retains recovery navigation");
+    let frame = app.frame(&f, &i);
+    assert!(frame.browser_area.unwrap().h < area.h);
+    assert!(frame.dock.is_none());
+    app.browser_plugin_focus(false);
+    assert!(app.browser_immersive());
+    app.act(Action::NavHome, 1000);
+    assert!(!app.browser_immersive());
+    assert!(app.nav_height() > 0);
+    assert_eq!(app.browser_plugin_fullscreen(true), [Effect::BrowserPluginExitFullscreen]);
+    assert_eq!(app.screen(), Screen::Home, "background fullscreen cannot steal recovery focus");
+}
+
+#[cfg(feature = "aera-browser")]
+#[test]
+fn immersive_resize_drops_inflight_old_pixels_and_failure_restores_navigation() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Browser, W, H, PPD);
+    app.set_navigation(true);
+    app.state.data = Data::Open;
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    let previous = app.browser_viewport();
+    app.browser_plugin_fullscreen(true);
+    app.browser_plugin_pixels(
+        previous.w as u32,
+        previous.h as u32,
+        vec![128; previous.w as usize * previous.h as usize * 4],
+    );
+    assert!(app.state.browser.picture.is_none());
+    app.browser_plugin_pixels(W, H, vec![128; W as usize * H as usize * 4]);
+    assert!(app.state.browser.picture.is_some());
+    app.browser_plugin_media_playing(true, 1000);
+    for n in 0..3 {
+        app.browser_plugin_failed("test failure".into(), 1100 + n);
+    }
+    assert!(!app.browser_immersive());
+    assert!(app.nav_height() > 0);
+    assert!(app.frame(&f, &i).dock.is_some());
+}
+
 #[test]
 fn webpage_keys_edit_the_focused_page_instead_of_an_empty_local_copy() {
     let mut app = App::new(Screen::Browser, W, H, PPD);

@@ -4,9 +4,8 @@ impl Pages<'_> {
         if let Some(worker) = &self.browser_stream
             && matches!(self.app.screen(), Screen::Browser | Screen::BrowserAddress)
         {
-            let theme = self.app.theme();
             // Keyboard overlays the page; never resize/reflow on focus changes.
-            let area = skyward_ui::browser::full_viewport(&theme);
+            let area = self.app.browser_viewport();
             let size = (area.w.round() as u32, area.h.round() as u32);
             if self.browser_viewport != Some(size) {
                 worker.command(crate::browser::Control::Viewport {
@@ -17,6 +16,7 @@ impl Pages<'_> {
             }
         }
         let mut downloads = Vec::new();
+        let mut mode_effects = Vec::new();
         let mut stream_failure = None;
         if let Some(worker) = &self.browser_stream {
             for ev in worker.events() {
@@ -30,10 +30,16 @@ impl Pages<'_> {
                     }
                     crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
                     crate::browser::Event::MediaPlaying(playing) => self.app.browser_plugin_media_playing(playing, now),
+                    crate::browser::Event::Fullscreen(enabled) => mode_effects.extend(self.app.browser_plugin_fullscreen(enabled)),
                     crate::browser::Event::Navigated(url) => self.app.browser_navigated(url),
                     crate::browser::Event::Download { url, name } => downloads.push((url, name)),
                     _ => {}
                 }
+            }
+        }
+        for effect in mode_effects {
+            if let Err(error) = self.effect(effect, now) {
+                self.app.report(&format!("{error:#}"), now);
             }
         }
         if let Some(why) = stream_failure {
@@ -108,6 +114,7 @@ impl Pages<'_> {
                     }
                     crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
                     crate::browser::Event::MediaPlaying(_) => {}
+                    crate::browser::Event::Fullscreen(_) => {}
                     crate::browser::Event::PluginSaved { done, total, speed } => self.app.plugin_saved(done, total, speed),
                     crate::browser::Event::PluginEnded(ended) => {
                         self.app.plugin_downloaded(ended);

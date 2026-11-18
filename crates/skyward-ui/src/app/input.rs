@@ -20,10 +20,13 @@ impl App {
             self.drag = Drag::Waking;
             return Vec::new();
         }
+        if let Some(effects) = self.immersive_touch(ev, now) {
+            return effects;
+        }
         if let Some(effects) = self.navigation_touch(ev, now) {
             return effects;
         }
-        if self.shade_touch(ev, now) {
+        if !self.browser_immersive() && self.shade_touch(ev, now) {
             return Vec::new();
         }
         let shade_content = self.shade.is_some() && self.screen() == Screen::ControlCenter;
@@ -36,7 +39,7 @@ impl App {
             && let Some(area) = self.frame.as_ref().and_then(|f| f.browser_area)
             && area.contains(x, y + self.top().1)
         {
-            let mapping = crate::browser::full_viewport(&self.theme());
+            let mapping = self.browser_viewport();
             let (px, py) = browser_point(mapping, x, y + self.top().1);
             self.drag = Drag::BrowserTouch {
                 rect: mapping,

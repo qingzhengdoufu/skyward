@@ -305,10 +305,10 @@ fn full_page(cx: &Ctx) -> Frame {
     let (t, l) = (cx.t, cx.state.lang);
     let m = &t.m;
     let mut c = page(cx);
-    let top = full_viewport(t).y;
+    let area = engine_viewport(t, cx.state.browser.immersive);
+    let top = area.y;
     let mut out = Vec::new();
     let y = top;
-    let area = full_viewport(t);
     if cx.state.browser.picture.is_some() || cx.state.browser.full_shot.is_some() {
         if let Some(picture) = cx
             .state
@@ -322,7 +322,7 @@ fn full_page(cx: &Ctx) -> Frame {
             c.blit_rgba(&picture.pixels, w, h, x.round() as i32, y.round() as i32);
             if let Some(progress) = cx.state.browser.full_progress.filter(|p| *p < 1.0) {
                 let progress = progress.clamp(0.0, 1.0);
-                c.fill_round_rect(0.0, m.dp(48.0), m.w as f32 * progress, m.dp(3.0), m.dp(1.5), t.pal.accent);
+                c.fill_round_rect(0.0, top, m.w as f32 * progress, m.dp(3.0), m.dp(1.5), t.pal.accent);
             }
         } else {
             widgets::footnote(
@@ -358,7 +358,9 @@ fn full_page(cx: &Ctx) -> Frame {
     frame.header = false;
     frame.back = false;
     frame.browser_area = Some(area);
-    frame.dock = Some(full_dock(cx));
+    if !cx.state.browser.immersive {
+        frame.dock = Some(full_dock(cx));
+    }
     frame
 }
 
@@ -367,6 +369,14 @@ pub fn full_viewport(t: &Theme) -> Rect {
     let bottom = t.m.h as f32 - t.bottom_inset - t.m.dp(BROWSER_DOCK_DP);
     let height = ((bottom - top).max(400.0) / 4.0).floor() * 4.0;
     Rect::new(0.0, top, (t.m.w / 4 * 4) as f32, height)
+}
+
+pub fn engine_viewport(t: &Theme, immersive: bool) -> Rect {
+    if immersive {
+        Rect::new(0.0, 0.0, (t.m.w / 4 * 4) as f32, (t.m.h / 4 * 4) as f32)
+    } else {
+        full_viewport(t)
+    }
 }
 
 pub fn full_input_viewport(t: &Theme) -> Rect {
@@ -1085,7 +1095,8 @@ fn full_input(cx: &Ctx) -> Frame {
         action: Action::Type(cap),
     }));
     frame.canvas = frame.canvas.crop_height(m.h);
-    frame.browser_area = Some(viewport_above(t, field_top));
+    let area = engine_viewport(t, s.browser.immersive);
+    frame.browser_area = Some(Rect::new(area.x, area.y, area.w, (field_top - area.y).max(0.0)));
     frame.dock = None;
     frame.caret = caret;
     frame
@@ -1688,6 +1699,9 @@ pub fn menu(cx: &Ctx) -> Frame {
     ];
     if cx.state.browser.full_active {
         rows.extend([
+            Row::new(l.pick(["沉浸全屏", "沉浸全螢幕", "Immersive fullscreen"]))
+                .icon(BLUE, Icon::Layers)
+                .trail(Trail::Switch(cx.state.browser.immersive)),
             Row::new(if cx.state.browser.desktop_mode {
                 l.pick(["手机模式", "手機模式", "Mobile mode"])
             } else {
@@ -1708,6 +1722,7 @@ pub fn menu(cx: &Ctx) -> Frame {
             Row::new(l.pick(["轻量模式", "輕量模式", "Basic mode"])).icon(BLUE, Icon::Globe),
         ]);
         actions.extend([
+            Action::BrowserImmersiveToggle,
             Action::BrowserDesktopToggle,
             Action::BrowserLandscapeToggle,
             Action::BrowserKeyboard,

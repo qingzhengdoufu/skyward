@@ -322,6 +322,7 @@ pub enum Action {
     BrowserMenu,
     BrowserDesktopToggle,
     BrowserLandscapeToggle,
+    BrowserImmersiveToggle,
     BrowserBookmark,
     BrowserHistoryList,
     BrowserBookmarksList,
@@ -635,6 +636,7 @@ pub enum Effect {
     BrowserPluginText(String),
     BrowserPluginKey(u32),
     BrowserPluginCancelTouch,
+    BrowserPluginExitFullscreen,
     BrowserPluginDesktop {
         enabled: bool,
     },
@@ -1486,6 +1488,7 @@ pub(super) fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
+    immersive_pull: Option<(f32, f32)>,
     shade_pull: Option<shade::ShadePull>,
     shade: Option<shade::Shade>,
     parked: Option<Vec<(Screen, f32, Focus)>>,
@@ -1643,6 +1646,7 @@ pub struct App {
 impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
+            immersive_pull: None,
             shade_pull: None,
             shade: None,
             parked: None,
@@ -1740,6 +1744,14 @@ impl App {
 }
 
 impl App {
+    pub fn browser_immersive(&self) -> bool {
+        self.state.browser.full_active && self.state.browser.immersive && self.screen() == Screen::Browser
+    }
+
+    pub fn browser_viewport(&self) -> Rect {
+        crate::browser::engine_viewport(&self.theme(), self.state.browser.full_active && self.state.browser.immersive)
+    }
+
     pub(super) fn browser_fullscreen(&self) -> bool {
         self.state.browser.full_active && matches!(self.screen(), Screen::Browser | Screen::BrowserAddress)
     }

@@ -25,11 +25,11 @@ constexpr uint32_t FrameSlot(uint32_t sequence) {
 }
 enum class Kind : uint32_t { kOpen = 1, kBack, kForward, kReload, kStop,
   kTouchDown, kTouchMove, kTouchUp, kKey, kAck, kClose, kSetZoom,
-  kDownloadCancel, kSetCookiePolicy, kClearBrowsingData, kViewport, kDesktop = 18, kLandscape, kTouchCancel,
+  kDownloadCancel, kSetCookiePolicy, kClearBrowsingData, kViewport, kDesktop = 18, kLandscape, kTouchCancel, kExitFullscreen,
   kFrame = 32, kStatus, kError, kKeyboardShow, kKeyboardHide,
   kDownloadStarted, kDownloadProgress, kDownloadFinished,
   kDownloadFailed, kDownloadCancelled, kBrowsingDataCleared,
-  kBrowsingDataFailed };
+  kBrowsingDataFailed, kFullscreen };
 struct Message {
   uint32_t magic = kMagic;
   Kind kind = Kind::kStatus;
@@ -56,7 +56,8 @@ inline bool Valid(const Message &m, bool from_worker) {
              m.kind == Kind::kDownloadCancelled) &&
             m.sequence > 0 && m.x >= 0 && m.x <= 100 && m.y >= 0) ||
            m.kind == Kind::kBrowsingDataCleared ||
-           m.kind == Kind::kBrowsingDataFailed;
+           m.kind == Kind::kBrowsingDataFailed ||
+           (m.kind == Kind::kFullscreen && m.value <= 1);
   switch (m.kind) {
     case Kind::kDesktop: case Kind::kLandscape: return m.value <= 1;
     case Kind::kViewport: return m.x >= 320 && m.x <= kMaxWidth && m.y >= 400 && m.y <= kMaxHeight && m.x % 4 == 0 && m.y % 4 == 0;
@@ -68,6 +69,7 @@ inline bool Valid(const Message &m, bool from_worker) {
     case Kind::kSetCookiePolicy: return m.value <= 2;
     case Kind::kClearBrowsingData: return true;
     case Kind::kTouchCancel: return true;
+    case Kind::kExitFullscreen: return true;
     case Kind::kOpen: case Kind::kBack: case Kind::kForward: case Kind::kReload:
     case Kind::kStop: case Kind::kKey: case Kind::kAck: case Kind::kClose: return true;
     default: return false;

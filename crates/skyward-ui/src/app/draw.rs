@@ -420,12 +420,12 @@ impl App {
             }
         }
         self.shown = Some(view);
-        if screen != Screen::ControlCenter {
+        if screen != Screen::ControlCenter && !self.browser_immersive() {
             if self.browser_fullscreen() {
                 out.fill_rect(0.0, 0.0, self.w as f32, t.m.dp(48.0), Rgba::rgb(0, 0, 0).with_alpha(145));
             }
             widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
-        } else if self.shade.is_none() {
+        } else if screen == Screen::ControlCenter && self.shade.is_none() {
             widgets::status_marks(out, &t, f, &self.bar(clock, info), t.pal.status);
         }
         if let Some((text, _)) = &self.toast {

@@ -65,7 +65,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
         );
         std::thread::sleep(Duration::from_millis(10));
     };
-    let backing = size;
+    let mut backing = size;
     let mut browser = Browser::start(root, &dns, backing)?;
     let initial = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
     let mut landscape = false;
@@ -91,6 +91,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
     let mut publish_at = Instant::now();
     let mut frames = 0u64;
     let measured_at = Instant::now();
+    let mut viewport_at = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         ensure!(browser.running()?, "AERA worker exited; see /tmp/skyward-browser.log");
         let commands = std::mem::take(&mut *inputs.lock().expect("browser controls are not poisoned"));
@@ -102,12 +103,18 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                     touch(&browser, 2, x, y, backing, landscape)?;
                 }
                 Control::Viewport { width, height } => {
-                    ensure!(
-                        (1..=4096).contains(&width) && (1..=4096).contains(&height),
-                        "AERA viewport outside bound"
-                    );
+                    ensure!(protocol::valid_viewport(width as i32, height as i32), "AERA viewport outside bound");
                     size = (width, height);
-                    changed = true;
+                    if size != backing {
+                        let mut message = Message::command(16);
+                        message.x = width as i32;
+                        message.y = height as i32;
+                        browser.session.send(&message)?;
+                        backing = size;
+                        latest = None;
+                        changed = false;
+                        viewport_at = Instant::now();
+                    }
                 }
                 Control::Text { text } => {
                     // ARP2 transports Unicode key values, not JavaScript or shell text.
@@ -138,6 +145,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                     browser.session.send(&message)?;
                 }
                 Control::CancelTouch => browser.session.send(&Message::command(20))?,
+                Control::ExitFullscreen => browser.session.send(&Message::command(21))?,
                 Control::Pinch { scale } => {
                     ensure!(scale.is_finite() && scale > 0.0, "invalid AERA zoom");
                     zoom = (zoom * scale).clamp(50.0, 300.0);
@@ -170,11 +178,12 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
             };
             match message.kind {
                 32 => {
-                    ensure!(
-                        [(backing.0, backing.1), (backing.1, backing.0)].contains(&(message.x as u32, message.y as u32)),
-                        "native browser frame differs from viewport"
-                    );
-                    latest = Some((browser.session.copy_frame(&message)?, message.x as u32, message.y as u32));
+                    let pixels = browser.session.copy_frame(&message)?;
+                    // Acknowledge in-flight frames but never stretch an old viewport into a new one.
+                    if ![(backing.0, backing.1), (backing.1, backing.0)].contains(&(message.x as u32, message.y as u32)) {
+                        continue;
+                    }
+                    latest = Some((pixels, message.x as u32, message.y as u32));
                     changed = true;
                 }
                 33 => {
@@ -194,6 +203,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
                 34 => bail!("AERA worker: {}", message.text),
                 35 => tell(Event::Focus(true)),
                 36 => tell(Event::Focus(false)),
+                44 => tell(Event::Fullscreen(message.value != 0)),
                 // Downloads belong to AERA's private /data tree in this test.
                 // Do not interpret worker strings as host paths or installer commands.
                 37..=43 => super::browser::note(&format!("AERA event {} #{}: {}", message.kind, message.sequence, message.text)),
@@ -201,7 +211,7 @@ pub fn run(url: &str, servers: &Servers, stop: &AtomicBool, inputs: &Mutex<VecDe
             }
         }
         ensure!(
-            latest.is_some() || measured_at.elapsed() < Duration::from_secs(30),
+            latest.is_some() || viewport_at.elapsed() < Duration::from_secs(30),
             "AERA did not produce a frame within 30 seconds; see /tmp/skyward-browser.log"
         );
         if changed

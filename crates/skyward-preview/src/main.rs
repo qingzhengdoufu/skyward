@@ -16,7 +16,7 @@ use skyward_ui::app::{
     SkywardEnd, SkywardJob, SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
 };
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
-use skyward_ui::{Canvas, Ctx, Fonts, Lang, Theme, editor, fmt, pages};
+use skyward_ui::{Canvas, Ctx, Fonts, Lang, Rgba, Theme, editor, fmt, pages};
 use skyward_vab::{BootSlots, FailureCode, Hold, Slot, SnapshotState, Standing};
 use std::fs::File;
 use std::io::BufWriter;
@@ -139,6 +139,56 @@ type MountShot<'a> = (&'a str, bool, &'a DeviceInfo, Option<MountFailure>, &'a [
 /// File name, page, dark theme, and what to set before the page is drawn.
 type PageShot<'a> = (&'a str, Screen, bool, &'a dyn Fn(&mut App));
 
+fn immersive_picture(t: &Theme, fonts: &Fonts, landscape: bool) -> skyward_ui::app::BrowserPicture {
+    let area = skyward_ui::browser::engine_viewport(t, true);
+    let (pw, ph) = (area.w as u32, area.h as u32);
+    let (width, height) = if landscape { (ph, pw) } else { (pw, ph) };
+    let mut picture = Canvas::filled(width, height, Rgba::rgb(238, 243, 247));
+    let ink = Rgba::rgb(24, 40, 52);
+    let grid = Rgba::rgb(201, 215, 224);
+    for x in (0..width).step_by(160) {
+        picture.fill_rect(x as f32, 0.0, 2.0, height as f32, grid);
+    }
+    for y in (0..height).step_by(160) {
+        picture.fill_rect(0.0, y as f32, width as f32, 2.0, grid);
+    }
+    let edge = Rgba::rgb(39, 157, 105);
+    for (x, y, w, h) in [
+        (0, 0, width, 16),
+        (0, height - 16, width, 16),
+        (0, 0, 16, height),
+        (width - 16, 0, 16, height),
+    ] {
+        picture.fill_rect(x as f32, y as f32, w as f32, h as f32, edge);
+    }
+    let max_w = Some(width as f32 - t.m.dp(40.0));
+    for (text, y, px) in [
+        ("沉浸全屏 / Immersive viewport".into(), t.m.dp(80.0), 20.0),
+        ("离线布局预览 / Offline layout preview".into(), t.m.dp(118.0), 14.0),
+        (format!("{width} x {height}"), height as f32 / 2.0, 24.0),
+    ] {
+        picture.text_top(&fonts.body, &text, t.m.dp(20.0), y, t.m.dp(px), ink, max_w);
+    }
+    let pixels = if landscape {
+        let mut rotated = vec![0; picture.data.len()];
+        for y in 0..height {
+            for x in 0..width {
+                let from = ((y * width + x) * 4) as usize;
+                let to = ((x * height + height - 1 - y) * 4) as usize;
+                rotated[to..to + 4].copy_from_slice(&picture.data[from..from + 4]);
+            }
+        }
+        rotated
+    } else {
+        std::mem::take(&mut picture.data)
+    };
+    skyward_ui::app::BrowserPicture {
+        width: pw,
+        height: ph,
+        pixels: std::sync::Arc::new(pixels),
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let out = PathBuf::from(args.get(1).map(String::as_str).unwrap_or("preview-out"));
@@ -202,6 +252,9 @@ fn main() -> Result<()> {
                     ("browser-keys", Screen::BrowserAddress),
                     ("browser-full-live", Screen::Browser),
                     ("browser-full-keys", Screen::BrowserAddress),
+                    ("browser-immersive", Screen::Browser),
+                    ("browser-immersive-keys", Screen::BrowserAddress),
+                    ("browser-immersive-landscape", Screen::Browser),
                     ("browser-ime", Screen::BrowserAddress),
                     ("pattern-compact", Screen::Decrypt),
                     ("browser-downloads", Screen::BrowserDownloads),
@@ -265,12 +318,42 @@ fn main() -> Result<()> {
                         app.state.browser.ime.update();
                         let theme = app.theme();
                         let area = skyward_ui::browser::full_viewport(&theme);
-                        let mut picture = Canvas::filled(area.w as u32, area.h as u32, skyward_ui::Rgba::rgb(255,255,255));
-                        picture.text_top(&fonts.body, "中文网页离线布局预览", theme.m.dp(16.0), theme.m.dp(65.0), theme.m.dp(22.0), skyward_ui::Rgba::rgb(24,24,24), Some(area.w - theme.m.dp(32.0)));
-                        picture.text_top(&fonts.body, "你好，Skyward", theme.m.dp(16.0), theme.m.dp(110.0), theme.m.dp(18.0), skyward_ui::Rgba::rgb(24,24,24), Some(area.w - theme.m.dp(32.0)));
-                        app.state.browser.picture = Some(skyward_ui::app::BrowserPicture { width: picture.w, height: picture.h, pixels: std::sync::Arc::new(std::mem::take(&mut picture.data)) });
+                        let mut picture = Canvas::filled(area.w as u32, area.h as u32, skyward_ui::Rgba::rgb(255, 255, 255));
+                        picture.text_top(
+                            &fonts.body,
+                            "中文网页离线布局预览",
+                            theme.m.dp(16.0),
+                            theme.m.dp(65.0),
+                            theme.m.dp(22.0),
+                            skyward_ui::Rgba::rgb(24, 24, 24),
+                            Some(area.w - theme.m.dp(32.0)),
+                        );
+                        picture.text_top(
+                            &fonts.body,
+                            "你好，Skyward",
+                            theme.m.dp(16.0),
+                            theme.m.dp(110.0),
+                            theme.m.dp(18.0),
+                            skyward_ui::Rgba::rgb(24, 24, 24),
+                            Some(area.w - theme.m.dp(32.0)),
+                        );
+                        app.state.browser.picture = Some(skyward_ui::app::BrowserPicture {
+                            width: picture.w,
+                            height: picture.h,
+                            pixels: std::sync::Arc::new(std::mem::take(&mut picture.data)),
+                        });
                     }
-                    if name == "pattern-compact" { app.data_waiting(Some((0,Keys::Pattern)),Vec::new()); }
+                    if name.starts_with("browser-immersive") {
+                        app.state.browser.full_active = true;
+                        app.state.browser.immersive = true;
+                        app.state.browser.full_text = screen == Screen::BrowserAddress;
+                        app.state.browser.landscape_mode = name.ends_with("landscape");
+                        app.state.browser.view = BrowserView::Full;
+                        app.state.browser.picture = Some(immersive_picture(&app.theme(), &fonts, app.state.browser.landscape_mode));
+                    }
+                    if name == "pattern-compact" {
+                        app.data_waiting(Some((0, Keys::Pattern)), Vec::new());
+                    }
                     if name == "root-modules" {
                         app.state.root_modules = Some(Ok((
                             "Magisk".into(),

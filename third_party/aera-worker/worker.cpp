@@ -77,6 +77,8 @@ struct Session {
   uint32_t sequence = 0;
   bool pending = false;
   bool snapshot_pending = false;
+  uint64_t viewport_generation = 0;
+  uint64_t snapshot_generation = 0;
   bool staged_ready = false;
   bool has_frame = false;
   gint64 last_native_frame_us = 0;
@@ -86,6 +88,7 @@ struct Session {
   bool media_playing = false;
   std::unordered_map<std::string, gint64> playing_documents;
   bool landscape = false;
+  bool fullscreen = false;
   WebKitUserScript *viewport_script = nullptr;
   gint64 frame_warning_us = 0;
   std::vector<uint8_t> staged;
@@ -212,17 +215,23 @@ static gboolean UpdateMediaState(gpointer data) {
   }
   return G_SOURCE_CONTINUE;
 }
+static void ResizeViewport(Session *s) {
+  ++s->viewport_generation;
+  kWidth = s->landscape ? kPortraitHeight : kPortraitWidth;
+  kHeight = s->landscape ? kPortraitWidth : kPortraitHeight;
+  kViewWidth = kWidth / 4; kViewHeight = kHeight / 4;
+  kFrameBytes = kWidth * kHeight * 4;
+  g_clear_object(&s->latest);
+  s->staged_ready = false;
+  s->staged.clear();
+  s->has_frame = false;
+  wpe_toplevel_resize(wpe_view_get_toplevel(s->view), kViewWidth, kViewHeight);
+  fprintf(stderr, "Browser viewport: %s backing=%dx%d\n", s->landscape ? "landscape" : "portrait", kWidth, kHeight);
+}
 static void ApplyLandscape(Session *s, bool enabled) {
   if (s->landscape == enabled) return;
   s->landscape = enabled;
-  kWidth = enabled ? kPortraitHeight : kPortraitWidth;
-  kHeight = enabled ? kPortraitWidth : kPortraitHeight;
-  kViewWidth = kWidth / 4; kViewHeight = kHeight / 4;
-  g_clear_object(&s->latest);
-  s->staged_ready = false;
-  s->has_frame = false;
-  wpe_toplevel_resize(wpe_view_get_toplevel(s->view), kViewWidth, kViewHeight);
-  fprintf(stderr, "Browser orientation: %s backing=%dx%d\n", enabled ? "landscape" : "portrait", kWidth, kHeight);
+  ResizeViewport(s);
 }
 struct Session::DownloadRecord {
   Session *session = nullptr;
@@ -384,6 +393,11 @@ static void SnapshotDone(GObject *source, GAsyncResult *result, gpointer data) {
   s->snapshot_pending = false;
   GError *error = nullptr;
   WebKitImage *image = webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(source), result, &error);
+  if (s->snapshot_generation != s->viewport_generation) {
+    g_clear_object(&image);
+    g_clear_error(&error);
+    return;
+  }
   if (!image) {
     if (error) {
       if (g_get_monotonic_time() - s->frame_warning_us > 5000000) {
@@ -464,6 +478,7 @@ static gboolean SnapshotTick(gpointer data) {
        now - s->last_snapshot_request_us < interval_us))
     return G_SOURCE_CONTINUE;
   s->snapshot_pending = true;
+  s->snapshot_generation = s->viewport_generation;
   s->last_snapshot_request_us = now;
   webkit_web_view_get_snapshot(s->web, WEBKIT_SNAPSHOT_REGION_VISIBLE,
       WEBKIT_SNAPSHOT_OPTIONS_NONE, nullptr, SnapshotDone, s);
@@ -481,6 +496,17 @@ static gboolean Input(gint fd, GIOCondition condition, gpointer data) {
       m.kind == Kind::kTouchUp)
     s->last_input_us = g_get_monotonic_time();
   switch (m.kind) {
+    case Kind::kViewport:
+      if (kPortraitWidth != m.x || kPortraitHeight != m.y) {
+        kPortraitWidth = m.x; kPortraitHeight = m.y;
+        ResizeViewport(s);
+      }
+      break;
+    case Kind::kExitFullscreen:
+      webkit_web_view_evaluate_javascript(s->web,
+          "if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})",
+          -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+      break;
     case Kind::kDesktop: ApplyDesktopMode(s, m.value != 0); break;
     case Kind::kLandscape: ApplyLandscape(s, m.value != 0); break;
     case Kind::kTouchCancel: {
@@ -700,8 +726,22 @@ int main(int argc, char **argv) {
       "settings", settings, "web-context", context, "network-session", network,
       "user-content-manager", content, nullptr));
   // The engine's video/fullscreen UI stays within its isolated native viewport.
-  g_signal_connect(s.web, "enter-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer) -> gboolean { return TRUE; }), nullptr);
-  g_signal_connect(s.web, "leave-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer) -> gboolean { return TRUE; }), nullptr);
+  g_signal_connect(s.web, "enter-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer data) -> gboolean {
+    auto *session = static_cast<Session *>(data);
+    session->fullscreen = true;
+    Message message; message.kind = Kind::kFullscreen; message.value = 1;
+    Send(session, message);
+    return TRUE;
+  }), &s);
+  g_signal_connect(s.web, "leave-fullscreen", G_CALLBACK(+[](WebKitWebView *, gpointer data) -> gboolean {
+    auto *session = static_cast<Session *>(data);
+    if (session->fullscreen) {
+      session->fullscreen = false;
+      Message message; message.kind = Kind::kFullscreen; message.value = 0;
+      Send(session, message);
+    }
+    return TRUE;
+  }), &s);
   g_signal_connect(network, "download-started", G_CALLBACK(DownloadStarted), &s);
   g_signal_connect(s.web, "permission-request", G_CALLBACK(+[](WebKitWebView *, WebKitPermissionRequest *r, gpointer) -> gboolean {
     webkit_permission_request_deny(r); return TRUE;

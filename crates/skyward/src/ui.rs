@@ -2736,6 +2736,11 @@ impl Pages<'_> {
                     worker.command(crate::browser::Control::CancelTouch);
                 }
             }
+            Effect::BrowserPluginExitFullscreen => {
+                if let Some(worker) = &self.browser_stream {
+                    worker.command(crate::browser::Control::ExitFullscreen);
+                }
+            }
             Effect::BrowserPluginLandscape { enabled } => {
                 if let Some(worker) = &self.browser_stream {
                     worker.command(crate::browser::Control::Landscape { enabled });

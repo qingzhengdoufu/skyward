@@ -60,6 +60,7 @@ pub enum Control {
     Text { text: String },
     Key { value: u32 },
     CancelTouch,
+    ExitFullscreen,
     Desktop { enabled: bool },
     Landscape { enabled: bool },
     Scroll { dy: i64 },
@@ -96,6 +97,7 @@ pub enum Event {
     /// A text field on the plugin page took focus.
     Focus(bool),
     MediaPlaying(bool),
+    Fullscreen(bool),
     /// How far the plugin package download has come.
     #[cfg_attr(
         feature = "aera-browser",
@@ -356,6 +358,7 @@ impl Worker {
                                             Control::Key { value } => cdp.key(value)?,
                                             Control::Desktop { .. } | Control::Landscape { .. } => {}
                                             Control::CancelTouch => {}
+                                            Control::ExitFullscreen => {}
                                             Control::Scroll { dy } => cdp.scroll(dy)?,
                                             Control::Reload => cdp.reload()?,
                                             Control::Navigate { url } => {
