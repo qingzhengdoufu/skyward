@@ -620,6 +620,85 @@ fn control_center_has_no_header_settings_shortcut() {
 }
 
 #[test]
+fn control_tiles_hold_to_open_without_toggling_or_clicking_on_release() {
+    let (f, i) = (fonts(), info());
+    for vibrate in [false, true] {
+        for (action, page) in [
+            (Action::Toggle(Switch::Wlan), Screen::Wlan),
+            (Action::Toggle(Switch::Vibrate), Screen::Settings),
+            (Action::Toggle(Switch::FileTransfer), Screen::Settings),
+            (Action::Toggle(Switch::DoubleTap), Screen::ScreenOff),
+            (Action::Open(Screen::Browser), Screen::Browser),
+            (Action::Open(Screen::Files), Screen::Files),
+            (Action::Open(Screen::BrowserDownloads), Screen::BrowserDownloads),
+            (Action::Open(Screen::Terminal), Screen::Terminal),
+            (Action::Open(Screen::RootModules), Screen::RootModules),
+            (Action::Open(Screen::Partitions), Screen::Partitions),
+            (Action::Open(Screen::Settings), Screen::Settings),
+            (Action::NavTasks, Screen::Tasks),
+        ] {
+            let mut app = App::new(Screen::Home, W, H, PPD);
+            app.state.wlan = Some(connected("Home"));
+            app.state.double_tap_supported = true;
+            app.state.data = Data::Open;
+            if page == Screen::Browser {
+                app.state.browser.full_active = true;
+                app.state.browser.view = BrowserView::Full;
+            }
+            app.state.vibrate = vibrate;
+            let old = (app.state.vibrate, app.state.file_transfer, app.state.double_tap);
+            app.open_shade(0, false);
+            app.settle_shade(true, 0, 0.0);
+            app.tick(2000);
+            let frame = app.frame(&f, &i);
+            let (x, y) = frame.hits.iter().find(|hit| hit.action == action).unwrap().rect.centre();
+            assert!(app.touch(Touch::Down(x, y), &f, 3000).is_empty());
+            assert_eq!(app.deadline(3000), Some(3000 + LONG_PRESS_MS));
+            assert!(app.tick(3000 + LONG_PRESS_MS - 1).is_empty());
+            let effects = app.tick(3000 + LONG_PRESS_MS);
+            assert_eq!(
+                effects.iter().filter(|effect| **effect == Effect::Haptic).count(),
+                usize::from(vibrate)
+            );
+            assert!(
+                !effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::Wlan(_) | Effect::FileTransfer(_)))
+            );
+            assert_eq!(app.screen(), page);
+            assert!(app.shade.is_none());
+            assert_eq!((app.state.vibrate, app.state.file_transfer, app.state.double_tap), old);
+            assert!(app.touch(Touch::Up, &f, 3500).is_empty());
+            assert!(app.tick(3600).is_empty());
+        }
+    }
+}
+
+#[test]
+fn moving_away_cancels_control_hold_and_short_tap_still_toggles() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::ControlCenter, W, H, PPD);
+    app.state.vibrate = true;
+    let frame = app.frame(&f, &i);
+    let (x, y) = frame
+        .hits
+        .iter()
+        .find(|hit| hit.action == Action::Toggle(Switch::Vibrate))
+        .unwrap()
+        .rect
+        .centre();
+    app.touch(Touch::Down(x, y), &f, 3000);
+    app.touch(Touch::Move(x + PPD * 20.0, y), &f, 3010);
+    assert!(app.tick(3500).is_empty());
+    assert!(app.touch(Touch::Up, &f, 3510).is_empty());
+    assert!(app.state.vibrate);
+    app.touch(Touch::Down(x, y), &f, 4000);
+    app.touch(Touch::Up, &f, 4100);
+    assert!(!app.state.vibrate);
+    assert_eq!(app.screen(), Screen::ControlCenter);
+}
+
+#[test]
 fn browser_address_changes_reuse_one_browser_page() {
     let mut app = App::new(Screen::Home, W, H, PPD);
     app.state.data = Data::Open;

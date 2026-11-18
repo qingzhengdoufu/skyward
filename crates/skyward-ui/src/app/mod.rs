@@ -1808,6 +1808,9 @@ impl App {
                 at,
                 ..
             } => Some(at + LONG_PRESS_MS),
+            Drag::Press {
+                action: Some(action), at, ..
+            } if self.control_hold(action).is_some() => Some(at + LONG_PRESS_MS),
             _ => None,
         };
         let repeat = match self.button {
@@ -1889,6 +1892,20 @@ impl App {
         {
             self.drag = Drag::Held;
             fx.extend(self.held_entry(i));
+        }
+        if let Drag::Press {
+            action: Some(action), at, ..
+        } = self.drag
+            && now >= at + LONG_PRESS_MS
+            && let Some(target) = self.control_hold(action)
+        {
+            if self.state.vibrate {
+                fx.push(Effect::Haptic);
+            }
+            fx.extend(self.act(target, now));
+            self.drag = Drag::Held;
+            self.row_press = None;
+            self.row_art = None;
         }
         if let Some((
             key,

@@ -259,6 +259,7 @@ impl App {
                         _ if matches!(action, Some(Action::BrowserPluginTap(..))) && dy.abs() > slop => {
                             Drag::BrowserScroll { start: y0, last: y }
                         }
+                        _ if dx.abs() > slop && action.is_some_and(|action| self.control_hold(action).is_some()) => Drag::Held,
                         _ if dx.abs().max(dy.abs()) > slop && self.frame.as_ref().is_some_and(|frame| frame.fixed) => Drag::Held,
                         _ if dy.abs() > slop => {
                             let history = self

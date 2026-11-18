@@ -157,3 +157,40 @@
  #include "EventNames.h"
  #include "ExtensionStyleSheets.h"
  #include "FormSubmission.h"
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
+@@ -55,6 +55,7 @@
+ #include "RealtimeOutgoingAudioSourceGStreamer.h"
+ #include "RealtimeOutgoingVideoSourceGStreamer.h"
+ #include <algorithm>
++#include <gio/gio.h>
+ #include <gst/sdp/sdp.h>
+ #include <wtf/MainThread.h>
+ #include <wtf/ObjectIdentifier.h>
+@@ -155,6 +156,13 @@
+ 
+ bool GStreamerMediaEndpoint::initializePipeline()
+ {
++    // GLib's TLS module defers GnuTLS initialization, which libnice's STUN
++    // authentication also needs before the first HTTPS request in this process.
++    if (!g_tls_backend_supports_tls(g_tls_backend_get_default())) {
++        GST_ERROR("TLS backend unavailable for WebRTC authentication");
++        return false;
++    }
++
+     auto webrtcBinFactory = adoptGRef(gst_element_factory_find("webrtcbin"));
+     if (!webrtcBinFactory) {
+         gst_printerrln("GStreamer element webrtcbin not found. Please install gst-plugins-bad");
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerWebRTCUtils.h
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerWebRTCUtils.h
+@@ -260,7 +260,9 @@
+ {
+     switch (configuration.bundlePolicy) {
+     case RTCBundlePolicy::Balanced:
+-        return GST_WEBRTC_BUNDLE_POLICY_BALANCED;
++        // GStreamer 1.26 rejects balanced and silently keeps NONE. Max-compat
++        // still offers separate candidates while accepting remote BUNDLE.
++        return GST_WEBRTC_BUNDLE_POLICY_MAX_COMPAT;
+     case RTCBundlePolicy::MaxCompat:
+         return GST_WEBRTC_BUNDLE_POLICY_MAX_COMPAT;
+     case RTCBundlePolicy::MaxBundle:

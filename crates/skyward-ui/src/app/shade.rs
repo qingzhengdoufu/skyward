@@ -25,6 +25,29 @@ impl Shade {
 }
 
 impl App {
+    pub(super) fn control_hold(&self, action: Action) -> Option<Action> {
+        if self.screen() != Screen::ControlCenter {
+            return None;
+        }
+        Some(match action {
+            Action::Toggle(Switch::Wlan) => Action::Open(Screen::Wlan),
+            Action::Toggle(Switch::Vibrate | Switch::FileTransfer) => Action::Open(Screen::Settings),
+            Action::Toggle(Switch::DoubleTap) => Action::Open(Screen::ScreenOff),
+            Action::Open(
+                screen @ (Screen::Browser
+                | Screen::BrowserDownloads
+                | Screen::Files
+                | Screen::Terminal
+                | Screen::RootModules
+                | Screen::Partitions
+                | Screen::Settings
+                | Screen::Wlan),
+            ) => Action::Open(screen),
+            Action::NavTasks => Action::NavTasks,
+            _ => return None,
+        })
+    }
+
     pub(super) fn open_shade(&mut self, now: u64, animated: bool) {
         if self.screen() == Screen::ControlCenter {
             return;
