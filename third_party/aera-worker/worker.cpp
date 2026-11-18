@@ -5,6 +5,7 @@
 #include "platform_sandbox.hpp"
 #include "frame_layout.hpp"
 #include "rtc_probe.hpp"
+#include "rtc_diagnostics.hpp"
 #include <cairo/cairo.h>
 #include <wpe/webkit.h>
 #include <wpe/wpe-platform.h>
@@ -91,6 +92,7 @@ struct Session {
   bool landscape = false;
   bool fullscreen = false;
   bool capabilities_probed = false;
+  unsigned rtc_reports = 0;
   WebKitUserScript *viewport_script = nullptr;
   gint64 frame_warning_us = 0;
   std::vector<uint8_t> staged;
@@ -694,6 +696,25 @@ int main(int argc, char **argv) {
       cookie_manager, WEBKIT_COOKIE_POLICY_ACCEPT_NO_THIRD_PARTY);
   webkit_network_session_set_tls_errors_policy(network, WEBKIT_TLS_ERRORS_POLICY_FAIL);
   auto *content = webkit_user_content_manager_new();
+  g_signal_connect(content, "script-message-received::skywardRtc",
+      G_CALLBACK(+[](WebKitUserContentManager *, JSCValue *value, gpointer data) {
+        auto *session = static_cast<Session *>(data);
+        if (session->rtc_reports >= 512 || !jsc_value_is_string(value)) return;
+        char *text = jsc_value_to_string(value);
+        if (text && strlen(text) <= 256 && std::all_of(text, text + strlen(text), [](unsigned char c) {
+              return std::isalnum(c) || c == ' ' || c == '-' || c == '_';
+            })) {
+          ++session->rtc_reports;
+          fprintf(stderr, "Cloud RTC: %s\n", text);
+        }
+        g_free(text);
+      }), &s);
+  webkit_user_content_manager_register_script_message_handler(content, "skywardRtc", nullptr);
+  auto *rtc_script = webkit_user_script_new(kRtcDiagnostics,
+      WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+      nullptr, nullptr);
+  webkit_user_content_manager_add_script(content, rtc_script);
+  webkit_user_script_unref(rtc_script);
   g_signal_connect(content, "script-message-received::aeraMedia",
       G_CALLBACK(+[](WebKitUserContentManager *, JSCValue *value, gpointer data) {
         if (!jsc_value_is_string(value)) return;
