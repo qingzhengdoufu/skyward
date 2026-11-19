@@ -14,6 +14,7 @@ pub mod geom;
 pub mod glow;
 pub mod icons;
 pub mod intro;
+pub mod ime;
 pub mod lang;
 pub mod motion;
 pub mod pages;

@@ -17,6 +17,13 @@ pub struct BackupEntry {
     /// What it holds, as its manifest records it, or why that cannot be
     /// read: a backup that did not finish has none.
     pub held: Result<Held, String>,
+    pub image: Option<ImageCopy>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageCopy {
+    pub partition: String,
+    pub sha256: String,
 }
 
 /// What a backup holds, and where it was made.

@@ -1239,6 +1239,7 @@ fn run_binary<S>(ctx: &Context, mount: &Mount<S>) -> Result<(i32, bool)> {
     // asks for nothing for long is stalled, and told of as such.
     let mut last_heard = Instant::now();
     let mut last_output = String::new();
+    let mut warnings = Vec::new();
     let mut stalled: Option<Instant> = None;
     // How far into the package reads have reached, and when they last did: a
     // script waiting on a package that never comes has both standing still.
@@ -1267,6 +1268,11 @@ fn run_binary<S>(ctx: &Context, mount: &Mount<S>) -> Result<(i32, bool)> {
             Ok(Said::Unknown(line)) => writeln!(log, "[unknown request] {line}").context("write the log")?,
             Ok(Said::Output(line)) => {
                 writeln!(log, "{line}").context("write the log")?;
+                if let Some(warning) = crate::warnings::classify(&line)
+                    && !warnings.contains(&warning) {
+                    warnings.push(warning);
+                    ctx.send(Event::Warning(warning));
+                }
                 last_output = line;
             }
             Err(RecvTimeoutError::Timeout) => {}

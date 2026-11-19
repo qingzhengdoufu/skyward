@@ -43,6 +43,7 @@ mod draw;
 mod entry;
 mod filesystem;
 mod frame;
+mod ime;
 mod input;
 mod install;
 mod keys;
@@ -285,6 +286,9 @@ pub enum Action {
     BrowserImeToggle,
     BrowserImePick(usize),
     BrowserImePage(bool),
+    ImeToggle,
+    ImePick(usize),
+    ImePage(bool),
     BrowserQuickOpen(usize),
     BrowserQuick,
     BrowserQuickAdd,
@@ -849,6 +853,17 @@ pub enum Effect {
         place: Place,
         name: String,
         parts: [bool; 4],
+    },
+    RestoreImage {
+        place: Place,
+        folder: String,
+        partition: String,
+        size: u64,
+        sha256: String,
+    },
+    DeleteImageBackup {
+        place: Place,
+        name: String,
     },
     /// Look for backups in the places that can be read, telling what is
     /// found with [`App::set_backups`].
@@ -1474,7 +1489,7 @@ pub(super) fn row_part(r: Rect, canvas: &Canvas) -> (u32, u32, u32, u32) {
 
 /// The keyboard at the foot of a typing page's `frame`, and where it rests.
 pub(super) fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
-    let top = (t.m.h as f32 - widgets::keyboard_height(t)).floor() as i32;
+    let top = (t.m.h as f32 - widgets::keyboard_height(t) - crate::ime::height(t)).floor() as i32;
     let mut strip = Canvas::new(frame.canvas.w, (frame.canvas.h as i32 - top).max(0) as u32);
     strip.put_rows(&frame.canvas, top, frame.canvas.h as i32, 0);
     (strip, top)

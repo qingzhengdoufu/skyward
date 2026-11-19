@@ -448,6 +448,7 @@ impl App {
             *file = listed.clone();
         }
         if screen == Screen::Files && folder != self.state.files.path {
+            self.state.ime.clear();
             self.state.files_query.clear();
             self.state.files_search = false;
             self.clear_found();

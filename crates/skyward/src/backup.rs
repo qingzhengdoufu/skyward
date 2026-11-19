@@ -127,6 +127,14 @@ pub struct RestoreTask {
 pub enum Task {
     Backup(BackupTask),
     Restore(RestoreTask),
+    RestoreImage {
+        root: PathBuf,
+        folder: String,
+        partition: String,
+        size: u64,
+        sha256: String,
+        detach: skyward_install::Detach,
+    },
     Image {
         name: String,
         into: PathBuf,
@@ -225,6 +233,15 @@ impl Worker {
                 } => export_image(&name, &into, &stamp, ownership, remount.as_deref(), &tell, &stop).map(End::ImageSaved),
                 Task::Backup(t) => backup(t, &tell, &stop).map(End::Saved),
                 Task::Restore(t) => restore(t, &tell, &stop).map(|unmade| End::Restored { unmade }),
+                Task::RestoreImage {
+                    root,
+                    folder,
+                    partition,
+                    size,
+                    sha256,
+                    detach,
+                } => restore_image(&root, &folder, &partition, size, &sha256, detach, &tell, &stop)
+                    .map(|()| End::Restored { unmade: Vec::new() }),
             };
             let end = match ended {
                 Ok(end) => end,
@@ -356,6 +373,59 @@ fn export_image(
         return Ok(path);
     }
     exported
+}
+
+/// A partition by its name among the links the phone gives them.
+#[allow(clippy::too_many_arguments)]
+fn restore_image(
+    root: &Path,
+    folder: &str,
+    name: &str,
+    size: u64,
+    sha256: &str,
+    detach: skyward_install::Detach,
+    tell: &dyn Fn(Event),
+    cancel: &AtomicBool,
+) -> Result<()> {
+    ensure!(
+        !folder.is_empty() && !folder.starts_with('.') && !folder.contains(['/', '\\']),
+        "invalid image backup folder"
+    );
+    ensure!(skyward_backup::image::allowed(name), "unsupported image restore partition");
+    no_update()?;
+    let dir = root.join(folder);
+    let expected = skyward_backup::image::read_copy(&dir)?;
+    ensure!(
+        expected.partition == name && expected.size == size && expected.sha256 == sha256,
+        "image backup changed since selection"
+    );
+    let device = partition(name);
+    ensure!(
+        skyward_block::size_bytes(&device)? == size,
+        "image does not match the target partition size"
+    );
+    tell(Event::Plan(vec![(name.into(), size)]));
+    let mut checking = Telling::new(tell, 0, size, true);
+    let mut input = skyward_backup::image::verified(&dir, &expected, cancel, &mut |done| checking.done(done))?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(Cancelled.into());
+    }
+    if name == "super" {
+        detach().context("take logical partitions off before restoring shared super")?;
+    } else {
+        if name.starts_with("boot_") || name.starts_with("init_boot_") {
+            skyward_systems::install::ensure_installed()?;
+        }
+        for point in mount::points_of(skyward_block::devnum(&device)?)? {
+            mount::umount(&point)?;
+        }
+    }
+    let mut writing = Telling::new(tell, 0, size * 2, false);
+    skyward_backup::image::restore_to(&mut input, &expected, &device, &mut |done| writing.done(done))?;
+    let _ = skyward_sys::kmsg(&format!(
+        "restored verified image to {name}; shared super requires reboot before remapping"
+    ));
+    Ok(())
 }
 
 /// A partition by its name among the links the phone gives them.

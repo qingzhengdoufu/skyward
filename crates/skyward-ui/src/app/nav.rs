@@ -32,6 +32,8 @@ impl App {
 
 impl App {
     pub(super) fn push(&mut self, screen: Screen) {
+        self.state.ime.clear();
+        self.state.ime.enabled = false;
         self.stack.push((screen, 0.0, Focus::Unset));
         self.settle_page();
         self.refresh();
@@ -118,6 +120,8 @@ impl App {
             self.start_morph(false, now);
         }
         let left = self.screen();
+        self.state.ime.clear();
+        self.state.ime.enabled = false;
         match left {
             Screen::BrowserAddress => {
                 self.state.browser.full_text = false;

@@ -10,6 +10,209 @@ const W: u32 = 1440;
 const H: u32 = 3200;
 const PPD: f32 = 3.5;
 
+#[cfg(feature = "pinyin-input")]
+#[test]
+fn native_text_fields_share_chinese_composition_without_changing_english_keys() {
+    for screen in [
+        Screen::Search,
+        Screen::Files,
+        Screen::Rename,
+        Screen::WlanPassword,
+        Screen::WlanAdd,
+        Screen::Decrypt,
+        Screen::BrowserForm,
+    ] {
+        let mut app = App::new(screen, W, H, PPD);
+        app.state.files_search = true;
+        app.state.data = Data::Locked {
+            user: 0,
+            keys: Keys::Letters,
+            checking: false,
+        };
+        app.state.adding = Some(Adding {
+            name: String::new(),
+            security: Security::Open,
+            field: Field::Name,
+            choosing: false,
+        });
+        app.state.browser.field = Some((0, 0));
+        app.state.browser.form = vec![vec![String::new()]];
+        assert!(!app.state.ime.enabled);
+        app.act(Action::ImeToggle, 0);
+        for ch in "nihao".chars() {
+            app.act(Action::Type(Cap::Char(ch)), 1);
+        }
+        assert_eq!(app.typing(), "", "{screen:?}: no raw pinyin in field");
+        app.act(Action::Type(Cap::Backspace), 2);
+        assert_eq!(app.state.ime.spelling, "niha");
+        app.act(Action::Type(Cap::Char('o')), 3);
+        let index = app
+            .state
+            .ime
+            .candidates
+            .iter()
+            .position(|candidate| candidate.text == "你好")
+            .unwrap();
+        let effects = app.act(Action::ImePick(index), 4);
+        assert_eq!(app.typing(), "你好", "{screen:?}");
+        if screen == Screen::Files {
+            assert!(matches!(effects.as_slice(), [Effect::FindFiles { query, .. }] if query == "你好"));
+        }
+        app.act(Action::ImeToggle, 5);
+        app.act(Action::Type(Cap::Char('x')), 6);
+        assert_eq!(app.typing(), "你好x");
+        app.act(Action::Type(Cap::Backspace), 7);
+        app.act(Action::Type(Cap::Backspace), 8);
+        assert_eq!(app.typing(), "你", "{screen:?}: backspace removes a Unicode character");
+    }
+}
+
+#[cfg(feature = "pinyin-input")]
+#[test]
+fn chinese_terminal_and_editor_commit_without_running_or_breaking_the_line() {
+    for screen in [Screen::Terminal, Screen::Editor] {
+        let mut app = App::new(screen, W, H, PPD);
+        app.term_started(24, 80);
+        app.state.editor = Some(Editor::new("/tmp/example.txt".into(), "", 40, 10));
+        app.act(Action::ImeToggle, 0);
+        for ch in "nihao".chars() {
+            assert!(app.act(Action::Type(Cap::Char(ch)), 1).is_empty());
+        }
+        let effects = app.act(Action::Type(Cap::Enter), 2);
+        if screen == Screen::Terminal {
+            assert_eq!(effects, [Effect::TermInput("你好".as_bytes().to_vec())]);
+            assert_eq!(app.act(Action::Type(Cap::Enter), 3), [Effect::TermInput(vec![13])]);
+            app.term.as_mut().unwrap().ctrl = true;
+            assert_eq!(app.act(Action::Type(Cap::Char('c')), 4), [Effect::TermInput(vec![3])]);
+        } else {
+            assert!(effects.is_empty());
+            assert_eq!(app.state.editor.as_ref().unwrap().text(), "你好");
+            app.act(Action::Type(Cap::Enter), 3);
+            assert_eq!(app.state.editor.as_ref().unwrap().text(), "你好\n");
+        }
+        app.state.ime.spelling = "secret".into();
+        app.open(Screen::Search);
+        assert!(app.state.ime.spelling.is_empty() && !app.state.ime.enabled);
+    }
+}
+
+#[cfg(feature = "pinyin-input")]
+#[test]
+fn native_keyboard_candidates_fit_above_the_keys_on_each_text_page() {
+    let (fonts, info) = (fonts(), info());
+    for (width, height, density) in [(720, 1600, 1.875), (W, H, PPD)] {
+        for screen in [
+            Screen::Search,
+            Screen::Files,
+            Screen::Rename,
+            Screen::WlanPassword,
+            Screen::WlanAdd,
+            Screen::Terminal,
+            Screen::Editor,
+            Screen::Decrypt,
+        ] {
+            let mut app = App::new(screen, width, height, density);
+            app.state.files_search = true;
+            app.state.joining = Some(network("WiFi", -45, Security::Psk));
+            app.state.adding = Some(Adding {
+                name: String::new(),
+                security: Security::Open,
+                field: Field::Name,
+                choosing: false,
+            });
+            app.state.editor = Some(Editor::new("/tmp/example.txt".into(), "", 40, 10));
+            app.state.data = Data::Locked {
+                user: 0,
+                keys: Keys::Letters,
+                checking: false,
+            };
+            let frame = app.frame(&fonts, &info);
+            let (hits, bottom) = if let Some(dock) = &frame.dock {
+                (&dock.hits, dock.canvas.h as f32)
+            } else {
+                (&frame.hits, frame.canvas.h as f32)
+            };
+            let toggle = hits
+                .iter()
+                .find(|hit| hit.action == Action::ImeToggle)
+                .unwrap_or_else(|| panic!("{screen:?} missing language toggle"))
+                .rect;
+            let letter = hits.iter().find(|hit| hit.action == Action::Type(Cap::Char('q'))).unwrap().rect;
+            assert!(
+                toggle.y + toggle.h <= letter.y + 1.0 && toggle.y >= 0.0 && toggle.y + toggle.h <= bottom,
+                "{screen:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn image_restore_lists_and_confirms_the_named_original_partition_without_writing() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Restore, W, H, PPD);
+    app.state.data = Data::Open;
+    for name in ["boot_a", "super"] {
+        let entry = BackupEntry {
+            place: Place::Storage,
+            name: format!("20261119-170607-{name}"),
+            held: Ok(Held {
+                made: 1795079167,
+                size: 4096,
+                parts: [false; 4],
+                device: String::new(),
+                system: None,
+                slot: None,
+            }),
+            image: Some(ImageCopy {
+                partition: name.into(),
+                sha256: "ab".repeat(32),
+            }),
+        };
+        app.set_backups(vec![entry.clone()]);
+        app.act(Action::OpenBackup(0), 0);
+        assert!(
+            app.frame(&f, &i)
+                .hits
+                .iter()
+                .any(|hit| hit.action == Action::Confirm(Confirm::Restore))
+        );
+        assert_eq!(
+            app.confirmed(Confirm::Restore, 1),
+            [Effect::RestoreImage {
+                place: Place::Storage,
+                folder: entry.name.clone(),
+                partition: name.into(),
+                size: 4096,
+                sha256: "ab".repeat(32)
+            }]
+        );
+        app.state.data = Data::Closed;
+        assert!(app.confirmed(Confirm::Restore, 2).is_empty());
+        app.state.data = Data::Open;
+        app.key(Key::Back, 3);
+    }
+}
+
+#[test]
+fn script_diagnostic_warnings_do_not_change_a_success_or_failure_outcome() {
+    use skyward_install::warnings::Warning;
+    let mut app = App::new(Screen::Installing, W, H, PPD);
+    app.install(Event::Running, 0);
+    for _ in 0..100 {
+        app.install(Event::Warning(Warning::MissingCommand), 1);
+    }
+    assert_eq!(app.state.script_warnings, [Warning::MissingCommand]);
+    let outcome = Outcome::Ran { wipe_cache: false };
+    app.install(Event::Finished(outcome.clone()), 2);
+    assert!(matches!(&app.state.install, Install::Finished { outcome: actual, .. } if *actual == outcome));
+    app.begin_install(Install::Starting, Source::Computer, None);
+    assert!(app.state.script_warnings.is_empty());
+    app.install(Event::Warning(Warning::Io), 3);
+    let outcome = Outcome::Failed(Failure::Script(1));
+    app.install(Event::Finished(outcome.clone()), 4);
+    assert!(matches!(&app.state.install, Install::Finished { outcome: actual, .. } if *actual == outcome));
+}
+
 #[test]
 fn browser_canvas_is_fixed_and_keyboard_does_not_reposition_the_web_page() {
     let (f, i) = (fonts(), info());
@@ -4718,6 +4921,7 @@ fn found(place: Place, made: i64, parts: [bool; 4]) -> BackupEntry {
         place,
         name: fmt::stamp(made, 0),
         held: Ok(held),
+        image: None,
     }
 }
 #[test]
@@ -4735,6 +4939,7 @@ fn backups_found_are_listed_newest_first_and_those_unread_last() {
         place: Place::Storage,
         name: "20261021-150000".into(),
         held: Err("read backup.toml: not found".into()),
+        image: None,
     };
     let (old, new) = (
         found(Place::UsbDrive, 1_792_000_000, [true; 4]),
@@ -4829,6 +5034,7 @@ fn a_backup_made_on_another_phone_is_not_restored_here() {
         place: Place::Storage,
         name: "20261021-150000".into(),
         held: Err("read backup.toml: not found".into()),
+        image: None,
     };
     app.set_backups(vec![other, unread]);
     for k in 0..2 {
@@ -5530,7 +5736,11 @@ fn the_terminal_sends_every_key_to_its_shell() {
         "the page asks for a shell the first time"
     );
     let (rows, cols) = app.term_size(&f);
-    assert!(rows >= 20 && cols >= 40, "a screen of {rows} rows by {cols}");
+    let min_rows = if cfg!(feature = "pinyin-input") { 18 } else { 20 };
+    assert!(
+        rows >= min_rows && cols >= 40,
+        "a screen of {rows} rows by {cols}, reserving composition space"
+    );
     app.term_started(rows, cols);
     assert_eq!(
         tap(&mut app, &f, &i, Action::Type(Cap::Char('l'))),

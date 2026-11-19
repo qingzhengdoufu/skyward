@@ -2,7 +2,7 @@
 //! by a terminal emulator, and the bytes each key sends the shell.
 
 use crate::canvas::Canvas;
-use crate::color::{mix, Rgba};
+use crate::color::{Rgba, mix};
 use crate::font::Fonts;
 use crate::geom::Rect;
 use crate::theme::Theme;
@@ -38,7 +38,15 @@ pub enum TermKey {
 }
 
 /// The terminal's own keys, in the order the row shows them.
-pub const TERM_KEYS: [TermKey; 7] = [TermKey::Esc, TermKey::Tab, TermKey::Ctrl, TermKey::Left, TermKey::Up, TermKey::Down, TermKey::Right];
+pub const TERM_KEYS: [TermKey; 7] = [
+    TermKey::Esc,
+    TermKey::Tab,
+    TermKey::Ctrl,
+    TermKey::Left,
+    TermKey::Up,
+    TermKey::Down,
+    TermKey::Right,
+];
 
 /// A shell's screen as it has written it, and whether the shell still runs.
 pub struct Term {
@@ -53,8 +61,15 @@ pub struct Term {
 impl Term {
     /// A blank screen of `rows` by `cols` for a shell that has just started.
     pub fn new(rows: u16, cols: u16) -> Term {
-        let (rows, cols) = (NonZeroU16::new(rows).expect("a screen has rows"), NonZeroU16::new(cols).expect("a screen has columns"));
-        Term { parser: vt100::Parser::new(rows, cols, SCROLLBACK), running: true, ctrl: false }
+        let (rows, cols) = (
+            NonZeroU16::new(rows).expect("a screen has rows"),
+            NonZeroU16::new(cols).expect("a screen has columns"),
+        );
+        Term {
+            parser: vt100::Parser::new(rows, cols, SCROLLBACK),
+            running: true,
+            ctrl: false,
+        }
     }
 
     pub fn screen(&self) -> &vt100::Screen {
@@ -159,14 +174,24 @@ pub struct Layout {
 pub fn layout(t: &Theme, f: &Fonts, top: f32) -> Layout {
     let m = &t.m;
     let px = m.dp(TEXT_DP);
-    let keys_top = m.h as f32 - widgets::keyboard_height(t) - m.dp(KEYS_GAP_DP + KEYS_H_DP);
+    let keys_top = m.h as f32 - widgets::keyboard_height(t) - crate::ime::height(t) - m.dp(KEYS_GAP_DP + KEYS_H_DP);
     let card = Rect::new(m.margin, top, m.w as f32 - m.margin * 2.0, keys_top - m.dp(KEYS_GAP_DP) - top);
     let pad = m.dp(PAD_DP);
     let cell = cell_width(f, px);
     let pitch = m.dp(PITCH_DP);
     let cols = ((card.w - pad * 2.0) / cell).floor().max(1.0) as u16;
     let rows = ((card.h - pad * 2.0) / pitch).floor().max(1.0) as u16;
-    Layout { card, x0: card.x + pad, y0: card.y + pad, px, cell, pitch, rows, cols, keys_top }
+    Layout {
+        card,
+        x0: card.x + pad,
+        y0: card.y + pad,
+        px,
+        cell,
+        pitch,
+        rows,
+        cols,
+        keys_top,
+    }
 }
 
 /// The advance of the monospaced face, one cell.
@@ -298,7 +323,11 @@ pub fn keys(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, keys: &[TermKey], 
     for (k, &key) in keys.iter().enumerate() {
         let r = Rect::new(m.margin + k as f32 * (w + gap), l.keys_top, w, h);
         let held = key == TermKey::Ctrl && ctrl;
-        let (fill, ink) = if held { (t.pal.accent, t.pal.card) } else { (t.pal.card, t.pal.text) };
+        let (fill, ink) = if held {
+            (t.pal.accent, t.pal.card)
+        } else {
+            (t.pal.card, t.pal.text)
+        };
         c.fill_round_rect(r.x, r.y, r.w, r.h, m.dp(KEY_RADIUS_DP), fill);
         let label = match key {
             TermKey::Esc => "Esc",
@@ -312,7 +341,15 @@ pub fn keys(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, keys: &[TermKey], 
         let face = &f.value;
         let tw = c.text_width(face, label, px);
         let (top, bottom) = face.ink(px);
-        c.text(face, label, r.x + (r.w - tw) / 2.0, r.y + (r.h - (bottom - top)) / 2.0 - top, px, ink, None);
+        c.text(
+            face,
+            label,
+            r.x + (r.w - tw) / 2.0,
+            r.y + (r.h - (bottom - top)) / 2.0 - top,
+            px,
+            ink,
+            None,
+        );
         out.push((r, key));
     }
     out
@@ -342,7 +379,10 @@ mod tests {
         let mut term = Term::new(24, 80);
         assert!(term.key(TermKey::Ctrl).is_empty());
         assert!(term.ctrl);
-        assert!(term.typed(Cap::Show(Layer::Digits), false).is_empty(), "changing the layer keeps it held");
+        assert!(
+            term.typed(Cap::Show(Layer::Digits), false).is_empty(),
+            "changing the layer keeps it held"
+        );
         assert_eq!(term.typed(Cap::Char('c'), false), [0x03]);
         assert!(!term.ctrl, "it lasts one key");
         assert_eq!(term.typed(Cap::Char('c'), false), b"c");
@@ -388,7 +428,11 @@ mod tests {
         let t = Theme::light(1440, 3200, 3.5);
         assert_eq!(color(&t, vt100::Color::Default, false, t.pal.text), t.pal.text);
         assert_eq!(color(&t, vt100::Color::Idx(1), false, t.pal.text), LIGHT[1]);
-        assert_eq!(color(&t, vt100::Color::Idx(1), true, t.pal.text), LIGHT[9], "bold red is bright red");
+        assert_eq!(
+            color(&t, vt100::Color::Idx(1), true, t.pal.text),
+            LIGHT[9],
+            "bold red is bright red"
+        );
         assert_eq!(color(&t, vt100::Color::Idx(196), false, t.pal.text), Rgba::rgb(255, 0, 0));
         assert_eq!(color(&t, vt100::Color::Idx(232), false, t.pal.text), Rgba::rgb(8, 8, 8));
         assert_eq!(color(&t, vt100::Color::Rgb(1, 2, 3), false, t.pal.text), Rgba::rgb(1, 2, 3));

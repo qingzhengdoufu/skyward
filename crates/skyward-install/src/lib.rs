@@ -17,6 +17,7 @@ pub mod script;
 pub mod signature;
 pub mod upgrade;
 pub mod wipe;
+pub mod warnings;
 
 #[cfg(target_os = "android")]
 mod ffs;
@@ -121,6 +122,7 @@ pub enum Event {
     Running,
     /// A line the install script shows.
     Print(String),
+    Warning(warnings::Warning),
     Progress(Stage),
     /// The install wrote over this recovery in the recovery partitions,
     /// which the screen asked to keep: how writing it back went.

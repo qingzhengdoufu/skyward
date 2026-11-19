@@ -695,6 +695,7 @@ fn main() -> Result<()> {
             place,
             name: fmt::stamp(made, 0),
             held: Ok(held),
+            image: None,
         }
     };
     let backups = vec![
@@ -716,6 +717,7 @@ fn main() -> Result<()> {
             place: Place::Storage,
             name: "20261020-221500".into(),
             held: Err("read /sdcard/Skyward/backups/20261020-221500/backup.toml: No such file or directory (os error 2)".into()),
+            image: None,
         },
     ];
     // What a backup of the slot's partitions and the baseband goes through.

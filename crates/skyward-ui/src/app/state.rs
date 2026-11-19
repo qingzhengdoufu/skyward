@@ -74,6 +74,7 @@ pub struct State {
     pub package_name: Option<String>,
     /// What the install script last run showed, its latest lines.
     pub script_output: Vec<String>,
+    pub script_warnings: Vec<skyward_install::warnings::Warning>,
     /// A zip's install script runs only if the zip was signed with one of
     /// the phone's update keys.
     pub check_signature: bool,
@@ -157,6 +158,7 @@ pub struct State {
     pub others: Vec<(u32, Keys)>,
     /// What is typed in the search field.
     pub search: String,
+    pub ime: crate::pinyin::Composition,
     /// The on-screen keyboard's layer.
     pub layer: Layer,
     /// The key of the on-screen keyboard, or the choice of a list open over
@@ -314,6 +316,7 @@ impl Default for State {
             source: Source::Computer,
             package_name: None,
             script_output: Vec::new(),
+            script_warnings: Vec::new(),
             check_signature: false,
             recovery_partitions: false,
             keep_recovery: true,
@@ -346,6 +349,7 @@ impl Default for State {
             code: String::new(),
             others: Vec::new(),
             search: String::new(),
+            ime: crate::pinyin::Composition::default(),
             layer: Layer::Letters,
             held: None,
             files: Folder::new("/"),

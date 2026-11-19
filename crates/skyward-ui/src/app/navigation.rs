@@ -27,6 +27,8 @@ impl App {
     }
 
     pub(super) fn home(&mut self) {
+        self.state.ime.clear();
+        self.state.ime.enabled = false;
         if self.shade.is_some() {
             self.dismiss_shade();
         }

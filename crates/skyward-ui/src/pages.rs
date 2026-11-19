@@ -1292,6 +1292,9 @@ fn code(cx: &Ctx, mut c: Canvas, user: u32, keys: Keys, checking: bool) -> Frame
     let bottom = match keys {
         Keys::Letters => {
             let top = m.h as f32 - widgets::keyboard_height(t);
+            if !checking && cfg!(feature = "pinyin-input") {
+                out.extend(crate::ime::bar(&mut c, t, f, &s.ime, top - crate::ime::height(t), false));
+            }
             let caps = widgets::keyboard(&mut c, t, f, l, top, s.layer, s.key_held(), l.pick(DECRYPT));
             if !checking {
                 out.extend(caps.into_iter().map(|(rect, cap)| Hit {
@@ -1520,12 +1523,7 @@ pub fn install(cx: &Ctx) -> Frame {
     // built without this phone's keys will not start on a bootloader that
     // still checks signatures, and an install script is an arbitrary
     // program that may or may not disable them for itself.
-    let avb = Row::new(l.pick([
-        "刷入后禁用 AVB",
-        "刷入後停用 AVB",
-        "Disable AVB after installation",
-    ]))
-    .switch(cx.state.disable_avb);
+    let avb = Row::new(l.pick(["刷入后禁用 AVB", "刷入後停用 AVB", "Disable AVB after installation"])).switch(cx.state.disable_avb);
     let rows = widgets::list(&mut c, t, f, y + t.m.card_gap, &[avb]);
     out.extend(hits(&rows.rows, &[Action::Toggle(Switch::DisableAvb)]));
     let note = l.pick([
@@ -1669,6 +1667,37 @@ pub(crate) fn system_stage(l: Lang, stage: Option<&Stage>) -> (String, Option<f3
 }
 
 const REFLASHING: Text = ["正在重新刷入 Skyward", "正在重新刷入 Skyward", "Flashing Skyward again"];
+
+fn script_warnings(c: &mut Canvas, cx: &Ctx, y: f32) -> f32 {
+    use skyward_install::warnings::Warning;
+    if cx.state.script_warnings.is_empty() {
+        return y;
+    }
+    let l = cx.state.lang;
+    let kinds: Vec<_> = cx
+        .state
+        .script_warnings
+        .iter()
+        .map(|warning| {
+            l.pick(match warning {
+                Warning::MissingCommand => ["命令缺失", "命令缺少", "Missing command"],
+                Warning::MissingFile => ["文件缺失", "檔案缺少", "Missing file"],
+                Warning::NoSpace => ["写入达到容量边界", "寫入達容量邊界", "Write reached capacity"],
+                Warning::Permission => ["权限或只读限制", "權限或唯讀限制", "Permission or read-only restriction"],
+                Warning::Io => ["读写错误", "讀寫錯誤", "I/O error"],
+                Warning::Unpack => ["解压错误", "解壓縮錯誤", "Unpack error"],
+            })
+        })
+        .collect();
+    let details = kinds.join(" / ");
+    let note = tr!(
+        l,
+        "脚本输出含警告：{details}。未跳过命令或更改返回值，请检查安装日志。",
+        "指令碼輸出含警告：{details}。未略過命令或變更回傳值，請檢查安裝記錄。",
+        "Script output contains warnings: {details}. No command was skipped or return value changed. Review the install log."
+    );
+    widgets::footnote(c, cx.t, cx.f, y, &note)
+}
 
 /// What the card says while an install script runs, and how far it is: the
 /// last line the script showed and how far it says it is, then Skyward
@@ -2257,6 +2286,7 @@ pub fn installing(cx: &Ctx) -> Frame {
             let (detail, done) = script_stage(l, stage.as_ref(), &s.script_output);
             let y = widgets::progress_card(&mut c, t, f, top, l.pick(["正在安装", "正在安裝", "Installing"]), detail, done);
             let y = widgets::footnote(&mut c, t, f, y, until_installed(l, s.source));
+            let y = script_warnings(&mut c, cx, y);
             script_output(&mut c, cx, y, &mut rows)
         }
         Install::Wiping => {
@@ -2455,7 +2485,21 @@ fn finished(
                 "安裝指令碼已執行完成。",
                 "The install script ran to its end.",
             ]);
-            let y = widgets::list(c, t, f, top, &[standing(installed, GREEN, Icon::Install, ran)]).bottom;
+            let warned = !cx.state.script_warnings.is_empty();
+            let title = if warned {
+                l.pick(["脚本完成，存在警告", "指令碼完成，有警告", "Script completed with warnings"])
+            } else {
+                installed
+            };
+            let y = widgets::list(
+                c,
+                t,
+                f,
+                top,
+                &[standing(title, if warned { ORANGE } else { GREEN }, Icon::Install, ran)],
+            )
+            .bottom;
+            let y = script_warnings(c, cx, y);
             let next = widgets::list(c, t, f, y + gap, &[restart, again]);
             out.extend(hits(&next.rows, &[Action::RebootTo(Target::System), another]));
             let y = reflashed(c, cx, next.bottom);
@@ -2769,6 +2813,9 @@ pub fn wipe(cx: &Ctx) -> Frame {
 /// is, and its keys as touch targets.
 fn keyboard_hits(c: &mut Canvas, t: &Theme, f: &Fonts, s: &State, enter: &str, out: &mut Vec<Hit>) -> f32 {
     let top = t.m.h as f32 - widgets::keyboard_height(t);
+    if cfg!(feature = "pinyin-input") {
+        out.extend(crate::ime::bar(c, t, f, &s.ime, top - crate::ime::height(t), false));
+    }
     let keys = widgets::keyboard(c, t, f, s.lang, top, s.layer, s.key_held(), enter);
     out.extend(keys.into_iter().map(|(rect, cap)| Hit {
         rect,
@@ -2793,7 +2840,7 @@ pub fn search(cx: &Ctx) -> Frame {
         action: Action::CloseSearch,
     });
     let top = field.field.y + field.field.h + m.dp(12.0);
-    let kb_top = m.h as f32 - widgets::keyboard_height(t);
+    let kb_top = m.h as f32 - widgets::keyboard_height(t) - crate::ime::height(t);
     if s.search.trim().is_empty() {
         let how = l.pick([
             "输入功能或分区名称，支持拼音全拼和首字母，例如输入 bf 可找到「备份」。",
@@ -3065,12 +3112,16 @@ pub fn restore(cx: &Ctx) -> Frame {
         let texts: Vec<(String, String)> = s
             .backups
             .iter()
-            .map(|b| match &b.held {
-                Ok(h) => (
+            .map(|b| match (&b.held, &b.image) {
+                (Ok(h), Some(image)) => (
+                    b.name.clone(),
+                    format!("{} · {} · {}", image.partition, fmt::bytes(h.size), place_name(l, b.place)),
+                ),
+                (Ok(h), None) => (
                     fmt::datetime(l, h.made, s.time_zone),
                     format!("{} · {} · {}", fmt::parts(l, &h.parts), fmt::bytes(h.size), place_name(l, b.place)),
                 ),
-                Err(_) => (b.name.clone(), format!("{} · {}", l.pick(UNREADABLE), place_name(l, b.place))),
+                (Err(_), _) => (b.name.clone(), format!("{} · {}", l.pick(UNREADABLE), place_name(l, b.place))),
             })
             .collect();
         let rows: Vec<Row> = texts.iter().map(|(title, sub)| Row::new(title).subtitle(sub)).collect();
@@ -3082,9 +3133,9 @@ pub fn restore(cx: &Ctx) -> Frame {
         list.bottom
     };
     let note = l.pick([
-        "将在内部存储和 U 盘中的 Skyward/backups 文件夹查找备份，查找内部存储需先完成「解密」。",
-        "將在內部儲存空間和 USB 隨身碟中的 Skyward/backups 資料夾尋找備份，尋找內部儲存空間需先完成「解密」。",
-        "Backups are looked for in the Skyward/backups folders of internal storage and the USB drive. Internal storage needs the data partition decrypted first.",
+        "扫描 Skyward/backups 和 Skyward/images。内部存储需先解密。",
+        "掃描 Skyward/backups 與 Skyward/images。內部儲存空間需先解密。",
+        "Scan Skyward/backups and Skyward/images. Decrypt internal storage first.",
     ]);
     let bottom = widgets::footnote(&mut c, t, f, bottom, note);
     Frame::new(t, fit(c, t, bottom), out, l.pick(["恢复", "還原", "Restore"]), top)
@@ -3100,90 +3151,131 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = t.m.content_top;
     let location = l.pick(["位置", "位置", "Location"]);
-    let y = match &entry.held {
-        Err(why) => {
-            let facts = [
-                (l.pick(["文件夹", "資料夾", "Folder"]), entry.name.clone()),
-                (location, place_name(l, entry.place).to_string()),
-            ];
-            let y = widgets::info_card(&mut c, t, f, top, &facts);
-            let note = tr!(
-                l,
-                "无法读取该备份，备份可能未完成或已损坏。{why}",
-                "無法讀取這份備份，備份可能未完成或已損壞。{why}",
-                "This backup can't be read. It may not have finished, or it may be damaged. {why}"
-            );
-            widgets::footnote(&mut c, t, f, y, &note)
-        }
-        Ok(held) => {
-            let mut facts = vec![
-                (l.pick(["备份时间", "備份時間", "Made"]), fmt::datetime(l, held.made, s.time_zone)),
+    let y = if let (Some(image), Ok(held)) = (&entry.image, &entry.held) {
+        let y = widgets::info_card(
+            &mut c,
+            t,
+            f,
+            top,
+            &[
+                (l.pick(["镜像", "映像檔", "Image"]), format!("{}.img", image.partition)),
+                (l.pick(["目标分区", "目標分割區", "Target partition"]), image.partition.clone()),
                 (l.pick(["大小", "大小", "Size"]), fmt::bytes(held.size)),
-                (location, place_name(l, entry.place).to_string()),
-            ];
-            if let Some(system) = &held.system {
-                facts.push((l.pick(["系统版本", "系統版本", "System version"]), system.clone()));
-            }
-            if let Some(slot) = held.slot {
-                facts.push((l.pick(["槽位", "槽位", "Slot"]), slot.letter().to_string()));
-            }
-            let y = widgets::info_card(&mut c, t, f, top, &facts);
-            if held.device != i.codename {
-                let device = &held.device;
+                (location, format!("{}/Skyward/images/{}", place_name(l, entry.place), entry.name)),
+            ],
+        );
+        let note = l.pick([
+            "校验 SHA-256 后覆盖上面标明的原分区，不自动改到当前槽位。镜像未记录机型，请确认来自本机。",
+            "驗證 SHA-256 後覆寫上方標明的原分割區，不自動改至目前槽位。映像檔未記錄機型，請確認來自本機。",
+            "Verify SHA-256, then overwrite the named original partition, not the current slot. This format has no device identity; confirm it belongs to this phone.",
+        ]);
+        let mut y = widgets::footnote(&mut c, t, f, y, note);
+        if image.partition == "super" {
+            y = widgets::footnote(
+                &mut c,
+                t,
+                f,
+                y,
+                l.pick([
+                    "super 为双槽共享，恢复会覆盖双槽逻辑分区，完成后需重启。",
+                    "super 為雙槽共用，還原會覆寫雙槽邏輯分割區，完成後需重新啟動。",
+                    "Shared super contains both slots. Restoring overwrites both slots' logical partitions and requires a reboot.",
+                ]),
+            );
+        }
+        let (label, danger) = confirm_label(Confirm::Restore, s);
+        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+        out.push(Hit {
+            rect: track,
+            action: Action::Confirm(Confirm::Restore),
+        });
+        track.y + track.h
+    } else {
+        match &entry.held {
+            Err(why) => {
+                let facts = [
+                    (l.pick(["文件夹", "資料夾", "Folder"]), entry.name.clone()),
+                    (location, place_name(l, entry.place).to_string()),
+                ];
+                let y = widgets::info_card(&mut c, t, f, top, &facts);
                 let note = tr!(
                     l,
-                    "该备份来自其他设备（{device}），无法恢复到本机。",
-                    "這份備份來自其他裝置（{device}），無法還原到本機。",
-                    "This backup is from another device ({device}) and can't be restored to this phone."
+                    "无法读取该备份，备份可能未完成或已损坏。{why}",
+                    "無法讀取這份備份，備份可能未完成或已損壞。{why}",
+                    "This backup can't be read. It may not have finished, or it may be damaged. {why}"
                 );
                 widgets::footnote(&mut c, t, f, y, &note)
-            } else {
-                let y = widgets::section(&mut c, t, f, y, l.pick(["恢复内容", "還原內容", "Contents"]));
-                let kept: Vec<usize> = (0..BACKUP_PARTS.len()).filter(|&k| held.parts[k]).collect();
-                let rows: Vec<Row> = kept
-                    .iter()
-                    .map(|&k| Row::new(l.pick(BACKUP_PARTS[k])).trail(Trail::Check(chosen[k])))
-                    .collect();
-                let list = widgets::list(&mut c, t, f, y, &rows);
-                out.extend(list.rows.iter().zip(&kept).map(|(&rect, &k)| Hit {
-                    rect,
-                    action: Action::RestorePart(k),
-                }));
-                let note = l.pick([
-                    "恢复后，所选内容的现有数据将被备份覆盖。",
-                    "還原後，所選內容的現有資料將被備份覆寫。",
-                    "Restoring writes the backup over what the parts chosen hold now.",
-                ]);
-                let mut y = widgets::footnote(&mut c, t, f, list.bottom, note);
-                if chosen[2] {
+            }
+            Ok(held) => {
+                let mut facts = vec![
+                    (l.pick(["备份时间", "備份時間", "Made"]), fmt::datetime(l, held.made, s.time_zone)),
+                    (l.pick(["大小", "大小", "Size"]), fmt::bytes(held.size)),
+                    (location, place_name(l, entry.place).to_string()),
+                ];
+                if let Some(system) = &held.system {
+                    facts.push((l.pick(["系统版本", "系統版本", "System version"]), system.clone()));
+                }
+                if let Some(slot) = held.slot {
+                    facts.push((l.pick(["槽位", "槽位", "Slot"]), slot.letter().to_string()));
+                }
+                let y = widgets::info_card(&mut c, t, f, top, &facts);
+                if held.device != i.codename {
+                    let device = &held.device;
+                    let note = tr!(
+                        l,
+                        "该备份来自其他设备（{device}），无法恢复到本机。",
+                        "這份備份來自其他裝置（{device}），無法還原到本機。",
+                        "This backup is from another device ({device}) and can't be restored to this phone."
+                    );
+                    widgets::footnote(&mut c, t, f, y, &note)
+                } else {
+                    let y = widgets::section(&mut c, t, f, y, l.pick(["恢复内容", "還原內容", "Contents"]));
+                    let kept: Vec<usize> = (0..BACKUP_PARTS.len()).filter(|&k| held.parts[k]).collect();
+                    let rows: Vec<Row> = kept
+                        .iter()
+                        .map(|&k| Row::new(l.pick(BACKUP_PARTS[k])).trail(Trail::Check(chosen[k])))
+                        .collect();
+                    let list = widgets::list(&mut c, t, f, y, &rows);
+                    out.extend(list.rows.iter().zip(&kept).map(|(&rect, &k)| Hit {
+                        rect,
+                        action: Action::RestorePart(k),
+                    }));
                     let note = l.pick([
+                        "恢复后，所选内容的现有数据将被备份覆盖。",
+                        "還原後，所選內容的現有資料將被備份覆寫。",
+                        "Restoring writes the backup over what the parts chosen hold now.",
+                    ]);
+                    let mut y = widgets::footnote(&mut c, t, f, list.bottom, note);
+                    if chosen[2] {
+                        let note = l.pick([
                         "data 分区将恢复应用、账户和设置，内部存储、锁屏密码和指纹保持不变。恢复出厂设置后，无法再恢复此前的 data 分区备份。",
                         "data 分割區將還原應用程式、帳戶和設定，內部儲存空間、螢幕鎖定密碼和指紋保持不變。恢復原廠設定後，無法再還原此前的 data 分割區備份。",
                         "The data partition gets its apps, accounts and settings back, and internal storage, the screen lock and fingerprints stay as they are. After a factory reset, an earlier backup of the data partition can't be restored.",
                     ]);
-                    y = widgets::footnote(&mut c, t, f, y, note);
+                        y = widgets::footnote(&mut c, t, f, y, note);
+                    }
+                    // The boot partitions' vbmeta checks the system's: one of
+                    // another version without the other may not start.
+                    if let (Some(was), Some(now)) = (&held.system, &i.os_version)
+                        && was != now
+                        && chosen[0] != chosen[1]
+                    {
+                        let warn = tr!(
+                            l,
+                            "该备份来自 {was}，本机当前为 {now}。仅恢复启动分区或系统分区中的一项，可能导致无法开机。",
+                            "這份備份來自 {was}，本機目前為 {now}。僅還原啟動分割區或系統分割區中的一項，可能導致無法開機。",
+                            "This backup is from {was}, and this phone runs {now}. Restoring only one of the boot and system partitions may keep the phone from starting."
+                        );
+                        y = widgets::footnote(&mut c, t, f, y, &warn);
+                    }
+                    let (label, danger) = confirm_label(Confirm::Restore, cx.state);
+                    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+                    out.push(Hit {
+                        rect: track,
+                        action: Action::Confirm(Confirm::Restore),
+                    });
+                    track.y + track.h
                 }
-                // The boot partitions' vbmeta checks the system's: one of
-                // another version without the other may not start.
-                if let (Some(was), Some(now)) = (&held.system, &i.os_version)
-                    && was != now
-                    && chosen[0] != chosen[1]
-                {
-                    let warn = tr!(
-                        l,
-                        "该备份来自 {was}，本机当前为 {now}。仅恢复启动分区或系统分区中的一项，可能导致无法开机。",
-                        "這份備份來自 {was}，本機目前為 {now}。僅還原啟動分割區或系統分割區中的一項，可能導致無法開機。",
-                        "This backup is from {was}, and this phone runs {now}. Restoring only one of the boot and system partitions may keep the phone from starting."
-                    );
-                    y = widgets::footnote(&mut c, t, f, y, &warn);
-                }
-                let (label, danger) = confirm_label(Confirm::Restore, cx.state);
-                let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-                out.push(Hit {
-                    rect: track,
-                    action: Action::Confirm(Confirm::Restore),
-                });
-                track.y + track.h
             }
         }
     };
@@ -3531,9 +3623,19 @@ pub fn advanced(cx: &Ctx) -> Frame {
     );
     let mut out = hits(
         &files.rows,
-        &[Action::Open(Screen::Files), Action::Open(Screen::Browser), Action::Open(Screen::Terminal)],
+        &[
+            Action::Open(Screen::Files),
+            Action::Open(Screen::Browser),
+            Action::Open(Screen::Terminal),
+        ],
     );
-    let y = widgets::section(&mut c, t, f, files.bottom, l.pick(["系统与分区", "系統與分割區", "System and partitions"]));
+    let y = widgets::section(
+        &mut c,
+        t,
+        f,
+        files.bottom,
+        l.pick(["系统与分区", "系統與分割區", "System and partitions"]),
+    );
     let system = widgets::list(
         &mut c,
         t,
@@ -4487,7 +4589,11 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         "Saved in /sdcard/{DOWNLOADS}; the file is kept after installation."
     );
     let points = [
-        l.pick(["安装前请备份数据，是否清除以更新包要求和所选选项为准。", "安裝前請備份資料，是否清除依更新檔要求與所選選項而定。", "Back up first. Data erasure depends on the package and selected options."]),
+        l.pick([
+            "安装前请备份数据，是否清除以更新包要求和所选选项为准。",
+            "安裝前請備份資料，是否清除依更新檔要求與所選選項而定。",
+            "Back up first. Data erasure depends on the package and selected options.",
+        ]),
         saved.as_str(),
     ];
     widgets::notes(c, t, f, y + t.m.card_gap, l.pick(NOTES), &points)
@@ -4569,7 +4675,11 @@ pub fn skyward_update(cx: &Ctx) -> Frame {
             "驗證發佈簽章與映像檔後，僅更新目前槽位的 recovery，不變更系統、使用者資料或 AVB。",
             "After release signature and image checks, update only the current slot's recovery. System, user data and AVB are unchanged.",
         ]),
-        l.pick(["更新完成后，重启到恢复模式即可使用新版本。", "更新完成後，重新啟動到復原模式即可使用新版本。", "Once updated, reboot to recovery to use the new version."]),
+        l.pick([
+            "更新完成后，重启到恢复模式即可使用新版本。",
+            "更新完成後，重新啟動到復原模式即可使用新版本。",
+            "Once updated, reboot to recovery to use the new version.",
+        ]),
     ];
     let y = widgets::notes(&mut c, t, f, y + t.m.card_gap, l.pick(NOTES), &points);
     Frame::new(t, fit(c, t, y), out, l.pick(SKYWARD_UPDATE), top)
@@ -5158,20 +5268,22 @@ pub fn files(cx: &Ctx) -> Frame {
 /// typing into the search box.
 fn keyboard_dock(cx: &Ctx, s: &State) -> Dock {
     let (t, f, l) = (cx.t, cx.f, s.lang);
-    let mut c = Canvas::new(t.m.w, widgets::keyboard_height(t).round() as u32);
+    let ime_h = crate::ime::height(t);
+    let mut c = Canvas::new(t.m.w, (widgets::keyboard_height(t) + ime_h).round() as u32);
     c.clear(files::page(t));
     let enter = l.pick(FILES_SEARCH_ENTER);
-    let keys = widgets::keyboard(&mut c, t, f, l, 0.0, s.layer, s.key_held(), enter);
-    Dock {
-        canvas: c,
-        hits: keys
-            .into_iter()
-            .map(|(rect, cap)| Hit {
-                rect,
-                action: Action::Type(cap),
-            })
-            .collect(),
+    let keys = widgets::keyboard(&mut c, t, f, l, ime_h, s.layer, s.key_held(), enter);
+    let mut hits: Vec<_> = keys
+        .into_iter()
+        .map(|(rect, cap)| Hit {
+            rect,
+            action: Action::Type(cap),
+        })
+        .collect();
+    if cfg!(feature = "pinyin-input") {
+        hits.extend(crate::ime::bar(&mut c, t, f, &s.ime, 0.0, false));
     }
+    Dock { canvas: c, hits }
 }
 
 /// The folder the file manager shows, laid out with the search box and the

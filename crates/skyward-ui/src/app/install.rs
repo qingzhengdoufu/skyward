@@ -232,6 +232,7 @@ impl App {
         let s = &mut self.state;
         (s.install, s.source, s.package_name) = (install, source, name);
         s.script_output.clear();
+        s.script_warnings.clear();
         s.reflash = None;
     }
 }
@@ -310,6 +311,12 @@ impl App {
                     running: true,
                 };
                 self.state.script_output.clear();
+                self.state.script_warnings.clear();
+            }
+            Event::Warning(warning) => {
+                if !self.state.script_warnings.contains(&warning) && self.state.script_warnings.len() < 6 {
+                    self.state.script_warnings.push(warning);
+                }
             }
             Event::Print(line) => {
                 let shown = &mut self.state.script_output;

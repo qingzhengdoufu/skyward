@@ -573,6 +573,8 @@ impl App {
                 }
             }
             Action::BrowserFormField(form, field) => {
+                self.state.ime.clear();
+                self.state.ime.enabled = false;
                 let b = &mut self.state.browser;
                 if b.form.len() <= form {
                     b.form.resize(form + 1, Vec::new());
@@ -586,6 +588,7 @@ impl App {
             }
             Action::BrowserFormSubmit(form) => return self.browser_submit(form),
             Action::BrowserFormClose => {
+                self.state.ime.clear();
                 self.state.browser.field = None;
                 self.back(now);
             }

@@ -507,7 +507,7 @@ pub(super) fn backups_at(place: Place) -> Result<Vec<BackupEntry>> {
     let folder = backups_in(place);
     let entries = match fs::read_dir(&folder) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return image_backups_at(place),
         Err(e) => return Err(e).with_context(|| format!("read {}", folder.display())),
     };
     let mut found = Vec::new();
@@ -525,9 +525,47 @@ pub(super) fn backups_at(place: Place) -> Result<Vec<BackupEntry>> {
         let held = skyward_backup::Manifest::read(&entry.path())
             .map(|m| held(&m))
             .map_err(|e| format!("{e:#}"));
-        found.push(BackupEntry { place, name, held });
+        found.push(BackupEntry {
+            place,
+            name,
+            held,
+            image: None,
+        });
     }
+    found.extend(image_backups_at(place)?);
     Ok(found)
+}
+
+fn image_backups_at(place: Place) -> Result<Vec<BackupEntry>> {
+    let root = in_place(place, skyward_backup::image::FOLDER);
+    Ok(skyward_backup::image::copies(&root)?
+        .into_iter()
+        .map(|copy| {
+            let slot = if copy.partition.ends_with("_a") {
+                Some(skyward_vab::Slot::A)
+            } else if copy.partition.ends_with("_b") {
+                Some(skyward_vab::Slot::B)
+            } else {
+                None
+            };
+            BackupEntry {
+                place,
+                name: copy.folder,
+                held: Ok(Held {
+                    made: copy.made,
+                    size: copy.size,
+                    parts: [false; 4],
+                    device: String::new(),
+                    system: None,
+                    slot,
+                }),
+                image: Some(skyward_ui::app::ImageCopy {
+                    partition: copy.partition,
+                    sha256: copy.sha256,
+                }),
+            }
+        })
+        .collect())
 }
 
 /// What a backup's manifest records, as the pages show it.
@@ -3260,6 +3298,38 @@ impl Pages<'_> {
                 verify,
             } => self.back_up(parts, place, compress, verify, now)?,
             Effect::Restore { place, name, parts } => self.restore(place, &name, parts, now)?,
+            Effect::RestoreImage {
+                place,
+                folder,
+                partition,
+                size,
+                sha256,
+            } => {
+                if self.installer.is_some() || self.partition_busy() || self.backuper.is_some() {
+                    self.partition_wait(now);
+                    return Ok(Vec::new());
+                }
+                let root = in_place(place, skyward_backup::image::FOLDER);
+                let task = backup::Task::RestoreImage {
+                    root,
+                    folder,
+                    partition,
+                    size,
+                    sha256,
+                    detach: detach(self.programs.to_vec()),
+                };
+                self.backuper = Some(backup::Worker::start(task)?);
+                self.app.backup_started(true, place, true);
+            }
+            Effect::DeleteImageBackup { place, name } => {
+                let root = in_place(place, skyward_backup::image::FOLDER);
+                let deleted = if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
+                    Err("invalid image backup folder".into())
+                } else {
+                    delete_backup(place, &root.join(name)).map_err(|e| format!("{e:#}"))
+                };
+                return Ok(self.app.backup_deleted(deleted, now));
+            }
             Effect::FindBackups { storage, usb } => find_backups(&mut self.app, storage, usb, now),
             Effect::DeleteBackup { place, name } => {
                 let deleted = delete_backup(place, &backups_in(place).join(&name)).map_err(|e| format!("{e:#}"));

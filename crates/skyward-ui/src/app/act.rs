@@ -4,6 +4,14 @@ impl App {
     /// Carry out a tapped control.
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
+        if matches!(action, Action::ImeToggle | Action::ImePick(_) | Action::ImePage(_)) {
+            return self.ime_action(action);
+        }
+        if let Action::Type(cap) = action
+            && let Some(effects) = self.ime_key(cap, now)
+        {
+            return effects;
+        }
         if Self::is_browser_action(action) {
             return self.browser_act(action, now);
         }
@@ -116,6 +124,8 @@ impl App {
                         checking: false,
                     };
                     self.state.code.clear();
+                    self.state.ime.clear();
+                    self.state.ime.enabled = false;
                     self.refresh();
                 }
             }
@@ -474,7 +484,9 @@ impl App {
                 }
             }
             Action::OpenBackup(i) => {
-                let entry = self.state.backups[i].clone();
+                let Some(entry) = self.state.backups.get(i).cloned() else {
+                    return Vec::new();
+                };
                 let parts = entry.held.as_ref().map_or([false; 4], |h| h.parts);
                 self.state.restore = Some((entry, parts));
                 self.state.asking_delete = false;
@@ -524,6 +536,7 @@ impl App {
             Action::Type(cap) if self.screen() == Screen::Editor => self.edit_typed(cap),
             Action::Type(cap) => return self.type_key(cap, now),
             Action::TermKey(key) if self.screen() == Screen::Editor => {
+                self.state.ime.clear();
                 let ed = self.state.editor.as_mut().expect("the editor page shows a file");
                 match key {
                     TermKey::Tab => ed.insert('\t'),
@@ -548,6 +561,7 @@ impl App {
                 }
             }
             Action::ClearSearch => {
+                self.state.ime.clear();
                 self.state.search.clear();
                 self.edits += 1;
                 self.refresh();
@@ -746,6 +760,8 @@ impl App {
             Action::TypeInto(field) => {
                 let a = self.state.adding.as_mut().expect("the fields are on the page that adds a network");
                 if a.field != field {
+                    self.state.ime.clear();
+                    self.state.ime.enabled = false;
                     a.field = field;
                     self.refresh();
                 }
@@ -892,17 +908,20 @@ impl App {
             }
             Action::FilesSearch => {
                 if !self.state.files_search {
+                    self.state.ime.clear();
                     self.state.files_search = true;
                     self.refresh();
                 }
             }
             Action::CloseFilesSearch => {
                 if self.state.files_search {
+                    self.state.ime.clear();
                     self.state.files_search = false;
                     self.refresh();
                 }
             }
             Action::ClearFilesQuery => {
+                self.state.ime.clear();
                 if !self.state.files_query.is_empty() {
                     self.state.files_query.clear();
                     self.state.files.keep("");
@@ -986,6 +1005,10 @@ impl App {
             Screen::BrowserAddress => &mut self.state.browser.address,
             Screen::BrowserForm => {
                 let (form, field) = self.state.browser.field.expect("form input");
+                &mut self.state.browser.form[form][field]
+            }
+            Screen::Browser if self.state.browser.field.is_some() => {
+                let (form, field) = self.state.browser.field.expect("inline form input");
                 &mut self.state.browser.form[form][field]
             }
             Screen::Search => &mut self.state.search,
@@ -1299,6 +1322,18 @@ impl App {
             }
             Confirm::Restore => {
                 let (entry, parts) = self.state.restore.as_ref().expect("the restore page shows a backup");
+                if let (Some(image), Ok(held)) = (&entry.image, &entry.held) {
+                    if self.state.place_open(entry.place) {
+                        fx.push(Effect::RestoreImage {
+                            place: entry.place,
+                            folder: entry.name.clone(),
+                            partition: image.partition.clone(),
+                            size: held.size,
+                            sha256: image.sha256.clone(),
+                        });
+                    }
+                    return fx;
+                }
                 let restore = Effect::Restore {
                     place: entry.place,
                     name: entry.name.clone(),
@@ -1321,6 +1356,12 @@ impl App {
             }
             Confirm::DeleteBackup => {
                 let (entry, _) = self.state.restore.as_ref().expect("the restore page shows a backup");
+                if entry.image.is_some() {
+                    return vec![Effect::DeleteImageBackup {
+                        place: entry.place,
+                        name: entry.name.clone(),
+                    }];
+                }
                 fx.push(Effect::DeleteBackup {
                     place: entry.place,
                     name: entry.name.clone(),
