@@ -660,7 +660,11 @@ fn installed_boot_set() -> Result<()> {
 /// yet: rescue may install one package after another.
 fn detach_once(ctx: &mut Context) -> Result<()> {
     match ctx.detach.take() {
-        Some(detach) => detach().context("move off the installed system"),
+        Some(detach) => {
+            // A failed detach can already have released some mounts.
+            ctx.send(Event::Detached);
+            detach().context("move off the installed system")
+        }
         None => Ok(()),
     }
 }

@@ -10,6 +10,158 @@ const W: u32 = 1440;
 const H: u32 = 3200;
 const PPD: f32 = 3.5;
 
+#[test]
+fn detached_system_requires_a_restart_notice_without_claiming_data_is_lost() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Installing, W, H, PPD);
+    app.state.data = Data::Open;
+    app.install(Event::Detached, 0);
+    app.install(Event::Running, 1);
+    app.home();
+    assert!(
+        !app.frame(&f, &i)
+            .hits
+            .iter()
+            .any(|hit| hit.action == Action::RebootTo(Target::Recovery))
+    );
+    app.open(Screen::Installing);
+    app.install(Event::Finished(Outcome::Ran { wipe_cache: false }), 2);
+    assert!(app.state.system_detached);
+    assert_eq!(app.state.data, Data::Open);
+    let restart = Action::RebootTo(Target::Recovery);
+    assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == restart));
+    app.home();
+    assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == restart));
+    app.begin_install(Install::Starting, Source::Computer, None);
+    assert!(app.state.system_detached, "another package cannot restore services");
+}
+
+#[test]
+fn a_key_released_after_its_field_disappears_is_ignored() {
+    let mut app = App::new(Screen::Decrypt, W, H, PPD);
+    for data in [
+        Data::Open,
+        Data::Opening,
+        Data::Closed,
+        Data::Locked {
+            user: 0,
+            keys: Keys::Letters,
+            checking: true,
+        },
+    ] {
+        app.state.data = data.clone();
+        for key in [Cap::Char('a'), Cap::Backspace, Cap::Enter, Cap::Space] {
+            assert!(app.act(Action::Type(key), 0).is_empty());
+            assert_eq!(app.state.data, data);
+            assert!(app.state.code.is_empty());
+        }
+    }
+    for screen in [Screen::Home, Screen::Files, Screen::BrowserForm, Screen::WlanAdd, Screen::Editor] {
+        app.open(screen);
+        for key in [Cap::Char('a'), Cap::Enter] {
+            assert!(app.act(Action::Type(key), 0).is_empty(), "{screen:?}");
+        }
+    }
+}
+
+#[test]
+fn decrypt_completion_between_key_down_and_up_cannot_submit_a_stale_credential() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Decrypt, W, H, PPD);
+    app.data_waiting(Some((0, Keys::Letters)), Vec::new());
+    app.state.code = "example".into();
+    let (x, y) = spot(&mut app, &f, &i, Action::Type(Cap::Enter));
+    app.touch(Touch::Down(x, y), &f, 1000);
+    app.data_waiting(None, Vec::new());
+    assert!(app.touch(Touch::Up, &f, 1040).is_empty());
+    app.compose(&mut Canvas::new(W, H), &f, &i, "12:00", 1050);
+    assert_eq!(app.state.data, Data::Open);
+}
+
+#[test]
+fn automatic_unlocking_while_a_pattern_is_held_ignores_its_release() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Decrypt, W, H, PPD);
+    app.data_waiting(Some((0, Keys::Pattern)), Vec::new());
+    let (cx, cy, span) = app.frame(&f, &i).pattern.unwrap();
+    let dots = widgets::pattern_dots(cx, cy, span);
+    app.touch(Touch::Down(dots[0].0, dots[0].1), &f, 1000);
+    for dot in &dots[1..4] {
+        app.touch(Touch::Move(dot.0, dot.1), &f, 1040);
+    }
+    assert!(app.state.pattern.len() >= 4);
+    app.data_waiting(None, Vec::new());
+    assert!(app.touch(Touch::Up, &f, 1100).is_empty());
+    assert_eq!(app.state.data, Data::Open);
+}
+
+#[cfg(feature = "pinyin-input")]
+#[test]
+fn chinese_search_touch_commits_survive_rendering_and_navigation() {
+    let (f, i) = (fonts(), info());
+    for (width, height, density) in [(720, 1600, 1.875), (W, H, 3.75)] {
+        let mut app = App::new(Screen::Home, width, height, density);
+        app.set_navigation(true);
+        app.state.dark = true;
+        app.state.data = Data::Open;
+        let mut canvas = Canvas::new(width, height);
+        app.compose(&mut canvas, &f, &i, "12:00", 0);
+        tap_at(&mut app, &f, &i, Action::Open(Screen::Search), 1000);
+        for now in [1000, 1016, 1100, 2000] {
+            app.tick(now);
+            app.compose(&mut canvas, &f, &i, "12:00", now);
+        }
+        let mut now = 3000;
+        for (spelling, text) in [("beifen", "备份"), ("huifu", "恢复"), ("nihao", "你好")] {
+            if !app.state.ime.enabled {
+                tap_at(&mut app, &f, &i, Action::ImeToggle, now);
+            }
+            app.compose(&mut canvas, &f, &i, "12:00", now);
+            for ch in spelling.chars() {
+                now += 100;
+                let action = Action::Type(Cap::Char(ch));
+                let (x, y) = spot(&mut app, &f, &i, action);
+                app.touch(Touch::Down(x, y), &f, now);
+                app.compose(&mut canvas, &f, &i, "12:00", now);
+                app.touch(Touch::Up, &f, now + 40);
+                app.compose(&mut canvas, &f, &i, "12:00", now + 40);
+                app.draw_ahead(&f, &i);
+            }
+            let index = app
+                .state
+                .ime
+                .candidates
+                .iter()
+                .position(|candidate| candidate.text == text)
+                .unwrap();
+            while app.state.ime.page != index / 3 {
+                now += 100;
+                tap_at(&mut app, &f, &i, Action::ImePage(true), now);
+                app.compose(&mut canvas, &f, &i, "12:00", now);
+            }
+            now += 100;
+            tap_at(&mut app, &f, &i, Action::ImePick(index), now);
+            app.compose(&mut canvas, &f, &i, "12:00", now);
+            app.draw_ahead(&f, &i);
+            assert_eq!(app.state.search, text);
+            now += 100;
+            tap_at(&mut app, &f, &i, Action::Type(Cap::Backspace), now);
+            app.compose(&mut canvas, &f, &i, "12:00", now);
+            now += 100;
+            tap_at(&mut app, &f, &i, Action::ClearSearch, now);
+            app.compose(&mut canvas, &f, &i, "12:00", now);
+            assert!(app.state.search.is_empty());
+            assert_eq!(app.state.data, Data::Open);
+        }
+        tap_at(&mut app, &f, &i, Action::CloseSearch, now + 100);
+        for now in [now + 100, now + 116, now + 300, now + 1000] {
+            app.tick(now);
+            app.compose(&mut canvas, &f, &i, "12:00", now);
+        }
+        assert_eq!(app.screen(), Screen::Home);
+    }
+}
+
 #[cfg(feature = "pinyin-input")]
 #[test]
 fn native_text_fields_share_chinese_composition_without_changing_english_keys() {
@@ -5891,6 +6043,9 @@ fn the_file_page_searches_below_its_folder_and_one_button_cycles_the_order() {
     assert!(app.act(Action::CloseFilesSearch, 1025).is_empty());
     assert!(app.frame(&f, &i).dock.is_none(), "the keyboard goes away");
     app.act(Action::Type(Cap::Char('a')), 1030);
+    assert!(app.state.files_query.is_empty(), "a stale key cannot edit a closed search");
+    app.act(Action::FilesSearch, 1035);
+    app.act(Action::Type(Cap::Char('a')), 1040);
     assert_eq!(app.state.files_query, "a");
     app.set_files("/sdcard/DCIM".into(), Ok(vec![entry("photo.jpg", FileKind::File)]), LISTED);
     assert_eq!(app.state.files_query, "", "a folder opened is searched from nothing");

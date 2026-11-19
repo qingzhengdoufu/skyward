@@ -1,3 +1,4 @@
+use crate::app::RESTART_AFTER_INSTALL;
 use crate::app::{
     ADDABLE, Action, BACKUP_PARTS, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, DATA_ERASED, DATA_PARTITION, DOWNLOADS,
     Damage, Data, Dock, DownloadEnd, EraseStop, FASTBOOT_CHOICES, Field, FileKind, FileOp, FileRow, FileTask, Fold, Folder, Found, Frame,
@@ -302,6 +303,14 @@ pub fn home(cx: &Ctx) -> Frame {
     };
     let mut rows = Vec::new();
     let mut opens = Vec::new();
+    if cx.state.system_detached && matches!(cx.state.install, Install::Idle | Install::Finished { .. }) {
+        rows.push(
+            Row::new(l.pick(["请重启 recovery", "請重新啟動 recovery", "Reboot recovery"]))
+                .icon(ORANGE, Icon::Power)
+                .subtitle(l.pick(RESTART_AFTER_INSTALL)),
+        );
+        opens.push(Some(Action::RebootTo(Target::Recovery)));
+    }
     if let Some((title, note)) = &low {
         rows.push(Row::new(title).icon(RED, Icon::Battery).subtitle(note).trail(Trail::None));
         opens.push(None);
@@ -2423,6 +2432,21 @@ fn finished(
 ) -> f32 {
     let (t, f, source, l) = (cx.t, cx.f, cx.state.source, cx.state.lang);
     let gap = t.m.card_gap;
+    let top = if cx.state.system_detached {
+        let notice = widgets::list(
+            c,
+            t,
+            f,
+            top,
+            &[Row::new(l.pick(["请重启 recovery", "請重新啟動 recovery", "Reboot recovery"]))
+                .icon(ORANGE, Icon::Power)
+                .subtitle(l.pick(RESTART_AFTER_INSTALL))],
+        );
+        out.extend(hits(&notice.rows, &[Action::RebootTo(Target::Recovery)]));
+        notice.bottom + gap
+    } else {
+        top
+    };
     let choose_another = ["选择其他文件", "選擇其他檔案", "Choose another file"];
     let (again, another) = match source {
         Source::Computer => (

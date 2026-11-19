@@ -112,8 +112,14 @@ impl App {
     /// files wait. It is taken as it is sent, so the dots clear while it is
     /// checked, and nothing more is entered until it has been.
     pub(super) fn unlock(&mut self, code: String) -> Vec<Effect> {
-        let Data::Locked { user, keys, .. } = self.state.data else {
-            unreachable!("only a screen lock waiting takes what is entered")
+        let Data::Locked {
+            user,
+            keys,
+            checking: false,
+        } = self.state.data
+        else {
+            // Automatic unlocking can finish before a held key or pattern lifts.
+            return Vec::new();
         };
         self.state.data = Data::Locked {
             user,

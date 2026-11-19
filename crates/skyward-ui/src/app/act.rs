@@ -4,6 +4,10 @@ impl App {
     /// Carry out a tapped control.
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
+        // A background event may replace the field while a key is held.
+        if matches!(action, Action::Type(_)) && !self.text_context() {
+            return Vec::new();
+        }
         if matches!(action, Action::ImeToggle | Action::ImePick(_) | Action::ImePage(_)) {
             return self.ime_action(action);
         }

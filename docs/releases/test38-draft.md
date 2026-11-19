@@ -1,5 +1,9 @@
 # Skyward 1.0.0 Miro Test38
 
+Historical note: acceptance was subsequently withdrawn following an
+intermittent recovery-exit report. The test38 IMG was never uploaded or released.
+Test39b supersedes it for development validation; see MIRO-TEST39B.md.
+
 Accepted development build for REDMI K80 Pro (miro), based on test37 and
 the stock OS3.0.303.0.WOMCNXM recovery ramdisk.
 

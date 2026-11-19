@@ -107,6 +107,9 @@ pub enum Event {
     /// the update writes over it: until it finishes, the phone may not
     /// start.
     Overwriting,
+    /// The installed system's mounts are being released. Services backed by
+    /// those partitions must be prepared again by rebooting recovery.
+    Detached,
     /// A partition image, held until [`Command::Flash`] says where it goes:
     /// the partitions of this phone it fits, the likeliest first.
     Image { kind: ImageKind, size: u64, partitions: Vec<&'static str> },

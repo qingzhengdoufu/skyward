@@ -6,6 +6,7 @@ use skyward_programs::secure::Started;
 use skyward_sys::{Power, bcb};
 use skyward_vab::SnapshotState;
 use std::path::{Path, PathBuf};
+mod crash;
 #[cfg(target_os = "android")]
 mod aod;
 #[cfg(target_os = "android")]
@@ -857,6 +858,7 @@ fn adopt_installed_version(props: &std::collections::HashMap<String, String>) ->
 /// kernel log and still end the process, which init then starts again.
 fn recovery() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    crash::install();
     let run = || -> Result<()> {
         // Open to the programs the recovery runs as other users, the
         // supplicant among them, whatever the umask.

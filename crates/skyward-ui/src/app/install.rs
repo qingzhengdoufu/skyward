@@ -7,6 +7,12 @@ pub const INSTALL_UNFINISHED: Text = [
     "The last install hasn't ended. Try again shortly",
 ];
 
+pub const RESTART_AFTER_INSTALL: Text = [
+    "系统分区已卸载，请重启 recovery 后再使用解密等系统服务。等待不会自动恢复。",
+    "系統分割區已卸載，請重新啟動 recovery 後再使用解密等系統服務。等待不會自動恢復。",
+    "System partitions were detached. Reboot recovery before decrypting or using system services. Waiting does not restore them.",
+];
+
 /// Where the package being installed comes from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Source {
@@ -251,6 +257,11 @@ impl App {
     /// script waiting to be agreed to, and the end light a dark panel: all
     /// want the user.
     pub fn install(&mut self, ev: Event, now: u64) {
+        if ev == Event::Detached {
+            self.state.system_detached = true;
+            self.refresh();
+            return;
+        }
         if self.state.install == Install::Ending {
             if matches!(ev, Event::Finished(_)) {
                 self.state.install = Install::Idle;
@@ -365,7 +376,7 @@ impl App {
                 self.state.avb_notice = Some(said);
                 self.refresh();
             }
-            Event::Wipe | Event::Reboot(_) => {
+            Event::Detached | Event::Wipe | Event::Reboot(_) => {
                 unreachable!("the runtime carries out what rescue asks of it")
             }
             Event::Done(outcome) | Event::Finished(outcome) => {

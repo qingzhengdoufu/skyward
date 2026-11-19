@@ -75,6 +75,8 @@ pub struct State {
     /// What the install script last run showed, its latest lines.
     pub script_output: Vec<String>,
     pub script_warnings: Vec<skyward_install::warnings::Warning>,
+    /// Stays set until recovery restarts, even when another install begins.
+    pub system_detached: bool,
     /// A zip's install script runs only if the zip was signed with one of
     /// the phone's update keys.
     pub check_signature: bool,
@@ -317,6 +319,7 @@ impl Default for State {
             package_name: None,
             script_output: Vec::new(),
             script_warnings: Vec::new(),
+            system_detached: false,
             check_signature: false,
             recovery_partitions: false,
             keep_recovery: true,

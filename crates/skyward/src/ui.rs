@@ -326,10 +326,10 @@ pub(super) struct Untaken {
 pub(super) fn untaken(told: &mut skyward_sys::ToldOnce, what: &str, why: Option<&anyhow::Error>) -> Result<()> {
     let why = why.map(|e| format!("{e:#}"));
     if told.untold(why.as_deref()) {
-        skyward_sys::kmsg(&format!(
+        let _ = skyward_sys::kmsg(&format!(
             "{what} could not be read, and the pages keep what they have: {}",
             why.unwrap_or_default()
-        ))?;
+        ));
     }
     Ok(())
 }
@@ -426,6 +426,7 @@ pub(super) fn export_logs(recovery: bool, kernel: bool, into: &Path, zone: usize
             &fs::read(skyward_sys::LOG).with_context(|| format!("read {}", skyward_sys::LOG))?,
         )?;
         for (name, path) in [
+            ("panic.log", "/skyward/run/panic.log"),
             ("update_engine.log", skyward_install::ENGINE_LOG),
             ("install-script.log", skyward_install::SCRIPT_LOG),
         ] {
@@ -2450,11 +2451,11 @@ impl Pages<'_> {
         if !metadata_busy && let Some(due) = self.keeper.due(self.app.settings(), now) {
             match settings::write(&due) {
                 Ok(()) => {
-                    skyward_sys::kmsg("the settings are kept")?;
+                    let _ = skyward_sys::kmsg("the settings are kept");
                     self.keeper.written(due);
                 }
                 Err(e) => {
-                    skyward_sys::kmsg(&format!("the settings were not kept: {e:#}"))?;
+                    let _ = skyward_sys::kmsg(&format!("the settings were not kept: {e:#}"));
                     self.keeper.failed();
                 }
             }
@@ -2586,7 +2587,7 @@ impl Pages<'_> {
                 }
             }
             decrypt::Ended::Opened(Err(why)) => {
-                skyward_sys::kmsg(&format!("the data partition stays closed: {why}"))?;
+                let _ = skyward_sys::kmsg(&format!("the data partition stays closed: {why}"));
                 if self.pending.take().is_some() {
                     let failed = skyward_install::Outcome::Failed(skyward_install::Failure::Unreadable(why.clone()));
                     self.app.install(skyward_install::Event::Finished(failed), now);
@@ -2614,7 +2615,7 @@ impl Pages<'_> {
                     let _ = crate::remembered::forget();
                 }
                 self.unlock_typed = None;
-                skyward_sys::kmsg(&format!("what was entered did not open the user's files: {why}"))?;
+                let _ = skyward_sys::kmsg(&format!("what was entered did not open the user's files: {why}"));
                 self.app.unlock_failed(credential_message(self.app.state.lang, why), now);
             }
         }
@@ -2683,7 +2684,7 @@ impl Pages<'_> {
                 Err(cause) => cause,
                 Ok(()) => e,
             };
-            skyward_sys::kmsg(&format!("file transfer stops: {why:#}"))?;
+            let _ = skyward_sys::kmsg(&format!("file transfer stops: {why:#}"));
             self.app.file_transfer_failed(
                 false,
                 &skyward_ui::fmt::transfer_stopped(self.app.state.lang, &format!("{why:#}")),
@@ -3255,26 +3256,49 @@ impl Pages<'_> {
             }
             Effect::InstallSystem { size } => self.installer.as_ref().context("no installer holds a system")?.install_system(size),
             Effect::OpenData => {
+                if self.app.state.system_detached {
+                    self.app
+                        .data_failed(self.app.state.lang.pick(skyward_ui::app::RESTART_AFTER_INSTALL).into());
+                    return Ok(Vec::new());
+                }
                 if self.installer.is_some() || self.partition_busy() {
                     self.app.data_failed(self.app.state.lang.pick(PARTITION_BUSY).into());
                     return Ok(Vec::new());
                 }
-                ensure!(self.decryptor.is_none(), "the data partition is being opened already");
-                self.decryptor = Some(Decryptor::start(decrypt::Job::Open)?);
+                if self.decryptor.is_some() {
+                    return Ok(Vec::new());
+                }
+                match Decryptor::start(decrypt::Job::Open) {
+                    Ok(worker) => self.decryptor = Some(worker),
+                    Err(error) => self.app.data_failed(format!("{error:#}")),
+                }
             }
             Effect::Unlock { user, code } => {
+                if self.app.state.system_detached {
+                    self.app
+                        .unlock_failed(self.app.state.lang.pick(skyward_ui::app::RESTART_AFTER_INSTALL).into(), now);
+                    return Ok(Vec::new());
+                }
                 if self.installer.is_some() || self.partition_busy() {
                     self.app.unlock_failed(self.app.state.lang.pick(PARTITION_BUSY).into(), now);
                     return Ok(Vec::new());
                 }
-                ensure!(self.decryptor.is_none(), "the data partition is being opened already");
+                if self.decryptor.is_some() {
+                    return Ok(Vec::new());
+                }
                 self.unlock_typed = Some((user, code.clone()));
                 let job = decrypt::Job::Unlock {
                     closed: self.closed.clone(),
                     user,
                     credential: code.into_bytes(),
                 };
-                self.decryptor = Some(Decryptor::start(job)?);
+                match Decryptor::start(job) {
+                    Ok(worker) => self.decryptor = Some(worker),
+                    Err(error) => {
+                        self.unlock_typed = None;
+                        self.app.unlock_failed(format!("{error:#}"), now);
+                    }
+                }
             }
             Effect::ReadDir(folder) => list(&mut self.app, folder, &self.closed)?,
             Effect::ReadPlace(place, folder) => list_place(&mut self.app, place, folder)?,

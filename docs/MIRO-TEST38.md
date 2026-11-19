@@ -1,5 +1,14 @@
 # Test38 Image Restore, Shared Input And Script Warnings
 
+## Acceptance Withdrawn
+
+The user subsequently reported intermittent recovery exits and a data-open
+error after installing a ROM. The apparent acceptance and delivery plan below
+are historical, not the current release status. Test38 was committed locally
+as 386bc1d and remained local until the later test39b submission. No test38
+IMG was uploaded or released. PC hibernation was cancelled. See
+MIRO-TEST39B.md for the later explicit GitHub submission authorization.
+
 2026-11-19, uncommitted validation build based on test37 / bfdac6b.
 The user requested building/flashing before GitHub submission, then testing
 personally. Do not commit/push/upload this revision until acceptance.

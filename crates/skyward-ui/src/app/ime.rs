@@ -1,28 +1,37 @@
 use super::*;
 
 impl App {
+    pub(super) fn text_context(&self) -> bool {
+        match self.screen() {
+            Screen::Search | Screen::Rename | Screen::WlanPassword | Screen::Terminal | Screen::BrowserAddress => true,
+            Screen::WlanAdd => self.state.adding.is_some(),
+            Screen::Editor => self.state.editor.is_some(),
+            Screen::BrowserForm | Screen::Browser => {
+                !self.state.browser.full_active
+                    && self
+                        .state
+                        .browser
+                        .field
+                        .is_some_and(|(form, field)| self.state.browser.form.get(form).is_some_and(|form| field < form.len()))
+            }
+            Screen::Files => self.state.files_search,
+            Screen::Decrypt => matches!(
+                self.state.data,
+                Data::Locked {
+                    keys: Keys::Letters | Keys::Digits,
+                    checking: false,
+                    ..
+                }
+            ),
+            _ => false,
+        }
+    }
+
     pub(super) fn ime_context(&self) -> bool {
         cfg!(feature = "pinyin-input")
-            && match self.screen() {
-                Screen::Search
-                | Screen::Rename
-                | Screen::WlanPassword
-                | Screen::WlanAdd
-                | Screen::Terminal
-                | Screen::Editor
-                | Screen::BrowserForm => true,
-                Screen::Browser => !self.state.browser.full_active && self.state.browser.field.is_some(),
-                Screen::Files => self.state.files_search,
-                Screen::Decrypt => matches!(
-                    self.state.data,
-                    Data::Locked {
-                        keys: Keys::Letters,
-                        checking: false,
-                        ..
-                    }
-                ),
-                _ => false,
-            }
+            && self.text_context()
+            && self.screen() != Screen::BrowserAddress
+            && !matches!(self.state.data, Data::Locked { keys: Keys::Digits, .. } if self.screen() == Screen::Decrypt)
     }
 
     pub(super) fn ime_commit(&mut self, index: usize) -> Vec<Effect> {
