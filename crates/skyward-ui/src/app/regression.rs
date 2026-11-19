@@ -4480,7 +4480,7 @@ fn every_unfinished_entry_now_opens_its_page() {
             ..info()
         },
     );
-    let routes: [(Screen, Screen); 17] = [
+    let routes: [(Screen, Screen); 16] = [
         (Screen::Home, Screen::Search),
         (Screen::Home, Screen::Backup),
         (Screen::Home, Screen::Restore),
@@ -4494,7 +4494,6 @@ fn every_unfinished_entry_now_opens_its_page() {
         (Screen::Advanced, Screen::Avb),
         (Screen::Settings, Screen::Language),
         (Screen::Settings, Screen::TimeZone),
-        (Screen::Settings, Screen::Terminal),
         (Screen::About, Screen::Logs),
         (Screen::Specs, Screen::License),
         (Screen::Specs, Screen::FontLicense),
@@ -4508,6 +4507,88 @@ fn every_unfinished_entry_now_opens_its_page() {
     tap(&mut app, &f, &i, Action::Open(Screen::Slot));
     assert_eq!(app.screen(), Screen::Slot);
 }
+#[test]
+fn tools_have_one_primary_entry_and_updates_own_the_mirror_setting() {
+    let (f, i) = (fonts(), info());
+    let mut settings = App::new(Screen::Settings, W, H, PPD);
+    let actions: Vec<_> = settings.frame(&f, &i).hits.iter().map(|hit| hit.action).collect();
+    assert!(!actions.contains(&Action::Open(Screen::Terminal)));
+    assert!(!actions.contains(&Action::Toggle(Switch::Mirror)));
+    let mut advanced = App::new(Screen::Advanced, W, H, PPD);
+    let actions: Vec<_> = advanced.frame(&f, &i).hits.iter().map(|hit| hit.action).collect();
+    assert!(!actions.contains(&Action::OpenControlCenter));
+    for screen in [
+        Screen::Files,
+        Screen::Browser,
+        Screen::Terminal,
+        Screen::Update,
+        Screen::RootModules,
+        Screen::Partitions,
+        Screen::Avb,
+        Screen::Filesystems,
+        Screen::Relabel,
+        Screen::Logs,
+    ] {
+        assert_eq!(
+            actions.iter().filter(|&&action| action == Action::Open(screen)).count(),
+            1,
+            "{screen:?}"
+        );
+    }
+    let mut update = App::new(Screen::SkywardUpdate, W, H, PPD);
+    let enabled = update.state.mirror;
+    let effects = tap(&mut update, &f, &i, Action::Toggle(Switch::Mirror));
+    assert_eq!(update.state.mirror, !enabled);
+    assert_eq!(effects, [Effect::SetMirror(!enabled)]);
+}
+
+#[test]
+fn browser_menu_has_one_mode_entry_and_keeps_toolbar_features_reachable() {
+    let (f, i) = (fonts(), info());
+    for full in [false, true] {
+        let mut app = App::new(Screen::BrowserMenu, W, H, PPD);
+        app.state.browser.full_active = full;
+        let actions: Vec<_> = app.frame(&f, &i).hits.iter().map(|hit| hit.action).collect();
+        assert!(actions.contains(&Action::BrowserTabs));
+        assert!(actions.contains(&Action::BrowserHome));
+        assert!(actions.contains(&Action::BrowserBookmark));
+        for retired in [
+            Action::BrowserFull,
+            Action::BrowserNewTab,
+            Action::BrowserHistoryList,
+            Action::BrowserBookmarksList,
+            Action::BrowserDownloads,
+        ] {
+            assert!(!actions.contains(&retired), "duplicate menu entry: {retired:?}");
+        }
+        assert_eq!(actions.contains(&Action::BrowserFullLoad), !full);
+        assert_eq!(actions.contains(&Action::BrowserBasic), full);
+        app.act(Action::BrowserTabs, 0);
+        assert!(app.frame(&f, &i).hits.iter().any(|hit| hit.action == Action::BrowserNewTab));
+        app.act(Action::BrowserHome, 1);
+        let dock = app.frame(&f, &i).dock.as_ref().unwrap();
+        for action in [Action::BrowserHistoryList, Action::BrowserBookmarksList, Action::BrowserDownloads] {
+            assert_eq!(dock.hits.iter().filter(|hit| hit.action == action).count(), 1);
+        }
+    }
+}
+
+#[test]
+fn install_safety_options_remain_available_after_copy_cleanup() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Install, W, H, PPD);
+    app.state.recovery_partitions = true;
+    let actions: Vec<_> = app.frame(&f, &i).hits.iter().map(|hit| hit.action).collect();
+    for action in [
+        Action::Toggle(Switch::Signature),
+        Action::Toggle(Switch::KeepRecovery),
+        Action::Toggle(Switch::DisableAvb),
+    ] {
+        assert_eq!(actions.iter().filter(|&&shown| shown == action).count(), 1);
+    }
+    assert!(app.state.keep_recovery);
+}
+
 #[test]
 fn logs_are_exported_as_ticked_where_they_can_go() {
     let (f, i) = (fonts(), info());
@@ -5442,7 +5523,7 @@ fn a_key_shows_held_down_while_touched() {
 #[test]
 fn the_terminal_sends_every_key_to_its_shell() {
     let (f, i) = (fonts(), info());
-    let mut app = App::new(Screen::Settings, W, H, PPD);
+    let mut app = App::new(Screen::Advanced, W, H, PPD);
     assert_eq!(
         tap(&mut app, &f, &i, Action::Open(Screen::Terminal)),
         vec![Effect::StartShell("/".into())],

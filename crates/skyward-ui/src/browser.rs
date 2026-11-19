@@ -11,7 +11,6 @@ use crate::icons::{self, Icon};
 use crate::lang::{Lang, Text};
 use crate::pages::{Band, Ctx};
 use crate::theme::Theme;
-use crate::tr;
 use crate::widgets::{self, Row, Trail};
 use skyward_net::web::{self, Block as WebBlock, Page as WebPage};
 
@@ -103,9 +102,9 @@ pub fn screen(cx: &Ctx) -> Frame {
             let list = widgets::list(&mut c, cx.t, cx.f, y, &rows);
             y = list.bottom;
             let note = cx.state.lang.pick([
-                "这是文件，不是网页。可下载后用文件管理打开，zip 和镜像可直接安装。",
-                "這是檔案，不是網頁。可下載後用檔案管理開啟，zip 和映像檔可直接安裝。",
-                "This is a file, not a page. Download it and open it in Files; a zip or an image installs from there.",
+                "下载后可从文件管理打开或安装。",
+                "下載後可從檔案管理開啟或安裝。",
+                "Open or install the downloaded file from Files.",
             ]);
             y = widgets::footnote(&mut c, cx.t, cx.f, y, note);
             let row = Row::new(cx.state.lang.pick(DOWNLOAD)).icon(BLUE, Icon::Install).trail(Trail::Arrow);
@@ -220,28 +219,18 @@ fn home(cx: &Ctx) -> Frame {
         y = list.bottom;
     }
 
-    y = widgets::section(&mut c, t, f, y, l.pick(DOWNLOADS));
-    let count = s.browser.downloads.len();
     if let Some(i) = s.browser.saving
         && let Some(d) = s.browser.downloads.get(i)
         && let BrowserSave::Downloading { done, total } = d.state
     {
+        y = widgets::section(&mut c, t, f, y, l.pick(DOWNLOADS));
         let (head, detail, share) = saving_line(l, &d.name, done, total);
         y = download_progress(&mut c, t, f, y, head, &detail, share);
     }
-    let sub = if count == 0 {
-        l.pick(["还没有下载", "還沒有下載", "Nothing downloaded"]).to_string()
-    } else {
-        tr!(l, "{count} 个文件", "{count} 個檔案", "{count} files")
-    };
-    let row = Row::new(l.pick(DOWNLOADS)).icon(GREEN, Icon::Install).subtitle(&sub);
-    let list = widgets::list(&mut c, t, f, y, &[row]);
-    out.extend(hits(&list.rows, &[Action::BrowserDownloads]));
-    y = list.bottom;
 
     y = widgets::section(&mut c, t, f, y, l.pick(["更多", "更多", "More"]));
     let full_title = if cfg!(feature = "aera-browser") {
-        l.pick(["完整模式", "完整模式", "Full mode"])
+        l.pick(["网页引擎", "網頁引擎", "Web engine"])
     } else {
         l.pick([
             "完整模式（Linux Chromium）",
@@ -289,12 +278,6 @@ fn home(cx: &Ctx) -> Frame {
         y = list.bottom;
     }
 
-    let note = l.pick([
-        "浏览器显示文字、图片和链接，支持基础 CSS、表单和 Cookie，不运行脚本。下载的文件保存在 /sdcard/Download/Skyward，未解密时保存在 /tmp。",
-        "瀏覽器顯示文字、圖片和連結，支援基礎 CSS、表單和 Cookie，不執行指令碼。下載的檔案儲存在 /sdcard/Download/Skyward，未解密時儲存在 /tmp。",
-        "The browser shows text, pictures and links, with basic CSS, forms and cookies. It doesn't run scripts. Downloads go to /sdcard/Download/Skyward, or /tmp before the data partition opens.",
-    ]);
-    y = widgets::footnote(&mut c, t, f, y + m.card_gap, note);
     let mut frame = Frame::new(t, fit(c, t, y), out, l.pick(BROWSER), top);
     frame.dock = Some(dock(cx));
     frame
@@ -1021,8 +1004,7 @@ pub fn address(cx: &Ctx) -> Frame {
     });
     let clear = widgets::list(&mut c, t, f, below + m.card_gap, &[Row::new(l.pick(CLEAR)).trail(Trail::None)]);
     out.extend(hits(&clear.rows, &[Action::BrowserClearAddress]));
-    let mut y = clear.bottom;
-    y = widgets::section(&mut c, t, f, y, l.pick(["快捷访问", "快速存取", "Shortcuts"]));
+    let y = widgets::section(&mut c, t, f, clear.bottom, l.pick(["快捷访问", "快速存取", "Shortcuts"]));
     let rows: Vec<Row> = s
         .browser
         .quick
@@ -1032,13 +1014,6 @@ pub fn address(cx: &Ctx) -> Frame {
     let list = widgets::list(&mut c, t, f, y, &rows);
     let actions: Vec<Action> = (0..s.browser.quick.len()).map(Action::BrowserQuickOpen).collect();
     out.extend(hits(&list.rows, &actions));
-    y = list.bottom;
-    let note = l.pick([
-        "可输入网址；输入关键词会用 Bing 搜索，搜索页按可读的文字和链接排版。仅支持 http 和 https。",
-        "可輸入網址；輸入關鍵詞會用 Bing 搜尋，搜尋頁按可讀的文字和連結排版。僅支援 http 和 https。",
-        "An address opens as it is; words search Bing, laid out as readable text and links. Only http and https work.",
-    ]);
-    let _ = widgets::footnote(&mut c, t, f, y, note);
     let enter = l.pick(GO);
     let kb_top = t.m.h as f32 - widgets::keyboard_height(t);
     let keys = widgets::keyboard(&mut c, t, f, l, kb_top, s.layer, s.key_held(), enter);
@@ -1405,6 +1380,9 @@ pub fn full(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let mut y = widgets::section_first(&mut c, t, f, top, l.pick(["完整模式", "完整模式", "Full mode"]));
     let status = match &s.browser.full {
+        BrowserFull::Unknown if cfg!(feature = "aera-browser") => l.pick(["正在检查引擎", "正在檢查引擎", "Checking engine"]),
+        BrowserFull::Ready(_) if cfg!(feature = "aera-browser") => l.pick(["引擎就绪", "引擎就緒", "Engine ready"]),
+        BrowserFull::Installing { .. } if cfg!(feature = "aera-browser") => l.pick(["正在准备引擎", "正在準備引擎", "Preparing engine"]),
         BrowserFull::Unknown => l.pick(["尚未检查插件", "尚未檢查外掛", "The plugin hasn't been checked"]),
         BrowserFull::Absent(why) => why.as_str(),
         BrowserFull::Ready(_) => l.pick(["插件已安装", "外掛已安裝", "The plugin is installed"]),
@@ -1662,15 +1640,6 @@ pub fn menu(cx: &Ctx) -> Frame {
     let y = widgets::section_first(&mut c, t, f, top, l.pick(["浏览器菜单", "瀏覽器選單", "Browser menu"]));
     let bookmarked = cx.state.browser.bookmarks.iter().any(|b| b.url == cx.state.browser.url);
     let mut rows = vec![
-        Row::new(l.pick(["新建标签页", "新增分頁", "New tab"]))
-            .icon(BLUE, Icon::Layers)
-            .trail(Trail::None),
-        Row::new(l.pick(["历史记录", "歷史記錄", "History"]))
-            .icon(BLUE, Icon::Restore)
-            .trail(Trail::Arrow),
-        Row::new(l.pick(["书签", "書籤", "Bookmarks"]))
-            .icon(ORANGE, Icon::Backup)
-            .trail(Trail::Arrow),
         Row::new(if bookmarked {
             l.pick(["取消书签", "取消書籤", "Remove bookmark"])
         } else {
@@ -1678,22 +1647,11 @@ pub fn menu(cx: &Ctx) -> Frame {
         })
         .icon(ORANGE, Icon::Backup)
         .trail(Trail::None),
-        Row::new(l.pick(["下载", "下載", "Downloads"]))
-            .icon(GREEN, Icon::Install)
-            .trail(Trail::Arrow),
-        Row::new(l.pick(["完整模式", "完整模式", "Full mode"]))
-            .icon(PURPLE, Icon::Layers)
-            .trail(Trail::Arrow),
         Row::new(l.pick(["标签页", "分頁", "Tabs"])).icon(BLUE, Icon::Layers),
         Row::new(l.pick(["主页", "首頁", "Home"])).icon(BLUE, Icon::Globe),
     ];
     let mut actions = vec![
-        Action::BrowserNewTab,
-        Action::BrowserHistoryList,
-        Action::BrowserBookmarksList,
         Action::BrowserBookmark,
-        Action::BrowserDownloads,
-        Action::BrowserFull,
         Action::BrowserTabs,
         Action::BrowserHome,
     ];

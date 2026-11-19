@@ -565,9 +565,9 @@ pub fn settings(cx: &Ctx) -> Frame {
         let aod = widgets::list(&mut c, t, f, y, &[on]);
         out.extend(hits(&aod.rows, &[Action::Toggle(Switch::AlwaysOn)]));
         let note = l.pick([
-            "屏幕熄灭后仍显示时间、电量、槽位与解密状态，背光保持关闭。",
-            "螢幕關閉後仍顯示時間、電量、槽位與解密狀態，背光保持關閉。",
-            "With the screen off, the time, the battery, the slot and the data partition stay on the glass, with the backlight out.",
+            "息屏时显示时间与设备状态。",
+            "關閉螢幕時顯示時間與裝置狀態。",
+            "Show the time and device status while the screen is off.",
         ]);
         y = widgets::footnote(&mut c, t, f, aod.bottom, note);
     }
@@ -604,9 +604,9 @@ pub fn settings(cx: &Ctx) -> Frame {
     );
     out.extend(hits(&usb.rows, &[Action::Toggle(Switch::FileTransfer)]));
     let note = l.pick([
-        "开启后，可在电脑上管理内部存储中的文件，需先完成「解密」。",
-        "開啟後，可在電腦上管理內部儲存空間中的檔案，需先完成「解密」。",
-        "When on, a computer can manage the files in internal storage, once it is decrypted.",
+        "解密后可通过 USB 访问内部存储。",
+        "解密後可透過 USB 存取內部儲存空間。",
+        "Internal storage is available over USB after decryption.",
     ]);
     y = widgets::footnote(&mut c, t, f, usb.bottom, note);
     // A password kept on the phone is a password someone else may read,
@@ -617,16 +617,13 @@ pub fn settings(cx: &Ctx) -> Frame {
         let rows = widgets::list(&mut c, t, f, remember, &[row]);
         out.extend(hits(&rows.rows, &[Action::Toggle(Switch::RememberPassword)]));
         let note = l.pick([
-            "下次进入 recovery 自动尝试保存的密码。采用软件加密，持有文件与设备标识者可能恢复密码；非硬件安全存储。关闭开关会删除保存的副本。",
-            "下次進入 recovery 自動嘗試儲存的密碼。採用軟體加密，持有檔案與裝置識別資訊者可能還原密碼；並非硬體安全儲存。關閉開關會刪除儲存的副本。",
-            "Tries the saved password at the next start. Software encryption is not hardware-backed: the file and device identifiers can reveal the password. Turning this off deletes the saved copy.",
+            "下次自动解密。密码仅用软件加密，持有文件和设备标识者可能还原；关闭后删除保存的副本。",
+            "下次自動解密。密碼僅用軟體加密，持有檔案與裝置識別資訊者可能還原；關閉後刪除儲存的副本。",
+            "Decrypt automatically next time. Software-only encryption: the file and device identifiers may reveal the password. Turning this off deletes the saved copy.",
         ]);
         y = widgets::footnote(&mut c, t, f, rows.bottom, note);
     }
-    y = widgets::section(&mut c, t, f, y, l.pick(["调试", "偵錯", "Debugging"]));
-    let debug = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal)]);
-    out.extend(hits(&debug.rows, &[Action::Open(Screen::Terminal)]));
-    y = widgets::section(&mut c, t, f, debug.bottom, l.pick(["关于", "關於", "About"]));
+    y = widgets::section(&mut c, t, f, y, l.pick(["关于", "關於", "About"]));
     let mut rows = vec![Row::new(l.pick(ABOUT)).trail(Trail::Value(VERSION))];
     let mut opens = vec![Action::Open(Screen::About)];
     if s.offers(Screen::SkywardUpdate) {
@@ -639,27 +636,15 @@ pub fn settings(cx: &Ctx) -> Frame {
     }
     let about = widgets::list(&mut c, t, f, y, &rows);
     out.extend(hits(&about.rows, &opens));
-    // A phone on the mainland cannot reach either host the update comes
-    // from, so the mirror is offered beside the entry it serves. It is tried
-    // only when GitHub does not answer, so leaving it on costs nothing
-    // anywhere else.
-    if s.offers(Screen::SkywardUpdate) {
-        y = widgets::section(&mut c, t, f, about.bottom, l.pick(MIRROR_SECTION));
-        let mirror = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(MIRROR)).switch(s.mirror)]);
-        out.extend(hits(&mirror.rows, &[Action::Toggle(Switch::Mirror)]));
-        let note = l.pick(MIRROR_NOTE);
-        let bottom = widgets::footnote(&mut c, t, f, mirror.bottom, note);
-        return Frame::new(t, fit(c, t, bottom), out, l.pick(SETTINGS), top);
-    }
     Frame::new(t, fit(c, t, about.bottom), out, l.pick(SETTINGS), top)
 }
 
 const MIRROR_SECTION: Text = ["更新来源", "更新來源", "Updates"];
 const MIRROR: Text = ["国内镜像", "中國大陸鏡像", "Mirror in the mainland"];
 const MIRROR_NOTE: Text = [
-    "先直接访问 GitHub，连不上时再试镜像。下载的安装包同样会校验 SHA-256。",
-    "先直接連線 GitHub，連不上時再試鏡像。下載的安裝檔同樣會校驗 SHA-256。",
-    "GitHub is asked first; a mirror is tried only when it does not answer. The package is checked against its SHA-256 either way.",
+    "GitHub 无法连接时使用镜像，仍校验下载文件。",
+    "GitHub 無法連線時使用鏡像，仍驗證下載檔案。",
+    "Use a mirror if GitHub is unavailable. Downloads are still verified.",
 ];
 
 /// What the settings page says beside its Skyward update entry: an update
@@ -1510,38 +1495,24 @@ pub fn install(cx: &Ctx) -> Frame {
     let methods = widgets::list(&mut c, t, f, y, &rows);
     let from_usb = Action::Open(Screen::Choose(Place::UsbDrive));
     let mut out = hits(&methods.rows[methods.rows.len() - 3..], &[from_storage, from_usb, Action::Sideload]);
-    // A phone that can hold a second system installs one from here too.
-    let what = l.pick(match cx.state.dual_boot {
-        true => [
-            "支持安装 A/B 完整更新包、带安装脚本的刷机包和第二系统的安装包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super 分区镜像。刷入 super 会写整个分区，其中的逻辑分区要重启手机后才会重新映射。系统更新将安装到另一个槽位，重启后从该槽位启动；第二系统安装在 data 分区中，可在「双系统」中切换。选择文件时仅列出文件夹以及 .zip、.img 文件。",
-            "支援安裝 A/B 完整更新檔、帶有安裝指令碼的刷機包和第二系統的安裝檔，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super 分割區映像檔。刷入 super 會寫入整個分割區，其中的邏輯分割區要重新啟動手機後才會重新映射。系統更新將安裝到另一個槽位，重新啟動後從該槽位啟動；第二系統安裝在 data 分割區中，可在「雙系統」中切換。選擇檔案時僅列出資料夾以及 .zip、.img 檔案。",
-            "Installs A/B full OTA packages, flashable zips with an install script and second systems' packages, and flashes boot, init_boot, vendor_boot, recovery, dtbo, vbmeta and super partition images. A super image is written to the whole partition, and the logical partitions inside it are mapped anew only when the phone next starts. A system update installs to the other slot, which starts after a reboot; a second system installs into the data partition, and Dual boot switches to it. Choosing a file lists only folders and .zip and .img files.",
-        ],
-        false => [
-            "支持安装 A/B 完整更新包和带安装脚本的刷机包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super 分区镜像。刷入 super 会写整个分区，其中的逻辑分区要重启手机后才会重新映射。系统更新将安装到另一个槽位，重启后从该槽位启动。选择文件时仅列出文件夹以及 .zip、.img 文件。",
-            "支援安裝 A/B 完整更新檔和帶有安裝指令碼的刷機包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super 分割區映像檔。刷入 super 會寫入整個分割區，其中的邏輯分割區要重新啟動手機後才會重新映射。系統更新將安裝到另一個槽位，重新啟動後從該槽位啟動。選擇檔案時僅列出資料夾以及 .zip、.img 檔案。",
-            "Installs A/B full OTA packages and flashable zips with an install script, and flashes boot, init_boot, vendor_boot, recovery, dtbo, vbmeta and super partition images. A super image is written to the whole partition, and the logical partitions inside it are mapped anew only when the phone next starts. A system update installs to the other slot, which starts after a reboot. Choosing a file lists only folders and .zip and .img files.",
-        ],
-    });
-    let y = widgets::footnote(&mut c, t, f, methods.bottom, what);
-    let y = widgets::section(&mut c, t, f, y, l.pick(["选项", "選項", "Options"]));
+    let y = widgets::section(&mut c, t, f, methods.bottom, l.pick(["选项", "選項", "Options"]));
     let check = Row::new(l.pick(["验证刷机包签名", "驗證刷機包簽章", "Verify zip signatures"])).switch(cx.state.check_signature);
     let signature = widgets::list(&mut c, t, f, y, &[check]);
     out.extend(hits(&signature.rows, &[Action::Toggle(Switch::Signature)]));
     let note = l.pick([
-        "开启后，仅安装带有本机官方签名的刷机包。",
-        "開啟後，僅安裝帶有本機官方簽章的刷機包。",
-        "When on, only zips signed with this phone's official keys install.",
+        "脚本 ZIP 仅接受本机官方签名，不是 SHA-256 校验。",
+        "指令碼 ZIP 僅接受本機官方簽章，並非 SHA-256 驗證。",
+        "Require this phone's official signature for script ZIPs, not a SHA-256 checksum.",
     ]);
     let mut y = widgets::footnote(&mut c, t, f, signature.bottom, note);
     if cx.state.recovery_partitions {
-        let row = Row::new(l.pick(["自动重新刷入 Skyward", "自動重新刷入 Skyward", "Flash Skyward again"])).switch(cx.state.keep_recovery);
+        let row = Row::new(l.pick(KEEP_RECOVERY)).switch(cx.state.keep_recovery);
         let options = widgets::list(&mut c, t, f, y + t.m.card_gap, &[row]);
         out.extend(hits(&options.rows, &[Action::Toggle(Switch::KeepRecovery)]));
         let note = l.pick([
-            "开启后，安装系统更新或刷机包时被覆盖的 recovery 分区将重新刷入 Skyward。",
-            "開啟後，安裝系統更新或刷機包時被覆寫的 recovery 分割區將重新刷入 Skyward。",
-            "When on, Skyward goes back into the recovery partitions a system update or flashable zip writes over.",
+            "恢复被覆盖的 recovery，并保留到下一启动槽位。",
+            "還原被覆寫的 recovery，並保留至下次啟動的槽位。",
+            "Restore overwritten recovery partitions and keep Skyward in the next boot slot.",
         ]);
         y = widgets::footnote(&mut c, t, f, options.bottom, note);
     }
@@ -1550,23 +1521,24 @@ pub fn install(cx: &Ctx) -> Frame {
     // still checks signatures, and an install script is an arbitrary
     // program that may or may not disable them for itself.
     let avb = Row::new(l.pick([
-        "刷入 ROM 后自动禁用 AVB 校验",
-        "刷入 ROM 後自動停用 AVB 驗證",
-        "Disable AVB checks after a ROM is installed",
+        "刷入后禁用 AVB",
+        "刷入後停用 AVB",
+        "Disable AVB after installation",
     ]))
     .switch(cx.state.disable_avb);
     let rows = widgets::list(&mut c, t, f, y + t.m.card_gap, &[avb]);
     out.extend(hits(&rows.rows, &[Action::Toggle(Switch::DisableAvb)]));
     let note = l.pick([
-        "安装完成后，本次安装所在槽位的启动验证与 dm-verity 会被关闭，重启后生效。原镜像备份在 /tmp。",
-        "安裝完成後，本次安裝所在槽位的啟動驗證與 dm-verity 會被停用，重新啟動後生效。原映像檔備份在 /tmp。",
-        "After the install, boot verification and dm-verity are turned off in the slot it installed to, from the next start. The image as it was is kept in /tmp.",
+        "关闭目标槽位的启动验证与 dm-verity，重启生效。原 vbmeta 暂存 /tmp，重启即清空。",
+        "停用目標槽位的啟動驗證與 dm-verity，重新啟動生效。原 vbmeta 暫存 /tmp，重新啟動即清空。",
+        "Disable boot verification and dm-verity in the target slot after reboot. The vbmeta backup in /tmp is lost on reboot.",
     ]);
     let y = widgets::footnote(&mut c, t, f, rows.bottom, note);
     Frame::new(t, fit(c, t, y), out, l.pick(["安装", "安裝", "Install"]), top)
 }
 
 const SECURITY_PATCH: Text = ["安全补丁", "安全性修補程式", "Security patch"];
+const KEEP_RECOVERY: Text = ["刷入后保留 Skyward", "刷入後保留 Skyward", "Keep Skyward after installation"];
 
 /// How installing from `source` is named: on the install page, and as the
 /// title of the page that installs.
@@ -3545,44 +3517,67 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
     let mut c = long_page(cx);
     let top = t.m.content_top;
-    let tools = widgets::list(
+    let y = widgets::section_first(&mut c, t, f, top, l.pick(["文件与网络", "檔案與網路", "Files and network"]));
+    let files = widgets::list(
         &mut c,
         t,
         f,
-        top,
+        y,
         &[
             Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
-            Row::new(l.pick(["Root 模块", "Root 模組", "Root modules"])).icon(GREEN, Icon::Shield),
-            Row::new(l.pick(["分区管理", "分割區管理", "Partitions"])).icon(BLUE, Icon::Layers),
-            Row::new(l.pick(["控制中心", "控制中心", "Control center"])).icon(SLATE, Icon::Gear),
+            Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(BLUE, Icon::Globe),
             Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
-            Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
-            Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
-            Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
+        ],
+    );
+    let mut out = hits(
+        &files.rows,
+        &[Action::Open(Screen::Files), Action::Open(Screen::Browser), Action::Open(Screen::Terminal)],
+    );
+    let y = widgets::section(&mut c, t, f, files.bottom, l.pick(["系统与分区", "系統與分割區", "System and partitions"]));
+    let system = widgets::list(
+        &mut c,
+        t,
+        f,
+        y,
+        &[
             Row::new(l.pick(UPDATE))
                 .icon(GREEN, Icon::Layers)
                 .trail(Trail::Value(update_value(cx))),
+            Row::new(l.pick(["Root 模块", "Root 模組", "Root modules"])).icon(GREEN, Icon::Shield),
+            Row::new(l.pick(["分区管理", "分割區管理", "Partitions"])).icon(BLUE, Icon::Layers),
             Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
-            Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(BLUE, Icon::Globe),
         ],
     );
-    let out = hits(
-        &tools.rows,
+    out.extend(hits(
+        &system.rows,
         &[
-            Action::Open(Screen::Files),
+            Action::Open(Screen::Update),
             Action::Open(Screen::RootModules),
             Action::Open(Screen::Partitions),
-            Action::OpenControlCenter,
-            Action::Open(Screen::Terminal),
-            Action::Open(Screen::Relabel),
-            Action::Open(Screen::Filesystems),
-            Action::Open(Screen::Logs),
-            Action::Open(Screen::Update),
             Action::Open(Screen::Avb),
-            Action::Open(Screen::Browser),
+        ],
+    ));
+    let y = widgets::section(&mut c, t, f, system.bottom, l.pick(["维护与诊断", "維護與診斷", "Maintenance"]));
+    let maintenance = widgets::list(
+        &mut c,
+        t,
+        f,
+        y,
+        &[
+            Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
+            Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
+            Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
         ],
     );
-    Frame::new(t, fit(c, t, tools.bottom), out, l.pick(ADVANCED), top)
+    out.extend(hits(
+        &maintenance.rows,
+        &[
+            Action::Open(Screen::Filesystems),
+            Action::Open(Screen::Relabel),
+            Action::Open(Screen::Logs),
+        ],
+    ));
+    Frame::new(t, fit(c, t, maintenance.bottom), out, l.pick(ADVANCED), top)
 }
 
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];
@@ -4256,12 +4251,7 @@ pub fn update(cx: &Ctx) -> Frame {
         };
         y = online(&mut c, cx, y, &mut out);
         if s.recovery_partitions {
-            let row = Row::new(l.pick([
-                "刷入后保留当前 Recovery",
-                "刷入後保留目前 Recovery",
-                "Keep current Recovery after installation",
-            ]))
-            .trail(Trail::Switch(s.keep_recovery));
+            let row = Row::new(l.pick(KEEP_RECOVERY)).trail(Trail::Switch(s.keep_recovery));
             let options = widgets::list(&mut c, t, f, y + t.m.card_gap, &[row]);
             out.extend(hits(&options.rows, &[Action::Toggle(Switch::KeepRecovery)]));
             y = options.bottom;
@@ -4492,19 +4482,13 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
     }
     let saved = tr!(
         l,
-        "完整更新包将保存到\"/sdcard/{DOWNLOADS}\"中，安装后不会自动删除。",
-        "完整更新檔將儲存到「/sdcard/{DOWNLOADS}」中，安裝後不會自動刪除。",
-        "The full OTA package is saved in “/sdcard/{DOWNLOADS}”, and stays there after it's installed."
+        "保存到 /sdcard/{DOWNLOADS}，安装后保留文件。",
+        "儲存至 /sdcard/{DOWNLOADS}，安裝後保留檔案。",
+        "Saved in /sdcard/{DOWNLOADS}; the file is kept after installation."
     );
     let points = [
-        l.pick(["安装系统更新不会删除用户数据，建议在安装前进行备份。", "安裝系統更新不會刪除使用者資料，建議在安裝前進行備份。", "Installing a system update deletes no user data. Backing up first is still wise."]),
+        l.pick(["安装前请备份数据，是否清除以更新包要求和所选选项为准。", "安裝前請備份資料，是否清除依更新檔要求與所選選項而定。", "Back up first. Data erasure depends on the package and selected options."]),
         saved.as_str(),
-        l.pick(["下载中断后可继续下载，已下载的部分会保留。", "下載中斷後可繼續下載，已下載的部分會保留。", "A download cut short can be resumed, keeping what was downloaded."]),
-        l.pick([
-            "更新后，系统会在后台进行一系列优化，期间可能出现发热、耗电增加等情况，1 ~ 3 天内将自行恢复。",
-            "更新後，系統會在背景進行一系列最佳化，期間可能出現發熱、耗電增加等情況，1 ~ 3 天內將自行恢復。",
-            "After the update the system optimizes itself in the background, and the phone may run warm or use more battery for 1 to 3 days.",
-        ]),
     ];
     widgets::notes(c, t, f, y + t.m.card_gap, l.pick(NOTES), &points)
 }
@@ -4575,16 +4559,15 @@ pub fn skyward_update(cx: &Ctx) -> Frame {
     );
     let y = widgets::section(&mut c, t, f, y, l.pick(["在线更新", "線上更新", "Online update"]));
     let y = skyward_online(&mut c, cx, y, &mut out);
+    let y = widgets::section(&mut c, t, f, y, l.pick(MIRROR_SECTION));
+    let mirror = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(MIRROR)).switch(cx.state.mirror)]);
+    out.extend(hits(&mirror.rows, &[Action::Toggle(Switch::Mirror)]));
+    let y = widgets::footnote(&mut c, t, f, mirror.bottom, l.pick(MIRROR_NOTE));
     let points = [
         l.pick([
-            "新版本从 GitHub 下载，校验 SHA-256 后写入 recovery 分区，不会改动系统和用户数据。",
-            "新版本從 GitHub 下載，驗證 SHA-256 後寫入 recovery 分割區，不會改動系統和使用者資料。",
-            "The new version is downloaded from GitHub and goes into the recovery partitions once its SHA-256 checks out. The system and user data are left as they are.",
-        ]),
-        l.pick([
-            "验证发布签名与镜像后，滑动确认仅更新当前槽位的 recovery，不修改 AVB。",
-            "驗證發佈簽章與映像檔後，滑動確認僅更新目前槽位的 recovery，不修改 AVB。",
-            "After signature and image verification, slide to update only the current slot's recovery. AVB is unchanged.",
+            "校验发布签名和镜像后，仅更新当前槽位的 recovery，不改动系统、用户数据或 AVB。",
+            "驗證發佈簽章與映像檔後，僅更新目前槽位的 recovery，不變更系統、使用者資料或 AVB。",
+            "After release signature and image checks, update only the current slot's recovery. System, user data and AVB are unchanged.",
         ]),
         l.pick(["更新完成后，重启到恢复模式即可使用新版本。", "更新完成後，重新啟動到復原模式即可使用新版本。", "Once updated, reboot to recovery to use the new version."]),
     ];
@@ -5885,13 +5868,7 @@ pub fn time_zone(cx: &Ctx) -> Frame {
     let list = widgets::list(&mut c, t, f, top, &rows);
     let picks: Vec<Action> = (0..TIME_ZONES.len()).map(Action::TimeZone).collect();
     let out = hits(&list.rows, &picks);
-    let note = l.pick([
-        "状态栏和各页面中的时间按所选时区显示。",
-        "狀態列和各頁面中的時間按所選時區顯示。",
-        "The status bar and the pages tell times in the zone chosen.",
-    ]);
-    let bottom = widgets::footnote(&mut c, t, f, list.bottom, note);
-    Frame::new(t, fit(c, t, bottom), out, l.pick(TIME_ZONE), top)
+    Frame::new(t, fit(c, t, list.bottom), out, l.pick(TIME_ZONE), top)
 }
 
 /// Saving the logs, as a bug report asks for them.
