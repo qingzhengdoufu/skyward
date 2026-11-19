@@ -77,3 +77,29 @@ No ROM installation, data format, AVB change or slot change is authorized.
 
 E backup: E:/K80Pro-Skyward-Backups/miro-test37-ui-cleanup-native.
 The unchanged engine/runtime dependencies are preserved in the test36 backup.
+
+## Device Result After Reconnection
+
+The user reconnected miro and authorized flashing test37. This result
+supersedes the offline/disconnected status above. Only recovery_a was
+written after product, current-slot A, bootloader-mode, unlock and size
+checks. Full partition SHA256, /system/bin/recovery and /proc/433/exe match
+the verified image. Runtime and jail hashes match; no active-slot setting
+or vbmeta changed. Recovery PID 433 remained stable in later observations.
+
+Startup WLAN first returned EBUSY (16), then came up, auto-connected, got
+DHCP, reached the internet and synchronized time. Main user 0 data opens;
+user 999 remains closed, so no secondary-user acceptance is claimed.
+Final recovery crash buffer is empty. Full UI interaction and browser
+acceptance remain pending user testing; the screenshot helper did not
+produce a capture, so no live page screenshot acceptance is claimed.
+
+The verified image was copied to:
+/sdcard/Download/skyward-v1.0.0-miro-test37-aera.img.
+Its SHA256 equals the build image. ADB reboot then returned to Android:
+sys.boot_completed=1, product miro, slot _a. No ROM install, data format,
+AVB modification or slot-setting operation was performed. PC stays on.
+
+Device evidence: D:/k80ptwrp/out/test37-flash-20261119-161621.
+Preserve the private raw logs under the E backup's device-acceptance
+folder; only this sanitized summary belongs on GitHub.

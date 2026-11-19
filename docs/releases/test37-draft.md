@@ -31,3 +31,13 @@ Do not format data or install a ROM to test these UI changes.
 
 Image SHA256:
 ef5cc82a68787d022026cee423c5391d8f17bb43965fafdcd07b92c7345880ad
+
+## Subsequent Device Result
+
+The user later reconnected the phone. Test37 was flashed only to recovery_a,
+with full partition and running ELF readback verification. Main-user data
+decryption and WiFi connectivity are observed in the recovery logs; the
+crash buffer is empty. Android then booted with sys.boot_completed=1 in
+slot A. IMG backup in Download has the same SHA256. No ROM install, data
+format or AVB/slot-setting change occurred. Full UI/browser acceptance is
+still pending; this result does not remove the unpublished-runtime gate.
