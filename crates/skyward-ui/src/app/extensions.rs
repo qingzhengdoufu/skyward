@@ -213,7 +213,7 @@ impl App {
                 tr!(l, "已忘记「{name}」", "已忘記「{name}」", "“{name}” is forgotten")
             }
             Ok(_) => l
-                .pick(["已清除保存的网络", "已清除儲存的網路", "The networks kept are cleared"])
+                .pick(crate::lang::legacy(["已清除保存的网络", "已清除儲存的網路", "The networks kept are cleared"]))
                 .to_string(),
             Err(why) => {
                 format!(
@@ -245,7 +245,7 @@ impl App {
         self.refresh();
         let l = self.state.lang;
         match outcome {
-            Ok(0) => self.say(l.pick(["安装包已不存在", "安裝檔已不存在", "The package is already gone"]), now),
+            Ok(0) => self.say(l.pick(crate::lang::legacy(["安装包已不存在", "安裝檔已不存在", "The package is already gone"])), now),
             Ok(freed) => {
                 let size = crate::fmt::file_size(freed);
                 self.say(
@@ -306,13 +306,13 @@ impl App {
             return Vec::new();
         }
         let message = match &drive {
-            Some(UsbDrive::Shown) => ["U 盘已连接", "USB 隨身碟已連接", "USB drive connected"],
-            Some(UsbDrive::Unreadable(_)) => [
+            Some(UsbDrive::Shown) => crate::lang::legacy(["U 盘已连接", "USB 隨身碟已連接", "USB drive connected"]),
+            Some(UsbDrive::Unreadable(_)) => crate::lang::legacy([
                 "U 盘已插入，无法读取",
                 "USB 隨身碟已插入，無法讀取",
                 "USB drive inserted, but unreadable",
-            ],
-            None => ["U 盘已拔出", "USB 隨身碟已拔出", "USB drive removed"],
+            ]),
+            None => crate::lang::legacy(["U 盘已拔出", "USB 隨身碟已拔出", "USB drive removed"]),
         };
         let effects = self.set_usb_drive(drive);
         self.wake(now);
@@ -327,7 +327,7 @@ impl App {
         let said = self
             .state
             .lang
-            .pick(["没有可操作的条目", "沒有可操作的項目", "There is no entry left to act on"]);
+            .pick(crate::lang::legacy(["没有可操作的条目", "沒有可操作的項目", "There is no entry left to act on"]));
         self.say(said, now);
         Vec::new()
     }

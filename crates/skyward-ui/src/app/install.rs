@@ -1,17 +1,13 @@
 use super::*;
 
 /// What an install is told while the last one has not ended.
-pub const INSTALL_UNFINISHED: Text = [
-    "上一次安装尚未结束，请稍后再试",
-    "上一次安裝尚未結束，請稍後再試",
-    "The last install hasn't ended. Try again shortly",
-];
+pub const INSTALL_UNFINISHED: Text = crate::texts::toast::INSTALL_UNFINISHED;
 
-pub const RESTART_AFTER_INSTALL: Text = [
+pub const RESTART_AFTER_INSTALL: Text = crate::lang::legacy([
     "系统分区已卸载，请重启 recovery 后再使用解密等系统服务。等待不会自动恢复。",
     "系統分割區已卸載，請重新啟動 recovery 後再使用解密等系統服務。等待不會自動恢復。",
     "System partitions were detached. Reboot recovery before decrypting or using system services. Waiting does not restore them.",
-];
+]);
 
 /// Where the package being installed comes from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

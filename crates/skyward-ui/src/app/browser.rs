@@ -596,7 +596,7 @@ impl App {
                 let url = self.state.browser.url.clone();
                 self.state.browser.view = BrowserView::Failed {
                     url,
-                    why: l.pick(["已停止", "已停止", "Stopped"]).into(),
+                    why: l.pick(crate::texts::common::STOPPED).into(),
                 };
                 self.refresh();
                 return vec![Effect::StopBrowser];
@@ -796,7 +796,7 @@ impl App {
                     return Vec::new();
                 }
                 if !self.state.data.storage_open() {
-                    self.say(l.pick(["请先解密 data", "請先解密 data", "Decrypt data first"]), now);
+                    self.say(l.pick(crate::lang::legacy(["请先解密 data", "請先解密 data", "Decrypt data first"])), now);
                     return Vec::new();
                 }
                 self.state.browser.plugin_download = Some(PluginDownload {
@@ -1146,11 +1146,11 @@ impl App {
             self.state.browser.full = BrowserFull::Failed(
                 self.state
                     .lang
-                    .pick([
+                    .pick(crate::lang::legacy([
                         "请先解密 data，再启动完整模式",
                         "請先解密 data，再啟動完整模式",
                         "Decrypt data before starting full mode",
-                    ])
+                    ]))
                     .into(),
             );
             self.open(Screen::BrowserFull);
@@ -1214,11 +1214,11 @@ impl App {
             self.state.browser.view = BrowserView::Full;
             self.open(Screen::Browser);
             self.say(
-                self.state.lang.pick([
+                self.state.lang.pick(crate::lang::legacy([
                     "完整模式已中断，正在重试",
                     "完整模式已中斷，正在重試",
                     "Full mode stopped; retrying",
-                ]),
+                ])),
                 now,
             );
             return vec![Effect::BrowserPluginStart {
@@ -1241,11 +1241,11 @@ impl App {
             self.state.browser.prefer_full = false;
             self.open(Screen::Browser);
             self.say(
-                self.state.lang.pick([
+                self.state.lang.pick(crate::lang::legacy([
                     "完整模式连续失败，已切换轻量模式",
                     "完整模式連續失敗，已切換輕量模式",
                     "Full mode failed repeatedly; using basic mode",
-                ]),
+                ])),
                 now,
             );
             return self.browser_read(url);

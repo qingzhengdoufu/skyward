@@ -1,11 +1,7 @@
 use super::*;
 
 /// What going back is told while work that can be stopped goes on.
-pub(super) const WAIT_OR_STOP: Text = [
-    "请等待完成或停止后再返回",
-    "請等待完成或停止後再返回",
-    "Wait for it to finish, or stop it, before going back",
-];
+pub(super) const WAIT_OR_STOP: Text = crate::texts::toast::back::WAIT_OR_STOP;
 
 impl App {
     /// Open `screen` over the page shown, sliding in over it.
@@ -132,11 +128,7 @@ impl App {
             Screen::Systems => {
                 if self.state.systems_work.is_some() {
                     self.say(
-                        l.pick([
-                            "正在写入，请等待写入完成",
-                            "正在寫入，請等待寫入完成",
-                            "Writing. Wait for it to finish",
-                        ]),
+                        l.pick(crate::texts::toast::back::WRITING),
                         now,
                     );
                     return fx;
@@ -164,11 +156,7 @@ impl App {
                 if changed && self.unsaved_warned.is_none_or(|at| now >= at + TOAST_MS) {
                     self.unsaved_warned = Some(now);
                     self.say(
-                        l.pick([
-                            "修改尚未保存，再次返回将放弃修改",
-                            "修改尚未儲存，再次返回將捨棄修改",
-                            "Changes aren't saved. Go back again to discard them",
-                        ]),
+                        l.pick(crate::texts::toast::back::UNSAVED),
                         now,
                     );
                     return fx;
@@ -212,11 +200,7 @@ impl App {
             Screen::PartWork => {
                 if self.state.part_work.as_ref().is_some_and(|w| w.outcome.is_none()) {
                     self.say(
-                        l.pick([
-                            "请等待完成后再返回",
-                            "請等待完成後再返回",
-                            "Wait for it to finish before going back",
-                        ]),
+                        l.pick(crate::texts::toast::back::WAIT),
                         now,
                     );
                     return fx;
@@ -231,11 +215,7 @@ impl App {
             Screen::SkywardUpdate => match self.state.skyward_job.as_ref().filter(|j| j.outcome.is_none()).map(|j| j.stage) {
                 Some(Some(SkywardStage::Write { .. })) => {
                     self.say(
-                        l.pick([
-                            "正在写入，请等待写入完成",
-                            "正在寫入，請等待寫入完成",
-                            "Writing. Wait for it to finish",
-                        ]),
+                        l.pick(crate::texts::toast::back::WRITING),
                         now,
                     );
                     return fx;
@@ -251,11 +231,7 @@ impl App {
                 if job.outcome.is_none() {
                     let writing = job.restore && job.at.is_some_and(|a| !a.checking);
                     let said = if writing {
-                        [
-                            "正在恢复，请等待恢复完成",
-                            "正在還原，請等待還原完成",
-                            "Restoring. Wait for it to finish",
-                        ]
+                        crate::texts::toast::back::RESTORING
                     } else {
                         WAIT_OR_STOP
                     };
@@ -277,44 +253,28 @@ impl App {
                 }
                 Install::Checking { .. } => {
                     self.say(
-                        l.pick([
-                            "正在读取文件，请稍后再试",
-                            "正在讀取檔案，請稍後再試",
-                            "Reading the file. Try again shortly",
-                        ]),
+                        l.pick(crate::texts::toast::back::READING),
                         now,
                     );
                     return fx;
                 }
                 Install::Updating { .. } | Install::Scripting { .. } => {
                     self.say(
-                        l.pick([
-                            "正在安装，请等待安装完成",
-                            "正在安裝，請等待安裝完成",
-                            "Installing. Wait for it to finish",
-                        ]),
+                        l.pick(crate::texts::toast::back::INSTALLING),
                         now,
                     );
                     return fx;
                 }
                 Install::Flashing { .. } => {
                     self.say(
-                        l.pick([
-                            "正在刷入，请等待刷入完成",
-                            "正在刷入，請等待刷入完成",
-                            "Flashing. Wait for it to finish",
-                        ]),
+                        l.pick(crate::texts::toast::back::FLASHING),
                         now,
                     );
                     return fx;
                 }
                 Install::Systeming { .. } => {
                     self.say(
-                        l.pick([
-                            "正在安装，请等待安装完成",
-                            "正在安裝，請等待安裝完成",
-                            "Installing. Wait for it to finish",
-                        ]),
+                        l.pick(crate::texts::toast::back::INSTALLING),
                         now,
                     );
                     return fx;
@@ -325,11 +285,7 @@ impl App {
                 }
                 Install::Wiping => {
                     self.say(
-                        l.pick([
-                            "正在清除，请等待清除完成",
-                            "正在清除，請等待清除完成",
-                            "Wiping. Wait for it to finish",
-                        ]),
+                        l.pick(crate::texts::toast::back::WIPING),
                         now,
                     );
                     return fx;

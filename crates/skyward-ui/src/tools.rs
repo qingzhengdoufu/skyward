@@ -28,19 +28,19 @@ pub fn tasks(cx: &Ctx) -> Frame {
     ];
     let mut actions = vec![Action::ResumeTask, Action::Open(Screen::Browser)];
     if !matches!(s.install, Install::Idle) {
-        rows.push(Row::new(l.pick(["安装任务", "安裝工作", "Installation"])).icon(Rgba::rgb(29, 205, 58), Icon::Install));
+        rows.push(Row::new(l.pick(crate::lang::legacy(["安装任务", "安裝工作", "Installation"]))).icon(Rgba::rgb(29, 205, 58), Icon::Install));
         actions.push(Action::Open(Screen::Installing));
     }
-    rows.push(Row::new(l.pick(["浏览器下载", "瀏覽器下載", "Browser downloads"])).icon(Rgba::rgb(29, 205, 58), Icon::Folder));
+    rows.push(Row::new(l.pick(crate::lang::legacy(["浏览器下载", "瀏覽器下載", "Browser downloads"]))).icon(Rgba::rgb(29, 205, 58), Icon::Folder));
     actions.push(Action::Open(Screen::BrowserDownloads));
-    rows.push(Row::new(l.pick(["系统下载", "系統下載", "System download"])).icon(Rgba::rgb(52, 130, 255), Icon::Phone));
+    rows.push(Row::new(l.pick(crate::lang::legacy(["系统下载", "系統下載", "System download"]))).icon(Rgba::rgb(52, 130, 255), Icon::Phone));
     actions.push(Action::Open(Screen::Update));
     let list = widgets::list(&mut c, t, f, top, &rows);
     Frame::new(
         t,
         c.crop_height((list.bottom + t.m.dp(24.0)) as u32),
         hits(&list.rows, &actions),
-        l.pick(["任务", "工作", "Tasks"]),
+        l.pick(crate::lang::legacy(["任务", "工作", "Tasks"])),
         top,
     )
 }
@@ -57,7 +57,7 @@ pub fn modules(cx: &Ctx) -> Frame {
         t,
         f,
         y,
-        &[Row::new(l.pick(["刷新模块", "重新整理模組", "Refresh modules"])).icon(Rgba::rgb(52, 130, 255), Icon::Restore)],
+        &[Row::new(l.pick(crate::lang::legacy(["刷新模块", "重新整理模組", "Refresh modules"]))).icon(Rgba::rgb(52, 130, 255), Icon::Restore)],
     );
     out.extend(hits(&read.rows, &[Action::ReadRootModules]));
     y = read.bottom + t.m.card_gap;
@@ -71,19 +71,19 @@ pub fn modules(cx: &Ctx) -> Frame {
             }
             for (i, module) in modules.iter().enumerate() {
                 let status = l.pick(if module.removing {
-                    ["重启后移除", "重新啟動後移除", "Removal pending"]
+                    crate::lang::legacy(["重启后移除", "重新啟動後移除", "Removal pending"])
                 } else if module.enabled {
-                    ["已启用", "已啟用", "Enabled"]
+                    crate::lang::legacy(["已启用", "已啟用", "Enabled"])
                 } else {
-                    ["已禁用", "已停用", "Disabled"]
+                    crate::lang::legacy(["已禁用", "已停用", "Disabled"])
                 });
                 let sub = format!("{} | {} | {}", module.version, module.author, status);
                 let rows = [
                     Row::new(&module.name).subtitle(&sub).trail(Trail::Switch(module.enabled)),
                     Row::new(l.pick(if module.removing {
-                        ["取消移除", "取消移除", "Cancel removal"]
+                        crate::lang::legacy(["取消移除", "取消移除", "Cancel removal"])
                     } else {
-                        ["移除模块", "移除模組", "Remove module"]
+                        crate::lang::legacy(["移除模块", "移除模組", "Remove module"])
                     }))
                     .icon(Rgba::rgb(220, 65, 65), Icon::Wipe),
                 ];
@@ -92,17 +92,17 @@ pub fn modules(cx: &Ctx) -> Frame {
                 y = list.bottom + t.m.card_gap;
             }
             if modules.is_empty() {
-                y = widgets::footnote(&mut c, t, f, y, l.pick(["未发现模块", "未發現模組", "No modules found"]));
+                y = widgets::footnote(&mut c, t, f, y, l.pick(crate::lang::legacy(["未发现模块", "未發現模組", "No modules found"])));
             }
         }
         Some(Err(why)) => y = widgets::footnote(&mut c, t, f, y, why),
-        None => y = widgets::footnote(&mut c, t, f, y, l.pick(["正在读取", "正在讀取", "Reading"])),
+        None => y = widgets::footnote(&mut c, t, f, y, l.pick(crate::lang::legacy(["正在读取", "正在讀取", "Reading"]))),
     }
     Frame::new(
         t,
         c.crop_height((y + t.m.dp(24.0)) as u32),
         out,
-        l.pick(["Root 模块", "Root 模組", "Root modules"]),
+        l.pick(crate::lang::legacy(["Root 模块", "Root 模組", "Root modules"])),
         top,
     )
 }
@@ -113,10 +113,10 @@ pub fn partitions(cx: &Ctx) -> Frame {
     let mut c = canvas(cx, t.m.h * 3);
     let mut out = Vec::new();
     let rows = [
-        Row::new(l.pick(["刷入分区镜像", "刷入分割區映像檔", "Flash partition image"])).icon(Rgba::rgb(29, 205, 58), Icon::Install),
-        Row::new(l.pick(["导出单分区镜像", "匯出單分割區映像檔", "Export partition image"])).icon(Rgba::rgb(52, 130, 255), Icon::Backup),
-        Row::new(l.pick(["文件系统管理", "檔案系統管理", "Filesystems"])).icon(Rgba::rgb(140, 157, 176), Icon::Mount),
-        Row::new(l.pick(["挂载管理", "掛載管理", "Mounts"])).icon(Rgba::rgb(119, 103, 249), Icon::Layers),
+        Row::new(l.pick(crate::lang::legacy(["刷入分区镜像", "刷入分割區映像檔", "Flash partition image"]))).icon(Rgba::rgb(29, 205, 58), Icon::Install),
+        Row::new(l.pick(crate::lang::legacy(["导出单分区镜像", "匯出單分割區映像檔", "Export partition image"]))).icon(Rgba::rgb(52, 130, 255), Icon::Backup),
+        Row::new(l.pick(crate::lang::legacy(["文件系统管理", "檔案系統管理", "Filesystems"]))).icon(Rgba::rgb(140, 157, 176), Icon::Mount),
+        Row::new(l.pick(crate::lang::legacy(["挂载管理", "掛載管理", "Mounts"]))).icon(Rgba::rgb(119, 103, 249), Icon::Layers),
     ];
     let list = widgets::list(&mut c, t, f, top, &rows);
     out.extend(hits(
@@ -136,11 +136,11 @@ pub fn partitions(cx: &Ctx) -> Frame {
             .zip(&sizes)
             .map(|((name, _), size)| {
                 let sub = if name == "super" {
-                    l.pick([
+                    l.pick(crate::lang::legacy([
                         "共享分区，包含双槽逻辑分区",
                         "共用分割區，包含雙槽邏輯分割區",
                         "Shared; contains both slots",
-                    ])
+                    ]))
                 } else {
                     ""
                 };
@@ -153,7 +153,7 @@ pub fn partitions(cx: &Ctx) -> Frame {
         t,
         c.crop_height((y + t.m.dp(24.0)) as u32),
         out,
-        l.pick(["分区管理", "分割區管理", "Partitions"]),
+        l.pick(crate::lang::legacy(["分区管理", "分割區管理", "Partitions"])),
         top,
     )
 }
@@ -266,7 +266,7 @@ pub fn control(cx: &Ctx) -> Frame {
     ];
     if !s.double_tap_supported {
         controls[3] = (
-            l.pick(["网络", "網路", "Network"]),
+            l.pick(crate::lang::legacy(["网络", "網路", "Network"])),
             Icon::Wlan,
             false,
             s.wlan.is_some(),
@@ -375,7 +375,7 @@ pub fn control(cx: &Ctx) -> Frame {
         t,
         f,
         y,
-        &[Row::new(l.pick(["设备状态", "裝置狀態", "Device status"]))
+        &[Row::new(l.pick(crate::lang::legacy(["设备状态", "裝置狀態", "Device status"])))
             .icon(blue, Icon::Phone)
             .subtitle(&detail)
             .trail(Trail::None)],
@@ -413,7 +413,7 @@ pub fn control(cx: &Ctx) -> Frame {
         t,
         c.crop_height((y + m.dp(24.0)).max(m.h as f32) as u32),
         out,
-        l.pick(["控制中心", "控制中心", "Control center"]),
+        l.pick(crate::lang::legacy(["控制中心", "控制中心", "Control center"])),
         0.0,
     );
     frame.header = false;
@@ -441,18 +441,18 @@ fn task(s: &State) -> Option<(String, String, Option<f32>)> {
             stage: Some(skyward_install::Stage::Signature { done, total }),
             ..
         } => Some((
-            s.lang.pick(["验证签名", "驗證簽章", "Verifying signature"]).into(),
+            s.lang.pick(crate::lang::legacy(["验证签名", "驗證簽章", "Verifying signature"])).into(),
             Some(*done as f32 / (*total).max(1) as f32),
         )),
         _ => None,
     };
     if let Some((detail, share)) = progress {
-        return Some((s.lang.pick(["安装进度", "安裝進度", "Installation"]).into(), detail, share));
+        return Some((s.lang.pick(crate::lang::legacy(["安装进度", "安裝進度", "Installation"])).into(), detail, share));
     }
     if matches!(s.install, Install::Scripting { running: true, .. }) {
         return Some((
             s.lang
-                .pick(["正在运行刷包脚本", "正在執行安裝指令稿", "Install script running"])
+                .pick(crate::lang::legacy(["正在运行刷包脚本", "正在執行安裝指令稿", "Install script running"]))
                 .into(),
             s.script_output.last().cloned().unwrap_or_default(),
             None,
@@ -462,7 +462,7 @@ fn task(s: &State) -> Option<(String, String, Option<f32>)> {
         && job.outcome.is_none()
     {
         return Some((
-            s.lang.pick(["系统下载", "系統下載", "System download"]).into(),
+            s.lang.pick(crate::lang::legacy(["系统下载", "系統下載", "System download"])).into(),
             format!("{} B/s", job.rate),
             job.progress.as_ref().and_then(|p| match p {
                 skyward_net::download::Progress::Downloading { done, total } => Some(*done as f32 / (*total).max(1) as f32),

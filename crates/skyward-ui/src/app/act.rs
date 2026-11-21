@@ -249,11 +249,7 @@ impl App {
                 self.refresh();
             }
             Action::Confirm(_) => self.say(
-                l.pick([
-                    "请按住圆形按钮向右滑动",
-                    "請按住圓形按鈕向右滑動",
-                    "Hold the round button and slide it right",
-                ]),
+                l.pick(crate::texts::toast::SLIDE_RIGHT),
                 now,
             ),
             Action::Slider(_) | Action::Pattern => {}
@@ -310,7 +306,7 @@ impl App {
             }
             Action::Paste => {
                 let Some(clip) = self.state.clip.clone() else {
-                    self.say(l.pick(["没有选中的条目", "沒有選取的項目", "Nothing is picked to paste"]), now);
+                    self.say(l.pick(crate::lang::legacy(["没有选中的条目", "沒有選取的項目", "Nothing is picked to paste"])), now);
                     return Vec::new();
                 };
                 let (path, folder) = (std::path::Path::new(&clip.path), std::path::Path::new(&self.state.files.path));
@@ -392,7 +388,7 @@ impl App {
             Action::Resolve(choice) => {
                 let Some((clip, into, _)) = self.state.clash.take() else {
                     self.say(
-                        l.pick(["没有要处理的同名条目", "沒有要處理的同名項目", "There is no clash left to answer"]),
+                        l.pick(crate::lang::legacy(["没有要处理的同名条目", "沒有要處理的同名項目", "There is no clash left to answer"])),
                         now,
                     );
                     return Vec::new();
@@ -458,11 +454,11 @@ impl App {
             Action::BackupPart(k) => {
                 if k == 3 && !self.state.efs_backup_available {
                     self.say(
-                        l.pick([
+                        l.pick(crate::lang::legacy([
                             "本机 EFS 分区清单尚未验证",
                             "本機 EFS 分割區清單尚未驗證",
                             "This device's EFS partition list is not verified",
-                        ]),
+                        ])),
                         now,
                     );
                     return Vec::new();
@@ -521,7 +517,7 @@ impl App {
                 let ([recovery, kernel], storage) = (self.state.logs, self.state.logs_to == 1);
                 if !recovery && !kernel {
                     self.say(
-                        l.pick(["请选择要导出的日志", "請選擇要匯出的記錄", "Choose the logs to export"]),
+                        l.pick(crate::texts::toast::CHOOSE_LOGS),
                         now,
                     );
                 } else if storage && !self.state.data.storage_open() {
@@ -678,19 +674,11 @@ impl App {
                 }
                 match network.security {
                     Security::Wep => self.say(
-                        l.pick([
-                            "暂不支持 WEP 加密的网络",
-                            "尚不支援 WEP 加密的網路",
-                            "WEP networks aren't supported",
-                        ]),
+                        l.pick(crate::texts::toast::WEP_UNSUPPORTED),
                         now,
                     ),
                     Security::Enterprise => self.say(
-                        l.pick([
-                            "暂不支持需要账号登录的网络",
-                            "尚不支援需要帳號登入的網路",
-                            "Networks that need an account sign-in aren't supported",
-                        ]),
+                        l.pick(crate::texts::toast::ENTERPRISE_UNSUPPORTED),
                         now,
                     ),
                     s if s.password() && network.remembered => {
@@ -941,7 +929,7 @@ impl App {
                     self.refresh();
                 } else {
                     self.say(
-                        l.pick(["没有要关闭的校验", "沒有要關閉的驗證", "There is no check to turn off"]),
+                        l.pick(crate::lang::legacy(["没有要关闭的校验", "沒有要關閉的驗證", "There is no check to turn off"])),
                         now,
                     );
                 }
@@ -962,7 +950,7 @@ impl App {
                         self.state.confirm = 0.0;
                         self.refresh();
                     }
-                    None => self.say(l.pick(["没有这个备份", "沒有這個備份", "That copy is not here"]), now),
+                    None => self.say(l.pick(crate::lang::legacy(["没有这个备份", "沒有這個備份", "That copy is not here"])), now),
                 }
             }
             Action::FindVbmeta => {
@@ -1099,7 +1087,7 @@ impl App {
                 }
                 Screen::Files => return self.act(Action::CloseFilesSearch, now),
                 Screen::Decrypt if self.state.code.is_empty() => {
-                    self.say(l.pick(["请输入锁屏密码", "請輸入螢幕鎖定密碼", "Enter the screen lock"]), now)
+                    self.say(l.pick(crate::texts::toast::ENTER_LOCK), now)
                 }
                 Screen::Decrypt => {
                     let code = std::mem::take(&mut self.state.code);
@@ -1117,13 +1105,13 @@ impl App {
                         .as_ref()
                         .is_ok_and(|entries| entries.iter().any(|e| e.name == name));
                     match name.as_str() {
-                        "" => self.say(l.pick(["请输入名称", "請輸入名稱", "Enter a name"]), now),
+                        "" => self.say(l.pick(crate::texts::toast::ENTER_NAME), now),
                         "." | ".." => self.say(
-                            l.pick(["名称不能为\".\"或\"..\"", "名稱不能是「.」或「..」", "A name can't be “.” or “..”"]),
+                            l.pick(crate::texts::toast::NAME_DOTS),
                             now,
                         ),
                         _ if name.contains('/') => {
-                            self.say(l.pick(["名称不能包含\"/\"", "名稱不能包含「/」", "A name can't hold “/”"]), now)
+                            self.say(l.pick(crate::texts::toast::NAME_SLASH), now)
                         }
                         _ if name == current => return self.back(now),
                         _ if taken => self.say_taken(now),
@@ -1152,7 +1140,7 @@ impl App {
                     let (field, why) = match a.name.len() {
                         0 => (
                             Field::Name,
-                            Some(l.pick(["请输入网络名称", "請輸入網路名稱", "Enter the network's name"]).to_string()),
+                            Some(l.pick(crate::texts::toast::ENTER_NETWORK_NAME).to_string()),
                         ),
                         n if n > SSID_MAX => (
                             Field::Name,
@@ -1237,7 +1225,7 @@ impl App {
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
                 match chosen.is_empty() {
-                    true => self.say(l.pick(["请选择要清除的内容", "請選擇要清除的內容", "Choose what to wipe"]), now),
+                    true => self.say(l.pick(texts::toast::CHOOSE_WIPE), now),
                     false => fx.push(Effect::Wipe(chosen)),
                 }
             }
@@ -1265,19 +1253,15 @@ impl App {
             Confirm::Backup => {
                 let s = &self.state;
                 let refused = if s.backup[3] && !s.efs_backup_available {
-                    Some([
+                    Some(crate::lang::legacy([
                         "本机 EFS 备份不可用，请取消勾选",
                         "本機 EFS 備份無法使用，請取消勾選",
                         "EFS backup is unavailable; deselect it",
-                    ])
+                    ]))
                 } else if !s.backup.contains(&true) {
-                    Some(["请选择要备份的内容", "請選擇要備份的內容", "Choose what to back up"])
+                    Some(crate::texts::toast::CHOOSE_BACKUP)
                 } else if s.backup[2] && s.data != Data::Open {
-                    Some([
-                        "备份 data 分区需先完成「解密」",
-                        "備份 data 分割區需先完成「解密」",
-                        "Decrypt before backing up the data partition",
-                    ])
+                    Some(crate::texts::toast::DECRYPT_TO_BACK_UP)
                 } else if s.place_open(s.backup_to) {
                     None
                 } else {
@@ -1302,11 +1286,11 @@ impl App {
             Confirm::ImageBackup => {
                 if !self.state.place_open(self.state.backup_to) {
                     self.say(
-                        l.pick([
+                        l.pick(crate::lang::legacy([
                             "备份位置不可用，请先解密或连接 U 盘",
                             "備份位置無法使用，請先解密或連接 USB 隨身碟",
                             "Unlock storage or connect a readable USB drive",
-                        ]),
+                        ])),
                         now,
                     );
                 } else if let Some((name, _)) = self
@@ -1321,7 +1305,7 @@ impl App {
                         place: self.state.backup_to,
                     });
                 } else {
-                    self.say(l.pick(["请选择一个分区", "請選擇一個分割區", "Select one partition"]), now);
+                    self.say(l.pick(crate::lang::legacy(["请选择一个分区", "請選擇一個分割區", "Select one partition"])), now);
                 }
             }
             Confirm::Restore => {
@@ -1344,14 +1328,10 @@ impl App {
                     parts: *parts,
                 };
                 if !parts.contains(&true) {
-                    self.say(l.pick(["请选择要恢复的内容", "請選擇要還原的內容", "Choose what to restore"]), now);
+                    self.say(l.pick(texts::toast::CHOOSE_RESTORE), now);
                 } else if parts[2] && self.state.data != Data::Open {
                     self.say(
-                        l.pick([
-                            "恢复 data 分区需先完成「解密」",
-                            "還原 data 分割區需先完成「解密」",
-                            "Decrypt before restoring the data partition",
-                        ]),
+                        l.pick(crate::texts::toast::DECRYPT_TO_RESTORE),
                         now,
                     );
                 } else {
@@ -1384,7 +1364,7 @@ impl App {
                     self.say(&said, now);
                 }
                 _ => self.say(
-                    l.pick(["无法读取启动槽位", "無法讀取啟動槽位", "Couldn't read the boot slots"]),
+                    l.pick(crate::texts::slot::UNREADABLE),
                     now,
                 ),
             },
@@ -1413,7 +1393,7 @@ impl App {
                     self.refresh();
                 }
                 None => self.say(
-                    l.pick(["没有待确认的改动", "沒有待確認的變更", "There is no change to confirm"]),
+                    l.pick(crate::lang::legacy(["没有待确认的改动", "沒有待確認的變更", "There is no change to confirm"])),
                     now,
                 ),
             },
@@ -1422,11 +1402,7 @@ impl App {
                 Data::Opening => self.say(l.pick(DATA_OPENING), now),
                 Data::Erased => self.say(l.pick(DATA_ERASED), now),
                 Data::Closed | Data::Failed(_) => self.say(
-                    l.pick([
-                        "请先在「解密」中打开 data 分区",
-                        "請先在「解密」中開啟 data 分割區",
-                        "Open the data partition in Decrypt first",
-                    ]),
+                    l.pick(crate::texts::toast::OPEN_DATA_FIRST),
                     now,
                 ),
             },
@@ -1495,7 +1471,7 @@ impl App {
                     self.state.avb_pending = other;
                     self.state.avb_confirming = false;
                     self.say(
-                        l.pick(["没有要关闭的校验", "沒有要關閉的驗證", "There is no check to turn off"]),
+                        l.pick(crate::lang::legacy(["没有要关闭的校验", "沒有要關閉的驗證", "There is no check to turn off"])),
                         now,
                     );
                 }
@@ -1506,7 +1482,7 @@ impl App {
                     name: copy.name,
                 }),
                 None => self.say(
-                    l.pick(["没有选择要写回的备份", "沒有選擇要寫回的備份", "No copy is chosen to write back"]),
+                    l.pick(crate::lang::legacy(["没有选择要写回的备份", "沒有選擇要寫回的備份", "No copy is chosen to write back"])),
                     now,
                 ),
             },
@@ -1522,7 +1498,7 @@ impl App {
                 match name {
                     Some(name) => fx.push(Effect::ForgetWlan(name)),
                     None => self.say(
-                        l.pick(["没有要忘记的网络", "沒有要忘記的網路", "There is no network to forget"]),
+                        l.pick(crate::lang::legacy(["没有要忘记的网络", "沒有要忘記的網路", "There is no network to forget"])),
                         now,
                     ),
                 }
@@ -1532,7 +1508,7 @@ impl App {
                     self.state.newest().map_or_else(String::new, |r| r.name.clone()),
                 )),
                 _ => self.say(
-                    l.pick(["没有可删除的安装包", "沒有可刪除的安裝檔", "There is no package to delete"]),
+                    l.pick(crate::lang::legacy(["没有可删除的安装包", "沒有可刪除的安裝檔", "There is no package to delete"])),
                     now,
                 ),
             },
