@@ -1014,7 +1014,9 @@ fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<[u8; 6]> {
     Ok(mac)
 }
 
-/// Put a file the driver asks for where the firmware loader looks.
+/// Put a file the driver asks for where the firmware loader looks. One the
+/// phone may be without is passed over where the phone has none, and the
+/// loader then tells the driver so, as it does in the phone's own system.
 fn place(file: &Firmware) -> Result<()> {
     place_firmware(file)
 }
@@ -1027,8 +1029,13 @@ pub(crate) fn place_firmware(file: &Firmware) -> Result<()> {
     let to = Path::new(FIRMWARE).join(&file.name);
     let dir = to.parent().expect("a firmware file is in a folder");
     fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
+    let held = |path: &Path| match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if file.optional && e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    };
     let bytes = match &file.partition {
-        None => fs::read(&file.path).with_context(|| format!("read {}", file.path))?,
+        None => held(Path::new(&file.path)).with_context(|| format!("read {}", file.path))?,
         Some(partition) => {
             // The partition may already be mounted where the phone's own
             // table mounts it, as the configuration's [partitions] asks for
@@ -1036,18 +1043,28 @@ pub(crate) fn place_firmware(file: &Firmware) -> Result<()> {
             // one is there, whatever is asked of it. Read through that one
             // first, and mount the partition only when it is nowhere.
             if let Some(bytes) = read_through_mount(partition, &file.path) {
-                bytes?
+                match bytes {
+                    Ok(bytes) => Some(bytes),
+                    Err(e) if file.optional && e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => None,
+                    Err(e) => return Err(e),
+                }
             } else {
                 let at = Path::new(PARTITIONS).join(partition);
                 fs::create_dir_all(&at).with_context(|| format!("make {}", at.display()))?;
                 skyward_block::mount::mount_ro(&Path::new(skyward_block::BY_NAME).join(partition), &at)?;
-                let read = fs::read(at.join(&file.path)).with_context(|| format!("read {} on {partition}", file.path));
+                let read = held(&at.join(&file.path)).with_context(|| format!("read {} on {partition}", file.path));
                 skyward_block::mount::umount(&at)?;
                 read?
             }
         }
     };
-    fs::write(&to, bytes).with_context(|| format!("write {}", to.display()))
+    match bytes {
+        Some(bytes) => fs::write(&to, bytes).with_context(|| format!("write {}", to.display())),
+        None => {
+            let _ = skyward_sys::kmsg(&format!("the phone has no {}, and the driver starts without it", file.path));
+            Ok(())
+        }
+    }
 }
 
 /// `path` on `partition` read through a mount the phone's own table already
