@@ -170,7 +170,7 @@ impl App {
                 {
                     self.state.time_zone = at;
                 }
-                self.state.follow_system_zone = !self.state.follow_system_zone;
+                self.state.follow_system_zone.toggle();
                 self.refresh();
             }
             Action::Toggle(switch) => {
@@ -464,7 +464,7 @@ impl App {
                 self.refresh();
             }
             Action::BackupPart(k) => {
-                if k == 3 && !self.state.efs_backup_available {
+                if k == 4 && !self.state.efs_backup_available {
                     self.say(
                         l.pick(crate::lang::legacy([
                             "本机 EFS 分区清单尚未验证",
@@ -475,7 +475,7 @@ impl App {
                     );
                     return Vec::new();
                 }
-                self.state.backup[k] = !self.state.backup[k];
+                self.state.backup[k].toggle();
                 self.refresh();
             }
             Action::BackupTo(place) => {
@@ -506,7 +506,7 @@ impl App {
             }
             Action::RestorePart(k) => {
                 let (_, parts) = self.state.restore.as_mut().expect("the restore page shows a backup");
-                parts[k] = !parts[k];
+                parts[k].toggle();
                 self.refresh();
             }
             Action::StopBackup => {
@@ -518,7 +518,7 @@ impl App {
                 }
             }
             Action::LogPart(k) => {
-                self.state.logs[k] = !self.state.logs[k];
+                self.state.logs[k].toggle();
                 self.refresh();
             }
             Action::LogsTo(k) => {
