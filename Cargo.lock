@@ -2750,6 +2750,7 @@ name = "skyward-programs"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "object",
  "roxmltree",
  "skyward-config",
  "skyward-omapi",
