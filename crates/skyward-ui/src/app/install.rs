@@ -48,12 +48,17 @@ pub enum Pick {
 
 impl Pick {
     pub const ALL: [Pick; 3] = [Pick::Current, Pick::Other, Pick::Both];
-    /// The slots this means on a phone running from `current`.
-    pub fn slots(self, current: Slot) -> Vec<Slot> {
-        match self {
-            Pick::Current => vec![current],
-            Pick::Other => vec![current.other()],
-            Pick::Both => vec![Slot::A, Slot::B],
+
+    /// The slots this means on a phone running from `current`, for a
+    /// partition that lies in `place`: the ones picked where the phone has
+    /// it in each slot, the one it runs from where it is a logical
+    /// partition, and none where the phone has it once.
+    pub fn slots(self, place: FlashPlace, current: Slot) -> Vec<Slot> {
+        match (place, self) {
+            (FlashPlace::Single, _) => Vec::new(),
+            (FlashPlace::Logical, _) | (FlashPlace::Slotted, Pick::Current) => vec![current],
+            (FlashPlace::Slotted, Pick::Other) => vec![current.other()],
+            (FlashPlace::Slotted, Pick::Both) => vec![Slot::A, Slot::B],
         }
     }
 }
@@ -90,15 +95,8 @@ pub enum Install {
     },
     /// `overwriting` says whether the update writes over the running
     /// system.
-    Updating {
-        version: Option<String>,
-        stage: Option<Stage>,
-        overwriting: bool,
-    },
-    Flashing {
-        partition: &'static str,
-        stage: Option<Stage>,
-    },
+    Updating { version: Option<String>, stage: Option<Stage>, overwriting: bool },
+    Flashing { partition: String, stage: Option<Stage> },
     /// A zip with an install script waits for the user to agree to run it.
     ConfirmingScript,
     /// A system to install beside the installed one waits for the room its
@@ -130,12 +128,12 @@ pub enum Install {
 }
 
 /// What a failed install may have left broken.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Damage {
     /// The update had begun writing over the running system.
     System,
     /// The image had begun going into this partition.
-    Partition(&'static str),
+    Partition(String),
     /// The install script had begun to run, and may have written to any
     /// partition.
     Script,
@@ -145,9 +143,10 @@ pub enum Damage {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub kind: ImageKind,
+    /// The bytes it takes in a partition.
     pub size: u64,
-    /// The partitions it fits, the likeliest first.
-    pub partitions: Vec<&'static str>,
+    /// The partitions it can go to, the likeliest first.
+    pub partitions: Vec<FlashTarget>,
     /// Which of them is chosen.
     pub partition: usize,
     pub pick: Pick,
@@ -378,13 +377,12 @@ impl App {
             Event::Done(outcome) | Event::Finished(outcome) => {
                 let damage = match (&outcome, &*install) {
                     (Outcome::Failed(_), Install::Updating { overwriting: true, .. }) => Some(Damage::System),
-                    (
-                        Outcome::Failed(_),
-                        Install::Flashing {
-                            partition,
-                            stage: Some(Stage::Flashing { done, .. }),
-                        },
-                    ) if *done > 0 => Some(Damage::Partition(partition)),
+                    // A logical partition made as large as the image no
+                    // longer holds what it held, written to or not.
+                    (Outcome::Failed(_), Install::Flashing { partition, stage: Some(Stage::Resizing) }) => Some(Damage::Partition(partition.clone())),
+                    (Outcome::Failed(_), Install::Flashing { partition, stage: Some(Stage::Flashing { done, .. }) }) if *done > 0 => {
+                        Some(Damage::Partition(partition.clone()))
+                    }
                     (Outcome::Failed(_), Install::Scripting { running: true, .. }) => Some(Damage::Script),
                     _ => None,
                 };

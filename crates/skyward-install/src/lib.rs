@@ -28,7 +28,7 @@ mod run;
 #[cfg(any(target_os = "android", all(test, unix)))]
 mod engine;
 
-pub use image::{ImageKind, Ramdisk};
+pub use image::{Filesystem, ImageKind, Place, Ramdisk, Target};
 #[cfg(target_os = "android")]
 pub use run::{Detach, Installer};
 use skyward_info::{Battery, Charge};
@@ -111,8 +111,9 @@ pub enum Event {
     /// those partitions must be prepared again by rebooting recovery.
     Detached,
     /// A partition image, held until [`Command::Flash`] says where it goes:
-    /// the partitions of this phone it fits, the likeliest first.
-    Image { kind: ImageKind, size: u64, partitions: Vec<&'static str> },
+    /// the bytes it takes in a partition, and the partitions of this phone
+    /// it can go to, the likeliest first.
+    Image { kind: ImageKind, size: u64, partitions: Vec<Target> },
     /// A zip that installs itself by running the script inside it, held
     /// until [`Command::Install`]: a script may write over any partition,
     /// so it always waits.
@@ -178,6 +179,9 @@ pub enum Stage {
     Verifying { index: usize, count: usize, partition: String },
     /// It runs the package's own last steps and switches slots.
     Finishing,
+    /// The logical partition an image goes to is made as large as the
+    /// image, in super's own record of its partitions.
+    Resizing,
     /// An image is written and read back: bytes so far, of all.
     Flashing { done: u64, total: u64 },
     /// The install script runs, as far as it says it is, in thousandths.
@@ -202,10 +206,9 @@ pub enum Outcome {
     /// The update is in `slot`, which starts next; `wipe` when all user data
     /// is to be erased before it does.
     Installed { slot: Slot, wipe: bool },
-    /// The image is in the partition of these slots, which is empty for a
-    /// super image: it is written to the one partition that holds the
-    /// partitions of both slots, and has no slot of its own.
-    Flashed { partition: &'static str, slots: Vec<Slot> },
+    /// The image is in the partition of these slots; of none, where the
+    /// phone has the partition once.
+    Flashed { partition: String, slots: Vec<Slot> },
     /// The install script ran to its end; `wipe_cache` when it asked for
     /// the cache partition to be erased after.
     Ran { wipe_cache: bool },
@@ -250,7 +253,7 @@ pub enum Refusal {
     /// Its security patch is older than the installed one, which leaves
     /// the data partition unreadable unless it is erased.
     OlderPatch { package: String, installed: String },
-    /// An image for partitions this phone does not have.
+    /// An image that fits no partition this phone has.
     NoPartition,
     /// Too little charge to install safely: the level, and whether a
     /// charger is in.
@@ -304,9 +307,11 @@ pub enum Failure {
 /// What the screen tells the installer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Write the image held in [`Event::Image`] to `partition` in these
-    /// slots.
-    Flash { partition: &'static str, slots: Vec<Slot> },
+    /// Write the image held in [`Event::Image`] to `partition`, one of
+    /// those it offered: in these slots where the phone has it in each, in
+    /// the slot it runs from where it is a logical one, and in no slot
+    /// where it has it once.
+    Flash { partition: String, slots: Vec<Slot> },
     /// Install the update held in [`Event::Ready`], or run the script held
     /// in [`Event::Script`].
     Install,

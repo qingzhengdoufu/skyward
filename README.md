@@ -42,10 +42,15 @@ zstd use to flash it, and an `unzip` whose `-p` streams the image as it reads it
 They also get `avbctl` and `resetprop`, to turn off verified boot's checks and to
 read and set properties.
 
-A raw super image is a package of its own: picked as a file or sent with
-`adb sideload`, it is written over the whole super partition, with no slot to
-pick. The logical partitions inside it are mapped anew at the next start, so the
-phone is restarted after one is flashed.
+A partition image is told by what it holds. Images of boot, init_boot,
+vendor_boot, recovery, dtbo, vbmeta and of a whole super each go to their own
+partition. One that holds an erofs, ext4 or f2fs filesystem goes to any logical
+partition the running slot has in super, which is first made as large as the
+image, as fastbootd makes it. An image that tells nothing of itself goes to the
+partition its file is named after, as `modem.img` goes to modem, where the phone
+has that partition in both slots or as a logical one in super. An image in the
+sparse format is expanded as it is written. While a system update waits to be
+merged, super and the logical partitions in it are not flashed.
 
 ### Online updates
 

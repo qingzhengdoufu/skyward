@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use skyward_config::DeviceConfig;
 use skyward_info::{Battery, Boot, Charge, Cpu, DeviceInfo, PatchLevel, Storage};
-use skyward_install::{Failure, ImageKind, Outcome, Ramdisk, Reflash, Refusal, Stage};
+use skyward_install::{Failure, Filesystem, ImageKind, Outcome, Place as FlashPlace, Ramdisk, Reflash, Refusal, Stage, Target as FlashTarget};
 use skyward_net::download::{Failure as DownloadFailure, Progress};
 use skyward_net::github::{Build, Newest};
 use skyward_net::reach::Reach;
@@ -468,11 +468,14 @@ fn main() -> Result<()> {
     println!("wrote {}", path.display());
 
     // The sideload page through an install, as the installer tells it.
-    let recovery = ImageKind::Boot {
-        kernel: false,
-        ramdisk: Ramdisk::Recovery,
-    };
-    let installing: [(&str, bool, Install); 17] = [
+    let recovery = ImageKind::Boot { kernel: false, ramdisk: Ramdisk::Recovery };
+    let slotted = |name: &str| FlashTarget { name: name.into(), place: FlashPlace::Slotted };
+    // A filesystem image named for vendor, which fits every logical
+    // partition of a Xiaomi 13 Ultra.
+    let logical: Vec<FlashTarget> = ["vendor", "odm", "product", "system", "system_dlkm", "system_ext", "vendor_dlkm", "mi_ext"]
+        .map(|name| FlashTarget { name: name.into(), place: FlashPlace::Logical })
+        .to_vec();
+    let installing: [(&str, bool, Install); 22] = [
         ("30-sideload-waiting", false, Install::Waiting),
         (
             "31-sideload-checking",
@@ -496,13 +499,40 @@ fn main() -> Result<()> {
         (
             "32-sideload-choosing",
             false,
+            Install::Choosing(Choice { kind: recovery, size: 43_257_856, partitions: vec![slotted("recovery")], partition: 0, pick: Pick::Current }),
+        ),
+        (
+            "204-flash-choosing-logical",
+            false,
             Install::Choosing(Choice {
-                kind: recovery,
-                size: 43_257_856,
-                partitions: vec!["recovery"],
+                kind: ImageKind::Filesystem(Filesystem::Erofs),
+                size: 1_610_612_736,
+                partitions: logical,
                 partition: 0,
                 pick: Pick::Current,
             }),
+        ),
+        (
+            "204-flash-choosing-super-dark",
+            true,
+            Install::Choosing(Choice {
+                kind: ImageKind::Super,
+                size: 9_663_676_416,
+                partitions: vec![FlashTarget { name: "super".into(), place: FlashPlace::Single }],
+                partition: 0,
+                pick: Pick::Current,
+            }),
+        ),
+        (
+            "204-flash-choosing-named",
+            false,
+            Install::Choosing(Choice { kind: ImageKind::Other, size: 314_572_800, partitions: vec![slotted("modem")], partition: 0, pick: Pick::Both }),
+        ),
+        ("204-flash-resizing-dark", true, Install::Flashing { partition: "vendor".into(), stage: Some(Stage::Resizing) }),
+        (
+            "204-flash-flashed-super",
+            false,
+            Install::Finished { outcome: Outcome::Flashed { partition: "super".into(), slots: Vec::new() }, damage: None },
         ),
         (
             "33-sideload-writing-dark",
@@ -529,51 +559,14 @@ fn main() -> Result<()> {
                 overwriting: false,
             },
         ),
-        (
-            "35-sideload-flashing",
-            false,
-            Install::Flashing {
-                partition: "boot",
-                stage: Some(Stage::Flashing { done: 300, total: 800 }),
-            },
-        ),
-        (
-            "36-sideload-installed",
-            false,
-            Install::Finished {
-                outcome: Outcome::Installed {
-                    slot: Slot::A,
-                    wipe: false,
-                },
-                damage: None,
-            },
-        ),
-        (
-            "96-sideload-light-wipes",
-            false,
-            Install::Confirming {
-                version: Some("OS3.0.306.0.WMACNXM".into()),
-                wipe: true,
-            },
-        ),
-        (
-            "18-install-ready",
-            false,
-            Install::Confirming {
-                version: Some("OS3.0.306.0.WMACNXM".into()),
-                wipe: false,
-            },
-        ),
+        ("35-sideload-flashing", false, Install::Flashing { partition: "boot".into(), stage: Some(Stage::Flashing { done: 300, total: 800 }) }),
+        ("36-sideload-installed", false, Install::Finished { outcome: Outcome::Installed { slot: Slot::A, wipe: false }, damage: None }),
+        ("96-sideload-light-wipes", false, Install::Confirming { version: Some("OS3.0.306.0.WMACNXM".into()), wipe: true }),
+        ("18-install-ready", false, Install::Confirming { version: Some("OS3.0.306.0.WMACNXM".into()), wipe: false }),
         (
             "37-sideload-flashed-recovery-dark",
             true,
-            Install::Finished {
-                outcome: Outcome::Flashed {
-                    partition: "recovery",
-                    slots: vec![Slot::A, Slot::B],
-                },
-                damage: None,
-            },
+            Install::Finished { outcome: Outcome::Flashed { partition: "recovery".into(), slots: vec![Slot::A, Slot::B] }, damage: None },
         ),
         (
             "38-sideload-refused",

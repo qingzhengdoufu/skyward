@@ -3580,7 +3580,7 @@ fn an_image_goes_where_it_is_sent_once_swiped() {
         Event::Image {
             kind,
             size: 201_326_592,
-            partitions: vec!["recovery", "boot"],
+            partitions: ["recovery", "boot"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
         },
         0,
     );
@@ -3599,14 +3599,15 @@ fn an_image_goes_where_it_is_sent_once_swiped() {
     assert_eq!(
         app.touch(Touch::Up, &f, 1000),
         vec![Effect::Flash {
-            partition: "boot",
+            partition: "boot".into(),
+            place: FlashPlace::Slotted,
             pick: Pick::Both
         }]
     );
     assert_eq!(
         app.state.install,
         Install::Flashing {
-            partition: "boot",
+            partition: "boot".into(),
             stage: None
         }
     );
@@ -3614,7 +3615,7 @@ fn an_image_goes_where_it_is_sent_once_swiped() {
     assert_eq!(
         app.state.install,
         Install::Flashing {
-            partition: "boot",
+            partition: "boot".into(),
             stage: Some(Stage::Flashing { done: 10, total: 40 })
         }
     );
@@ -3622,7 +3623,7 @@ fn an_image_goes_where_it_is_sent_once_swiped() {
     assert_eq!(app.screen(), Screen::Installing, "a partition being written keeps the page");
     app.install(
         Event::Finished(Outcome::Flashed {
-            partition: "boot",
+            partition: "boot".into(),
             slots: vec![Slot::A, Slot::B],
         }),
         1000,
@@ -3648,7 +3649,7 @@ fn a_super_image_is_written_whole_and_asks_for_no_slot() {
         Event::Image {
             kind: ImageKind::Super,
             size: 6 << 30,
-            partitions: vec!["super"],
+            partitions: ["super"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
         },
         0,
     );
@@ -3677,20 +3678,21 @@ fn a_super_image_is_written_whole_and_asks_for_no_slot() {
     assert_eq!(
         app.touch(Touch::Up, &f, 1000),
         vec![Effect::Flash {
-            partition: "super",
+            partition: "super".into(),
+            place: FlashPlace::Single,
             pick: Pick::Current
         }]
     );
     assert_eq!(
         app.state.install,
         Install::Flashing {
-            partition: "super",
+            partition: "super".into(),
             stage: None
         }
     );
     app.install(
         Event::Finished(Outcome::Flashed {
-            partition: "super",
+            partition: "super".into(),
             slots: Vec::new(),
         }),
         1000,
@@ -3776,12 +3778,12 @@ fn an_image_that_failed_part_way_names_its_partition() {
         Event::Image {
             kind: ImageKind::Dtbo,
             size: 1 << 20,
-            partitions: vec!["dtbo"],
+            partitions: ["dtbo"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
         },
         0,
     );
     app.state.install = Install::Flashing {
-        partition: "dtbo",
+        partition: "dtbo".into(),
         stage: None,
     };
     app.install(
@@ -3795,9 +3797,9 @@ fn an_image_that_failed_part_way_names_its_partition() {
     assert!(matches!(
         app.state.install,
         Install::Finished {
-            damage: Some(Damage::Partition("dtbo")),
+            damage: Some(Damage::Partition(ref name)),
             ..
-        }
+        } if name == "dtbo"
     ));
 }
 #[test]
@@ -6869,7 +6871,7 @@ fn a_file_opened_as_an_install_ends_waits_for_it() {
         Event::Image {
             kind: ImageKind::Dtbo,
             size: 1 << 20,
-            partitions: vec!["dtbo"],
+            partitions: ["dtbo"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
         },
         0,
     );
@@ -8838,7 +8840,7 @@ fn the_installer_lights_the_panel_when_it_needs_the_user() {
         Event::Image {
             kind: ImageKind::Dtbo,
             size: 1 << 20,
-            partitions: vec!["dtbo"],
+            partitions: ["dtbo"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
         },
         20,
     );
@@ -8846,7 +8848,7 @@ fn the_installer_lights_the_panel_when_it_needs_the_user() {
     app.tick(20 + 520);
     assert_eq!(app.deadline(20 + 520), Some(20 + DIMS));
     app.state.install = Install::Flashing {
-        partition: "dtbo",
+        partition: "dtbo".into(),
         stage: None,
     };
     press(&mut app, Key::Power, 500);
@@ -8854,7 +8856,7 @@ fn the_installer_lights_the_panel_when_it_needs_the_user() {
     assert!(!app.display_on(), "progress does not");
     app.install(
         Event::Finished(Outcome::Flashed {
-            partition: "dtbo",
+            partition: "dtbo".into(),
             slots: vec![Slot::A],
         }),
         520,

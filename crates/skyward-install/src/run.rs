@@ -10,7 +10,7 @@ use crate::blockmap::BlockMap;
 use crate::engine::{engine_lines, wait_engine};
 use crate::ffs::{Endpoints, Shared, Usb};
 use crate::fuse::{self, Fault, LocalFile, Mount, Name};
-use crate::image::{self, ImageKind};
+use crate::image::{self, Image, ImageKind, Layout, Place, Target};
 use crate::keep::Kept;
 use crate::ota::{self, Log, Status};
 use crate::package::{self, Build, Package, Phone, Update};
@@ -169,7 +169,7 @@ impl Installer {
     }
 
     /// Write the image the installer holds to `partition` in `slots`.
-    pub fn flash(&self, partition: &'static str, slots: Vec<Slot>) {
+    pub fn flash(&self, partition: String, slots: Vec<Slot>) {
         // Only a finished installer stops listening, and then there is
         // nothing left to write.
         let _ = self.commands.send(Command::Flash { partition, slots });
@@ -555,8 +555,14 @@ fn install<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done> {
         // The system asks for packages that install themselves, as Android's
         // own recovery takes nothing else; an image needs someone to say
         // where it goes.
-        Package::Image(_) if matches!(ctx.origin, Origin::Asked { .. }) => Ok(Done::Decided(Outcome::Refused(Refusal::Image))),
-        Package::Image(kind) => flash_image(ctx, mount, kind, size),
+        Package::Image(image) if matches!(ctx.origin, Origin::Asked { .. }) => Ok(Done::Decided(Outcome::Refused(match image.kind {
+            ImageKind::Other => Refusal::Unknown,
+            _ => Refusal::Image,
+        }))),
+        Package::Image(image) => {
+            let name = ctx.local.as_ref().and_then(|p| p.file_name()).and_then(|name| name.to_str()).map(str::to_owned);
+            flash_image(ctx, mount, &image, name.as_deref())
+        }
         Package::Script => run_script(ctx, mount, size),
         Package::System(contents) => install_system(ctx, &contents),
         Package::Unknown => Ok(Done::Decided(Outcome::Refused(Refusal::Unknown))),
@@ -672,7 +678,8 @@ fn detach_once(ctx: &mut Context) -> Result<()> {
 fn describe(package: &Package) -> String {
     match package {
         Package::Update(u) => format!("an update to {}", u.version().unwrap_or("an unnamed version")),
-        Package::Image(kind) => format!("an image of {kind:?}"),
+        Package::Image(image) if image.layout.sparse => format!("a sparse image of {:?}, {} bytes in its partition", image.kind, image.layout.size),
+        Package::Image(image) => format!("an image of {:?}", image.kind),
         Package::Script => "a zip with an install script".into(),
         Package::System(c) => format!("the system {} {}, to install beside the installed one", c.manifest.name, c.manifest.version),
         Package::Unknown => "a file of no known kind".into(),
@@ -925,76 +932,71 @@ fn lines(from: impl Read, mut each: impl FnMut(&str) -> io::Result<()>) -> io::R
     }
 }
 
-fn flash_image<S>(ctx: &mut Context, mount: &Mount<S>, kind: ImageKind, size: u64) -> Result<Done> {
+/// Write the image being served to the partition the screen picks among
+/// those it can go to; `file_name` is the name of its file, where it is
+/// one on the phone. A partition the phone has in each slot is written as
+/// it lies. A logical one is first made as large as the image, and super
+/// is written whole, both once the recovery has moved off the installed
+/// system, and neither while an update is in flight, whose partitions
+/// they are.
+fn flash_image<S>(ctx: &mut Context, mount: &Mount<S>, image: &Image, file_name: Option<&str>) -> Result<Done> {
     let dir = Path::new(skyward_block::BY_NAME);
-    let partitions = image::partitions(kind, dir)?;
+    let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    // A super that does not read lists no partition to write into.
+    let logical = skyward_vab::slot_names(slot).unwrap_or_else(|e| {
+        let _ = kmsg(&format!("install: super lists no logical partitions: {e:#}"));
+        Vec::new()
+    });
+    let all = image::targets(image.kind, file_name.map(image::named), dir, &logical)?;
+    let state = skyward_vab::snapshot_state()?;
+    let partitions: Vec<Target> = all.iter().filter(|t| state == SnapshotState::None || t.place == Place::Slotted).cloned().collect();
     if partitions.is_empty() {
-        return Ok(Done::Decided(Outcome::Refused(Refusal::NoPartition)));
+        let refusal = match image.kind {
+            _ if !all.is_empty() => Refusal::Pending(state),
+            ImageKind::Other => Refusal::Unknown,
+            _ => Refusal::NoPartition,
+        };
+        return Ok(Done::Decided(Outcome::Refused(refusal)));
     }
-    // Super holds the partitions the running system is mapped through, built
-    // from metadata that writing it replaces: an update in flight would lose
-    // where its own are.
-    if kind == ImageKind::Super {
-        let state = skyward_vab::snapshot_state()?;
-        if state != SnapshotState::None {
-            return Ok(Done::Decided(Outcome::Refused(Refusal::Pending(state))));
-        }
-    }
-    ctx.send(Event::Image { kind, size, partitions: partitions.clone() });
+    let layout = &image.layout;
+    ctx.send(Event::Image { kind: image.kind, size: layout.size, partitions: partitions.clone() });
     let (partition, slots) = match ctx.commands.recv() {
         Ok(Command::Flash { partition, slots }) => (partition, slots),
         Ok(Command::Cancel) | Err(_) => return Ok(Done::Decided(Outcome::Cancelled)),
         Ok(other) => bail!("an image waiting for its partition was told {other:?}"),
     };
-    ensure!(partitions.contains(&partition), "{partition} is not among {partitions:?}");
-    // A super image has no slot of its own to pick: it holds the partitions
-    // of both slots, so the screen sends none and the whole of super is
-    // written.
-    if kind == ImageKind::Super {
-        flash_super(ctx, mount, size)?;
-        return Ok(Done::Decided(Outcome::Flashed { partition, slots: Vec::new() }));
-    }
-    ensure!(!slots.is_empty(), "no slot chosen for {partition}");
-    if [skyward_systems::store::BOOT, skyward_systems::store::INIT_BOOT].contains(&partition) {
-        installed_boot_set()?;
-    }
-    let devices: Vec<_> = slots.iter().map(|&slot| image::device(dir, partition, slot)).collect();
-    flash_to(ctx, mount, size, &devices)?;
-    Ok(Done::Decided(Outcome::Flashed { partition, slots }))
-}
-
-/// Write a super image over the whole of super, so that the partitions it
-/// holds are the ones the image describes.
-///
-/// The slot's partitions are mapped through the metadata super holds now, so
-/// they come off with the rest first, as they do before an install script
-/// runs: a table built from the metadata this write replaces must be neither
-/// mounted nor mapped while super is written. Afterwards what is mapped is
-/// stale, and nothing here maps it again — the next start maps what super
-/// then holds, which is what the image says.
-fn flash_super<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<()> {
-    let dir = Path::new(skyward_block::BY_NAME);
-    detach_once(ctx)?;
-    flash_to(ctx, mount, size, &[image::super_device(dir)])?;
-    let _ = kmsg("super: written, a reboot maps what it now holds");
-    Ok(())
-}
-
-/// Write `size` bytes of the package being served to `devices`, telling the
-/// screen how far it is.
-fn flash_to<S>(ctx: &Context, mount: &Mount<S>, size: u64, devices: &[PathBuf]) -> Result<()> {
+    let target = partitions.iter().find(|t| t.name == partition).with_context(|| format!("{partition} is not among {partitions:?}"))?;
     let path = ctx.source(mount);
-    if ctx.local.is_some() {
-        let _ = kmsg(&format!("install: the image is read where it lies, {}", path.display()));
-    }
     let mut file = BufReader::with_capacity(1 << 20, File::open(&path).with_context(|| format!("open {}", path.display()))?);
-    let mut told: Option<Instant> = None;
-    image::flash(&mut file, size, devices, &mut |done, total| {
-        if done == total || told.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
-            ctx.send(Event::Progress(Stage::Flashing { done, total }));
-            told = Some(Instant::now());
+    match target.place {
+        Place::Slotted => {
+            ensure!(!slots.is_empty(), "no slot chosen for {partition}");
+            if [skyward_systems::store::BOOT, skyward_systems::store::INIT_BOOT].contains(&partition.as_str()) {
+                installed_boot_set()?;
+            }
+            let devices: Vec<_> = slots.iter().map(|&slot| image::device(dir, &partition, slot)).collect();
+            write_unmounted(ctx, &mut file, layout, &devices)?;
         }
-    })
+        Place::Single => {
+            ensure!(slots.is_empty(), "{partition} is in no slot, and was sent to {slots:?}");
+            let device = dir.join(&partition);
+            image::check_super(&mut image::Expanded::new(&mut file, layout), skyward_block::size_bytes(&device)?)?;
+            detach_once(ctx)?;
+            write_image(ctx, &mut file, layout, &[device], false)?;
+        }
+        Place::Logical => {
+            ensure!(slots == [slot], "{partition} is a logical partition of slot {slot:?}, and was sent to {slots:?}");
+            skyward_vab::can_remake(slot, &partition, layout.size)?;
+            detach_once(ctx)?;
+            ctx.send(Event::Progress(Stage::Resizing));
+            let remade = skyward_vab::remake(slot, &partition, layout.size)?;
+            let written = write_image(ctx, &mut file, layout, std::slice::from_ref(&remade.device), false);
+            let settled = skyward_vab::settle(&remade).with_context(|| format!("put the mapping of {} away", remade.name));
+            written?;
+            settled?;
+        }
+    }
+    Ok(Done::Decided(Outcome::Flashed { partition, slots }))
 }
 
 /// Run the install script of the zip being served, `size` bytes, once the
@@ -1417,4 +1419,56 @@ fn pipe() -> Result<(OwnedFd, OwnedFd)> {
         return Err(io::Error::last_os_error()).context("make a pipe");
     }
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// Write the image `file` holds to `devices` as `layout` lays it out and
+/// read it back, telling the screen how far it is.
+fn write_image<R: Read + io::Seek>(ctx: &Context, file: &mut R, layout: &Layout, devices: &[PathBuf], footer: bool) -> Result<()> {
+    let mut told: Option<Instant> = None;
+    image::write(file, layout, devices, footer, &mut |done, total| {
+        if done == total || told.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
+            ctx.send(Event::Progress(Stage::Flashing { done, total }));
+            told = Some(Instant::now());
+        }
+    })
+}
+/// Write the image to partitions the phone has in each slot. One of them
+/// that is mounted, as the one the firmware the phone's programs load is
+/// on, comes off its mount points while it is written, and goes back on
+/// them after, holding what was written; where a program holds it there,
+/// nothing is written. One marked read-only, as Android marks what it
+/// mounts read-only, has the mark off while it is written, as
+/// update_engine takes it off the partitions it writes, and on again
+/// after.
+fn write_unmounted<R: Read + io::Seek>(ctx: &Context, file: &mut R, layout: &Layout, devices: &[PathBuf]) -> Result<()> {
+    let mut released = Vec::new();
+    let mut unmarked = Vec::new();
+    let readied = (|| -> Result<()> {
+        for device in devices {
+            let mounts = skyward_block::mount::release(device).with_context(|| format!("take {} off its mount points", device.display()))?;
+            released.push((device, mounts));
+            if skyward_block::read_only(device)? {
+                skyward_block::set_read_only(device, false)?;
+                unmarked.push(device);
+            }
+        }
+        Ok(())
+    })();
+    let ended = readied.and_then(|()| write_image(ctx, file, layout, devices, true));
+    for device in unmarked {
+        if let Err(e) = skyward_block::set_read_only(device, true) {
+            let _ = kmsg(&format!("install: {} is left writable: {e:#}", device.display()));
+        }
+    }
+    for (device, mounts) in released.iter().filter(|(_, mounts)| !mounts.is_empty()) {
+        match skyward_block::mount::restore(device, mounts) {
+            Ok(()) => {
+                let _ = kmsg(&format!("install: {} is mounted again where it was", device.display()));
+            }
+            Err(e) => {
+                let _ = kmsg(&format!("install: {} is not mounted again where it was: {e:#}", device.display()));
+            }
+        }
+    }
+    ended
 }
