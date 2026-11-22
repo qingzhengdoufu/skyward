@@ -9,6 +9,8 @@ publish = false
 default = ["pinyin-input", "aera-browser"]
 pinyin-input = ["skyward-ui/pinyin-input"]
 aera-browser = ["skyward-ui/aera-browser"]
+[lints]
+workspace = true
 
 [[bin]]
 name = "skyward-preview"

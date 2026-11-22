@@ -8,6 +8,8 @@ license.workspace = true
 default = []
 aera-browser = ["pinyin-input"]
 pinyin-input = []
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
