@@ -839,7 +839,7 @@ pub enum Effect {
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
     /// and [`App::backup_ended`].
     Backup {
-        parts: [bool; 4],
+        parts: [bool; 5],
         place: Place,
         compress: bool,
         verify: bool,
@@ -854,7 +854,7 @@ pub enum Effect {
     Restore {
         place: Place,
         name: String,
-        parts: [bool; 4],
+        parts: [bool; 5],
     },
     RestoreImage {
         place: Place,

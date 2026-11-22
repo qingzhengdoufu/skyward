@@ -695,20 +695,8 @@ fn main() -> Result<()> {
         }
     };
     let backups = vec![
-        made(
-            Place::Storage,
-            1_792_348_260,
-            6_214_000_000,
-            [true, true, false, true],
-            "OS4.0.4.0.XPACNXM",
-        ),
-        made(
-            Place::UsbDrive,
-            1_791_830_000,
-            141_000_000,
-            [true, false, false, false],
-            "OS4.0.3.0.XPACNXM",
-        ),
+        made(Place::Storage, 1_792_348_260, 58_214_000_000, [true; 5], "OS4.0.4.0.XPACNXM"),
+        made(Place::UsbDrive, 1_791_830_000, 141_000_000, [true, false, false, false, false], "OS4.0.3.0.XPACNXM"),
         BackupEntry {
             place: Place::Storage,
             name: "20261020-221500".into(),
@@ -1021,17 +1009,17 @@ fn main() -> Result<()> {
         ("46-restore-light-none", Screen::Restore, false, &|_| {}),
         ("47-restore-light", Screen::Restore, false, &|app| app.set_backups(backups.clone())),
         ("48-restore-backup-light", Screen::RestoreBackup, false, &|app| {
-            app.state.restore = Some((backups[0].clone(), [true, false, false, true]));
+            app.state.restore = Some((backups[0].clone(), [true, false, true, true, true]));
         }),
         ("48-restore-backup-dark-deleting", Screen::RestoreBackup, true, &|app| {
-            app.state.restore = Some((backups[0].clone(), [true, true, false, true]));
+            app.state.restore = Some((backups[0].clone(), [true, true, false, false, true]));
             app.state.asking_delete = true;
         }),
         ("48-restore-backup-light-other-version", Screen::RestoreBackup, false, &|app| {
-            app.state.restore = Some((backups[1].clone(), [true, false, false, false]));
+            app.state.restore = Some((backups[1].clone(), [true, false, false, false, false]));
         }),
         ("48-restore-backup-light-unreadable", Screen::RestoreBackup, false, &|app| {
-            app.state.restore = Some((backups[2].clone(), [false; 4]));
+            app.state.restore = Some((backups[2].clone(), [false; 5]));
         }),
         ("100-backup-job-light-measuring", Screen::BackupJob, false, &|app| {
             app.state.backup_job = job(false, Vec::new(), None, None)
@@ -1117,7 +1105,8 @@ fn main() -> Result<()> {
             )
         }),
         ("109-restore-job-dark-refused", Screen::BackupJob, true, &|app| {
-            app.state.backup_job = job(true, Vec::new(), None, Some(BackupEnd::Refused(BackupRefusal::DataReset)))
+            let older = BackupRefusal::OlderAndroid { was: "17".into(), now: "16".into() };
+            app.state.backup_job = job(true, Vec::new(), None, Some(BackupEnd::Refused(older)))
         }),
         ("49-advanced-light", Screen::Advanced, false, &|_| {}),
         ("50-files-light", Screen::Files, false, &|app| {

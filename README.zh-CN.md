@@ -55,7 +55,7 @@ SHA-256。开关在「设置 → 更新来源」，默认开着。
 
 ### 备份和恢复
 
-![系统、应用和 IMEI 都可以备份](slides/zh-CN/out/06-backup.png)
+![系统、应用、照片和 IMEI 都可以备份](slides/zh-CN/out/06-backup.png)
 
 ### 文件管理
 

@@ -2714,9 +2714,10 @@ pub fn backup(cx: &Ctx) -> Frame {
         false => crate::texts::backup::DATA_HOLDS_LOCKED,
     });
     let boot = l.pick(crate::texts::backup::BOOT_HOLDS);
+    let media = l.pick(if s.data == Data::Open { texts::backup::MEDIA_HOLDS } else { texts::backup::MEDIA_HOLDS_LOCKED });
     let modem = l.pick(crate::texts::backup::MODEM_HOLDS);
-    let subs = [boot, system, data, modem];
-    let available: Vec<_> = (0..BACKUP_PARTS.len()).filter(|&k| k != 3 || s.efs_backup_available).collect();
+    let subs = [boot, system, data, media, modem];
+    let available: Vec<_> = (0..BACKUP_PARTS.len()).filter(|&k| k != 4 || s.efs_backup_available).collect();
     let rows: Vec<Row> = BACKUP_PARTS
         .iter()
         .zip(subs)
@@ -3027,6 +3028,9 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                     if chosen[2] {
                         let note = l.pick(crate::texts::restore::DATA_NOTE);
                         y = widgets::footnote(&mut c, t, f, y, note);
+                    }
+                    if chosen[3] {
+                        y = widgets::footnote(&mut c, t, f, y, l.pick(texts::restore::MEDIA_NOTE));
                     }
                     // The boot partitions' vbmeta checks the system's: one of
                     // another version without the other may not start.
@@ -6670,7 +6674,7 @@ mod tests {
         r.outcome = Some(BackupEnd::Failed("write /dev/block/by-name/boot_b".into()));
         assert_eq!(states(&r), ["未完成", "未恢复"]);
         r.at = None;
-        r.outcome = Some(BackupEnd::Refused(BackupRefusal::DataReset));
+        r.outcome = Some(BackupEnd::Refused(BackupRefusal::OlderAndroid { was: "17".into(), now: "16".into() }));
         assert_eq!(states(&r), ["未开始", "未开始"]);
     }
 

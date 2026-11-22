@@ -499,7 +499,7 @@ impl App {
                 let Some(entry) = self.state.backups.get(i).cloned() else {
                     return Vec::new();
                 };
-                let parts = entry.held.as_ref().map_or([false; 4], |h| h.parts);
+                let parts = entry.held.as_ref().map_or([false; 5], |h| h.parts);
                 self.state.restore = Some((entry, parts));
                 self.state.asking_delete = false;
                 self.open(Screen::RestoreBackup);
@@ -1264,7 +1264,7 @@ impl App {
             }
             Confirm::Backup => {
                 let s = &self.state;
-                let refused = if s.backup[3] && !s.efs_backup_available {
+                let refused = if s.backup[4] && !s.efs_backup_available {
                     Some(crate::lang::legacy([
                         "本机 EFS 备份不可用，请取消勾选",
                         "本機 EFS 備份無法使用，請取消勾選",
@@ -1272,7 +1272,7 @@ impl App {
                     ]))
                 } else if !s.backup.contains(&true) {
                     Some(crate::texts::toast::CHOOSE_BACKUP)
-                } else if s.backup[2] && s.data != Data::Open {
+                } else if (s.backup[DATA_PART] || s.backup[MEDIA_PART]) && s.data != Data::Open {
                     Some(crate::texts::toast::DECRYPT_TO_BACK_UP)
                 } else if s.place_open(s.backup_to) {
                     None
@@ -1341,7 +1341,9 @@ impl App {
                 };
                 if !parts.contains(&true) {
                     self.say(l.pick(texts::toast::CHOOSE_RESTORE), now);
-                } else if parts[2] && self.state.data != Data::Open {
+                } else if (parts[DATA_PART] || parts[MEDIA_PART]) && self.state.data == Data::Erased {
+                    self.say(l.pick(texts::toast::RESTORE_ONCE_MADE), now);
+                } else if (parts[DATA_PART] || parts[MEDIA_PART]) && self.state.data != Data::Open {
                     self.say(
                         l.pick(crate::texts::toast::DECRYPT_TO_RESTORE),
                         now,

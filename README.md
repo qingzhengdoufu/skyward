@@ -71,7 +71,7 @@ SHA-256. The switch is under Settings → Updates and is on by default.
 
 ### Backup and restore
 
-![Back up the system, apps and IMEI](slides/en/out/06-backup.png)
+![Back up the system, apps, photos and IMEI](slides/en/out/06-backup.png)
 
 ### File manager
 

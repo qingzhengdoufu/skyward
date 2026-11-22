@@ -1,7 +1,19 @@
 use super::*;
 
 /// What a backup can take, in the order the backup page lists it.
-pub const BACKUP_PARTS: [Text; 4] = [texts::backup::part::BOOT, texts::backup::part::SYSTEM, texts::backup::part::DATA, texts::backup::part::MODEM];
+pub const BACKUP_PARTS: [Text; 5] = [
+    texts::backup::part::BOOT,
+    texts::backup::part::SYSTEM,
+    texts::backup::part::DATA,
+    texts::backup::part::MEDIA,
+    texts::backup::part::MODEM,
+];
+
+/// Where the data partition's files and the users' own in internal storage
+/// are among [`BACKUP_PARTS`]: both are read and written only with every
+/// user's files open.
+pub const DATA_PART: usize = 2;
+pub const MEDIA_PART: usize = 3;
 
 /// A backup found in a place's Skyward/backups folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,7 +41,7 @@ pub struct Held {
     /// The bytes its files take.
     pub size: u64,
     /// Which of [`BACKUP_PARTS`] it holds.
-    pub parts: [bool; 4],
+    pub parts: [bool; 5],
     /// The phone it was made on, by its codename, the system it ran, as
     /// its version reads, and the slot it was made from.
     pub device: String,
@@ -100,9 +112,10 @@ pub enum BackupRefusal {
     /// This partition is not the size it was backed up at, as after an
     /// update.
     Resized(String),
-    /// The data partition has been made afresh since the backup, as a
-    /// factory reset makes it: the files backed up would not open in it.
-    DataReset,
+    /// The data partition was backed up on a newer Android than the phone
+    /// runs, which does not read its files: the release the backup was
+    /// made on, and the phone's.
+    OlderAndroid { was: String, now: String },
 }
 
 impl App {
