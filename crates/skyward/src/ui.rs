@@ -45,6 +45,7 @@ use skyward_ui::app::{
     Keys, MountFailure, Part, PartKind, PartStop, Place, RenameRefused, Screen, Shot, SkywardEnd, SkywardStage, Target, USB_DRIVE,
     UsbDrive, UsbLink, Wipe,
 };
+use skyward_ui::fmt::TimeZone;
 use skyward_ui::settings::Keeper;
 use skyward_ui::surface::kms::KmsSurface;
 use skyward_ui::{Canvas, Fonts, Lang, Surface};
@@ -222,12 +223,12 @@ pub(super) fn power(target: Target) -> Result<()> {
 pub(super) struct Transfer {
     pub(super) service: skyward_mtp::Service,
     pub(super) offered: bool,
-    pub(super) zone: usize,
+    pub(super) zone: TimeZone,
 }
 
 impl Transfer {
     /// Serve file transfer; the port offers it from when it next rests.
-    pub(super) fn start(cfg: &DeviceConfig, info: &skyward_info::DeviceInfo, zone: usize) -> Result<Transfer> {
+    pub(super) fn start(cfg: &DeviceConfig, info: &skyward_info::DeviceInfo, zone: &TimeZone) -> Result<Transfer> {
         let device = skyward_mtp::Device {
             manufacturer: cfg.device.brand.clone(),
             model: info.model.clone(),
@@ -236,13 +237,9 @@ impl Transfer {
             name: info.model.clone(),
             battery: Box::new(|| skyward_info::battery_now().ok().flatten().map(|b| b.level)),
         };
-        let service = skyward_mtp::Service::start(device, skyward_ui::fmt::rules(zone).clone())?;
+        let service = skyward_mtp::Service::start(device, zone.clone())?;
         skyward_sys::usb::set_mtp(true);
-        Ok(Transfer {
-            service,
-            offered: false,
-            zone,
-        })
+        Ok(Transfer { service, offered: false, zone: zone.clone() })
     }
     /// Offer internal storage, named for the computer in `lang`, or take it
     /// back. Once this returns, nothing the computer had under way in it
@@ -409,7 +406,7 @@ pub(super) fn in_place(place: Place, path: &str) -> PathBuf {
 /// what update_engine wrote while it last installed an update and what the
 /// last install script wrote, and the kernel's. Each file is owned as a
 /// copy into the folder would be. Gives the folder.
-pub(super) fn export_logs(recovery: bool, kernel: bool, into: &Path, zone: usize) -> Result<PathBuf> {
+pub(super) fn export_logs(recovery: bool, kernel: bool, into: &Path, zone: &TimeZone) -> Result<PathBuf> {
     let there = into.ancestors().find(|p| p.exists()).context("the root is always there")?;
     let ownership = ownership(there)?;
     let folder = into.join(skyward_ui::fmt::stamp(unix_now()?, zone));
@@ -447,7 +444,7 @@ pub(super) fn export_logs(recovery: bool, kernel: bool, into: &Path, zone: usize
 /// taken: into the gallery's screenshots where internal storage is open, as
 /// `storage` says, and otherwise into the recovery's own memory until it
 /// opens. Each is made as the system makes what it saves there.
-pub(super) fn save_screenshot(frame: &Canvas, storage: bool, zone: usize) -> Result<Shot> {
+pub(super) fn save_screenshot(frame: &Canvas, storage: bool, zone: &TimeZone) -> Result<Shot> {
     let (folder, shot) = match storage {
         true => (Path::new(skyward_crypto::data::SDCARD).join(SCREENSHOTS), Shot::Album),
         false => (PathBuf::from(HELD_SCREENSHOTS), Shot::Held),
@@ -970,9 +967,30 @@ pub(super) fn answer(request: Request, fastboot: bool) -> Vec<Effect> {
     }
 }
 
-/// The time of day for the status bar, in the zone the settings chose.
-pub(super) fn clock(zone: usize) -> Result<String> {
-    Ok(skyward_ui::fmt::clock(unix_now()?, zone))
+/// Tell the pages which time zone the installed system is set to, where
+/// one is named: `kept`, the one init keeps in the data partition, and
+/// else the one the system is built to start in. A name the recovery
+/// carries no rules for goes to the kernel log, and the clock stays in the
+/// zone it keeps.
+fn follow_system_zone(app: &mut App, kept: Option<&str>, info: &skyward_info::DeviceInfo) -> Result<()> {
+    let Some(name) = kept.or(info.time_zone.as_deref()) else { return Ok(()) };
+    match app.set_system_zone(name) {
+        Ok(()) => { let _ = skyward_sys::kmsg(&format!("the installed system keeps the time zone {name}")); }
+        Err(e) => { let _ = skyward_sys::kmsg(&format!("the installed system's time zone is not followed: {e:#}")); }
+    }
+    Ok(())
+}
+
+/// The time zone init keeps in the data partition, once that is mounted.
+/// One that cannot be read goes to the kernel log, and counts as none.
+fn kept_time_zone() -> Result<Option<String>> {
+    match skyward_info::kept_time_zone(Path::new(skyward_crypto::data::MOUNT)) {
+        Ok(zone) => Ok(zone),
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("the time zone the installed system keeps was not read: {e:#}"));
+            Ok(None)
+        }
+    }
 }
 
 /// Tell the kernel log how the data partition was mounted, where opening
@@ -1487,6 +1505,16 @@ impl<'a> Pages<'a> {
             },
             locale.unwrap_or("none")
         ))?;
+        // The clock follows the time zone the installed system was last
+        // seen set to, or else the one it is built to start in, until the
+        // data partition opens and tells which it is set to now. A phone
+        // with no system names none, and keeps the zone chosen.
+        if app.state.system_zone.is_none() {
+            follow_system_zone(&mut app, None, &info)?;
+        }
+        app.set_now(unix_now()?);
+        // The home page tells of a restart into the slot the system does not
+        // run from now: an update or a switch left for the next boot.
         if info.slot.is_some() {
             app.set_boot_slots(read_slots());
         }
@@ -1499,7 +1527,7 @@ impl<'a> Pages<'a> {
         let port_at = Instant::now();
         let mut transfer: Option<Transfer> = None;
         if app.state.file_transfer {
-            match Transfer::start(cfg, &info, app.state.time_zone) {
+            match Transfer::start(cfg, &info, app.state.zone()) {
                 Ok(t) => transfer = Some(t),
                 Err(e) => {
                     skyward_sys::kmsg(&format!("file transfer did not start: {e:#}"))?;
@@ -1817,7 +1845,9 @@ impl<'a> Pages<'a> {
     pub(super) fn tick(&mut self, now: u64) -> Result<()> {
         let effects = self.app.tick(now);
         self.dispatch_effects(effects, now)?;
-        let time = clock(self.app.state.time_zone)?;
+        let unix = unix_now()?;
+        self.app.set_now(unix);
+        let time = skyward_ui::fmt::clock(unix, self.app.state.zone());
         if time != self.shown_clock {
             self.shown_clock = time;
             self.app.redraw();
@@ -1915,7 +1945,7 @@ impl<'a> Pages<'a> {
         } else if dozing {
             if self.app.state.always_on && (!self.blanked || self.faced != self.shown_clock) {
                 let facts = skyward_ui::aod::Facts {
-                    date: skyward_ui::fmt::date(self.app.state.lang, unix_now()?, self.app.state.time_zone),
+                    date: skyward_ui::fmt::date(self.app.state.lang, unix_now()?, self.app.state.zone()),
                     battery: self.info.battery.as_ref().map(|b| (b.level, b.plugged)),
                     slot: self.info.slot.map(|s| s.letter().to_string()),
                     data: skyward_ui::fmt::data(self.app.state.lang, &self.app.state.data).to_string(),
@@ -2220,6 +2250,7 @@ impl Pages<'_> {
                     }
                     self.closed = opening.closed;
                     show_closed(&mut self.app, &self.closed)?;
+                    follow_system_zone(&mut self.app, kept_time_zone()?.as_deref(), &self.info)?;
                 }
                 wipe::Event::Ended(outcome) => {
                     let said = outcome.as_ref().map_or_else(wipe::said, |_| "done".to_string());
@@ -2585,6 +2616,7 @@ impl Pages<'_> {
                         credential: code.into_bytes(),
                     })?);
                 }
+                follow_system_zone(&mut self.app, kept_time_zone()?.as_deref(), &self.info)?;
             }
             decrypt::Ended::Opened(Err(why)) => {
                 let _ = skyward_sys::kmsg(&format!("the data partition stays closed: {why}"));
@@ -2665,9 +2697,9 @@ impl Pages<'_> {
             Some(t) => {
                 let offer = self.app.state.data.storage_open() && self.eraser.is_none() && self.installer.is_none();
                 t.offer(offer, self.app.state.lang).and_then(|()| {
-                    if t.zone != self.app.state.time_zone {
-                        t.service.set_zone(skyward_ui::fmt::rules(self.app.state.time_zone).clone())?;
-                        t.zone = self.app.state.time_zone;
+                    if &t.zone != self.app.state.zone() {
+                        t.zone = self.app.state.zone().clone();
+                        t.service.set_zone(t.zone.clone())?;
                     }
                     Ok(())
                 })
@@ -3118,7 +3150,7 @@ impl Pages<'_> {
                         return Ok(Vec::new());
                     }
                 };
-                let stamp = skyward_ui::fmt::stamp(unix_now()?, self.app.state.time_zone);
+                let stamp = skyward_ui::fmt::stamp(unix_now()?, self.app.state.zone());
                 let task = backup::Task::Image {
                     name,
                     into,
@@ -3194,7 +3226,7 @@ impl Pages<'_> {
             Effect::Ticks => self.ticks()?,
             Effect::Screenshot { storage } => {
                 let t0 = Instant::now();
-                let saved = save_screenshot(&self.screen, storage, self.app.state.time_zone).map_err(|e| format!("{e:#}"));
+                let saved = save_screenshot(&self.screen, storage, self.app.state.zone()).map_err(|e| format!("{e:#}"));
                 eprintln!("screenshot {saved:?} in {} ms", t0.elapsed().as_millis());
                 self.app.screenshot_saved(saved, now);
             }
@@ -3441,13 +3473,9 @@ impl Pages<'_> {
                     true => Path::new(skyward_crypto::data::SDCARD).join(STORAGE_LOGS),
                     false => PathBuf::from(TMP_LOGS),
                 };
-                match export_logs(recovery, kernel, &into, self.app.state.time_zone) {
-                    Ok(folder) => self
-                        .app
-                        .report(&skyward_ui::fmt::exported(self.app.state.lang, &folder.display().to_string()), now),
-                    Err(e) => self
-                        .app
-                        .report(&skyward_ui::fmt::export_failed(self.app.state.lang, &format!("{e:#}")), now),
+                match export_logs(recovery, kernel, &into, self.app.state.zone()) {
+                    Ok(folder) => self.app.report(&skyward_ui::fmt::exported(self.app.state.lang, &folder.display().to_string()), now),
+                    Err(e) => self.app.report(&skyward_ui::fmt::export_failed(self.app.state.lang, &format!("{e:#}")), now),
                 }
             }
             Effect::SetMode { path, mode } => {
@@ -3764,7 +3792,7 @@ impl Pages<'_> {
         let made = unix_now()?;
         let task = backup::BackupTask {
             parts,
-            stamp: skyward_ui::fmt::stamp(made, self.app.state.time_zone),
+            stamp: skyward_ui::fmt::stamp(made, self.app.state.zone()),
             into,
             ownership,
             compress,
@@ -3885,7 +3913,7 @@ impl Pages<'_> {
     pub(super) fn file_transfer(&mut self, on: bool, now: u64) -> Result<()> {
         let rests = !self.fastboot && !self.sideloading;
         match (on, self.transfer.take()) {
-            (true, None) => match Transfer::start(self.cfg, &self.info, self.app.state.time_zone) {
+            (true, None) => match Transfer::start(self.cfg, &self.info, self.app.state.zone()) {
                 Ok(t) => {
                     self.transfer = Some(t);
                     if rests && let Err(e) = skyward_sys::usb::switch(skyward_sys::usb::resting(), USB_TIMEOUT) {

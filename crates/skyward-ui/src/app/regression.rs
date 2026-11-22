@@ -1585,6 +1585,7 @@ fn info() -> DeviceInfo {
         os_version: None,
         android: None,
         locale: None,
+        time_zone: None,
         security_patch: None,
         kernel: "5.15.178".into(),
         storage: Storage {
@@ -4986,15 +4987,17 @@ fn a_time_zone_chosen_is_the_one_kept() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Settings, W, H, PPD);
     tap(&mut app, &f, &i, Action::Open(Screen::TimeZone));
-    assert_eq!(app.state.time_zone, 0, "China until another is chosen");
+    let china = listed("Asia/Shanghai").unwrap();
+    assert_eq!(app.state.time_zone, china, "China until another is chosen");
     let london = TIME_ZONES
         .iter()
-        .position(|&(_, _, name)| name == "Europe/London")
+        .position(|zone| zone.tz == "Europe/London")
         .expect("London is listed");
+    tap(&mut app, &f, &i, Action::Open(Screen::TimeZones(Region::EuropeAfrica)));
     tap(&mut app, &f, &i, Action::TimeZone(london));
     assert_eq!(app.state.time_zone, london);
-    tap(&mut app, &f, &i, Action::TimeZone(0));
-    assert_eq!(app.state.time_zone, 0, "and China again");
+    app.act(Action::TimeZone(china), 1000);
+    assert_eq!(app.state.time_zone, china, "and China again");
 }
 #[test]
 fn a_backup_takes_what_is_ticked_to_where_it_is_sent() {
@@ -5071,7 +5074,7 @@ fn found(place: Place, made: i64, parts: [bool; 4]) -> BackupEntry {
     };
     BackupEntry {
         place,
-        name: fmt::stamp(made, 0),
+        name: fmt::stamp(made, State::default().zone()),
         held: Ok(held),
         image: None,
     }
@@ -5129,7 +5132,7 @@ fn a_backup_found_opens_to_choose_what_to_restore() {
     );
     tap(&mut app, &f, &i, Action::RestorePart(1));
     assert_eq!(app.state.restore.as_ref().map(|r| r.1), Some([true, false, false, true]));
-    let name = fmt::stamp(1_792_348_260, 0);
+    let name = fmt::stamp(1_792_348_260, State::default().zone());
     assert_eq!(
         swipe(&mut app, &f, &i, Confirm::Restore),
         vec![Effect::Restore {

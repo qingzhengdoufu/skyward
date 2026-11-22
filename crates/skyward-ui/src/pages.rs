@@ -1,4 +1,6 @@
 use crate::app::RESTART_AFTER_INSTALL;
+use crate::app::{Region, UTC, listed};
+use crate::texts;
 use crate::app::{
     ADDABLE, Action, BACKUP_PARTS, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, DATA_ERASED, DATA_PARTITION, DOWNLOADS,
     Damage, Data, Dock, DownloadEnd, EraseStop, FASTBOOT_CHOICES, Field, FileKind, FileOp, FileRow, FileTask, Fold, Folder, Found, Frame,
@@ -108,6 +110,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::PartWork => part_work(cx),
         Screen::Language => language(cx),
         Screen::TimeZone => time_zone(cx),
+        Screen::TimeZones(region) => time_zones(cx, region),
         Screen::Logs => logs(cx),
         Screen::Update => update(cx),
         Screen::SkywardUpdate => skyward_update(cx),
@@ -590,7 +593,7 @@ pub fn settings(cx: &Ctx) -> Frame {
         Row::new(l.pick(LANGUAGE)).icon(BLUE, Icon::Globe).trail(Trail::Value(l.name())),
         Row::new(l.pick(TIME_ZONE))
             .icon(ORANGE, Icon::Clock)
-            .trail(Trail::Value(l.pick(TIME_ZONES[s.time_zone].0))),
+            .trail(Trail::Value(s.zone_name())),
     ];
     if s.panel_taps && !s.double_tap_supported {
         rows.push(Row::new(l.pick(DOUBLE_TAP)).switch(s.double_tap));
@@ -2373,7 +2376,7 @@ fn finished(
             next.bottom
         }
         Outcome::Refused(r) => {
-            let reason = fmt::refusal(l, r, &cx.info.codename, source, cx.state.time_zone);
+            let reason = fmt::refusal(l, r, &cx.info.codename, source, cx.state.zone());
             let y = widgets::list(
                 c,
                 t,
@@ -2902,7 +2905,7 @@ pub fn restore(cx: &Ctx) -> Frame {
                     format!("{} · {} · {}", image.partition, fmt::bytes(h.size), place_name(l, b.place)),
                 ),
                 (Ok(h), None) => (
-                    fmt::datetime(l, h.made, s.time_zone),
+                    fmt::datetime(l, h.made, s.zone()),
                     format!("{} · {} · {}", fmt::parts(l, &h.parts), fmt::bytes(h.size), place_name(l, b.place)),
                 ),
                 (Err(_), _) => (b.name.clone(), format!("{} · {}", l.pick(UNREADABLE), place_name(l, b.place))),
@@ -2992,7 +2995,7 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
             }
             Ok(held) => {
                 let mut facts = vec![
-                    (l.pick(["备份时间", "備份時間", "Made"]), fmt::datetime(l, held.made, s.time_zone)),
+                    (l.pick(["备份时间", "備份時間", "Made"]), fmt::datetime(l, held.made, s.zone())),
                     (l.pick(["大小", "大小", "Size"]), fmt::bytes(held.size)),
                     (location, place_name(l, entry.place).to_string()),
                 ];
@@ -5202,13 +5205,13 @@ pub fn row(screen: Screen, cx: &Ctx, i: usize, c: &mut Canvas) {
                 found,
                 &cx.state.files.path,
                 cx.state.files.listed,
-                cx.state.time_zone,
+                cx.state.zone(),
             );
         }
         Screen::Files | Screen::Choose(_) => {
             let folder = cx.state.folder(screen);
             let Some(e) = folder.entry(i) else { return };
-            files::row(c, cx.t, cx.f, cx.state.lang, e, folder.listed, cx.state.time_zone);
+            files::row(c, cx.t, cx.f, cx.state.lang, e, folder.listed, cx.state.zone());
         }
         Screen::Installing => widgets::output_row(c, cx.t, cx.f, &cx.state.script_output, i),
         Screen::PartWork => {
@@ -5255,7 +5258,7 @@ pub fn file_info(cx: &Ctx) -> Frame {
     }
     facts.push((
         l.pick(crate::texts::files::MODIFIED),
-        fmt::datetime(l, e.modified, s.time_zone),
+        fmt::datetime(l, e.modified, s.zone()),
     ));
     let (mode, uid, gid) = (fmt::mode(e.mode), e.uid, e.gid);
     facts.push((
@@ -5632,23 +5635,43 @@ pub fn language(cx: &Ctx) -> Frame {
 }
 
 /// The time zone the status bar's clock and the times on the pages keep.
+/// On a phone whose installed system's zone is known, a switch follows it
+/// and tells which it is; a phone with no system, or one that has set no
+/// zone, shows none. Under it a zone is chosen from a part of the world,
+/// whose row names the zone kept while that is one of its own.
 pub fn time_zone(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let mut c = long_page(cx);
+    let mut out = Vec::new();
     let top = t.m.content_top;
-    let rows: Vec<Row> = TIME_ZONES
-        .iter()
-        .enumerate()
-        .map(|(k, &(name, cities, _))| {
-            Row::new(l.pick(name))
-                .subtitle(l.pick(cities))
-                .trail(Trail::Check(k == s.time_zone))
-        })
-        .collect();
-    let list = widgets::list(&mut c, t, f, top, &rows);
-    let picks: Vec<Action> = (0..TIME_ZONES.len()).map(Action::TimeZone).collect();
-    let out = hits(&list.rows, &picks);
-    Frame::new(t, fit(c, t, list.bottom), out, l.pick(TIME_ZONE), top)
+    let y = match &s.system_zone {
+        Some(zone) => {
+            let name = listed(&zone.name).map_or(zone.name.as_str(), |at| l.pick(TIME_ZONES[at].name));
+            let system = format!("{} · {name}", fmt::utc_offset(s.now, &zone.rules));
+            let follow = Row::new(l.pick(texts::time_zone::FOLLOW_SYSTEM)).subtitle(&system).trail(Trail::Switch(s.follow_system_zone));
+            let follow = widgets::list(&mut c, t, f, top, &[follow]);
+            out.extend(hits(&follow.rows, &[Action::Toggle(Switch::SystemTimeZone)]));
+            widgets::section(&mut c, t, f, follow.bottom, l.pick(texts::time_zone::CHOOSE))
+        }
+        None => top,
+    };
+    let kept = s.zone_listed();
+    let rows = Region::ALL.map(|region| {
+        let row = Row::new(l.pick(region.name()));
+        match kept.filter(|&at| TIME_ZONES[at].region == Some(region)) {
+            Some(at) => row.trail(Trail::Value(l.pick(TIME_ZONES[at].name))),
+            None => row,
+        }
+    });
+    let regions = widgets::list(&mut c, t, f, y, &rows);
+    out.extend(hits(&regions.rows, &Region::ALL.map(|region| Action::Open(Screen::TimeZones(region)))));
+    let utc = listed(UTC).expect("UTC is a zone listed");
+    let offset = fmt::utc_offset(s.now, fmt::rules(utc));
+    let universal = Row::new(l.pick(TIME_ZONES[utc].name)).subtitle(&offset).trail(Trail::Check(kept == Some(utc)));
+    let universal = widgets::list(&mut c, t, f, regions.bottom + t.m.card_gap, &[universal]);
+    out.extend(hits(&universal.rows, &[Action::TimeZone(utc)]));
+    let bottom = widgets::footnote(&mut c, t, f, universal.bottom, l.pick(texts::time_zone::NOTE));
+    Frame::new(t, fit(c, t, bottom), out, l.pick(texts::page::TIME_ZONE), top)
 }
 
 /// Saving the logs, as a bug report asks for them.
@@ -6436,7 +6459,7 @@ pub fn vbmeta(cx: &Ctx) -> Frame {
             let said: Vec<(String, String)> = copies
                 .iter()
                 .map(|copy| {
-                    let when = fmt::datetime(l, copy.made, s.time_zone);
+                    let when = fmt::datetime(l, copy.made, s.zone());
                     let slot = match copy.suffix.as_str() {
                         "" => l.pick(crate::lang::legacy(["单槽位", "單槽位", "one slot"])).to_string(),
                         suffix => {
@@ -6706,4 +6729,21 @@ mod tests {
             "Flashed to boot in slots A and B."
         );
     }
+}
+
+/// The time zones of one part of the world, from the one furthest behind
+/// UTC now to the one furthest ahead, each with how far that is and the
+/// cities it is known by.
+pub fn time_zones(cx: &Ctx, region: Region) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let mut zones: Vec<usize> = (0..TIME_ZONES.len()).filter(|&at| TIME_ZONES[at].region == Some(region)).collect();
+    zones.sort_by_key(|&at| fmt::utc_offset_seconds(s.now, fmt::rules(at)));
+    let lines: Vec<String> = zones.iter().map(|&at| format!("{} · {}", fmt::utc_offset(s.now, fmt::rules(at)), l.pick(TIME_ZONES[at].cities))).collect();
+    let kept = s.zone_listed();
+    let rows: Vec<Row> = zones.iter().zip(&lines).map(|(&at, line)| Row::new(l.pick(TIME_ZONES[at].name)).subtitle(line).trail(Trail::Check(kept == Some(at)))).collect();
+    let list = widgets::list(&mut c, t, f, top, &rows);
+    let picks: Vec<Action> = zones.iter().map(|&at| Action::TimeZone(at)).collect();
+    Frame::new(t, fit(c, t, list.bottom), hits(&list.rows, &picks), l.pick(region.name()), top)
 }

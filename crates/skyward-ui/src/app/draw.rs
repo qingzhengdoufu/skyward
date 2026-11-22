@@ -220,7 +220,7 @@ impl App {
         if self.screen() == Screen::ControlCenter && self.state.control_clock != clock {
             self.state.control_clock = clock.into();
             if let Ok(time) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                self.state.control_date = fmt::date(self.state.lang, time.as_secs() as i64, self.state.time_zone);
+                self.state.control_date = fmt::date(self.state.lang, time.as_secs() as i64, self.state.zone());
             }
             self.refresh();
         }

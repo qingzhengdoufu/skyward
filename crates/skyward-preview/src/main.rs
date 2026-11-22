@@ -11,7 +11,7 @@ use skyward_net::wlan::{Bands, Joined, Link, Network, Power, Stage as Joining, T
 use skyward_systems::{Named, Other, Overview, Who};
 use skyward_ui::app::{
     Action, Adding, App, Asked, BackupAt, BackupEnd, BackupEntry, BackupJob, BackupRefusal, BrowserDownload, BrowserSave, BrowserView,
-    Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have,
+    Region, State, listed, Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have,
     Held, Install, ItemEnd, JobEnd, Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, SCREEN_OFF, Screen,
     SkywardEnd, SkywardJob, SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
 };
@@ -696,7 +696,7 @@ fn main() -> Result<()> {
         };
         BackupEntry {
             place,
-            name: fmt::stamp(made, 0),
+            name: fmt::stamp(made, State::default().zone()),
             held: Ok(held),
             image: None,
         }
@@ -813,7 +813,7 @@ fn main() -> Result<()> {
             choosing,
         });
     };
-    let pages: [PageShot; 178] = [
+    let pages: [PageShot; 185] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked {
                 user: 0,
@@ -1588,8 +1588,21 @@ fn main() -> Result<()> {
             app.term_ended(TermEnd::Exited(0));
         }),
         ("55-language-light", Screen::Language, false, &|_| {}),
-        ("56-time-zone-light", Screen::TimeZone, false, &|_| {}),
-        ("56-time-zone-dark-london", Screen::TimeZone, true, &|app| app.state.time_zone = 5),
+        ("56-time-zone-light-system", Screen::TimeZone, false, &|app| app.set_system_zone("Asia/Shanghai").expect("a zone the recovery carries")),
+        ("56-time-zone-light-system-unlisted", Screen::TimeZone, false, &|app| app.set_system_zone("Asia/Kabul").expect("a zone the recovery carries")),
+        ("56-time-zone-dark-chosen", Screen::TimeZone, true, &|app| {
+            app.set_system_zone("Europe/Rome").expect("a zone the recovery carries");
+            app.state.follow_system_zone = false;
+            app.state.time_zone = listed("Europe/London").expect("London is listed");
+        }),
+        ("56-time-zone-light-no-system", Screen::TimeZone, false, &|_| {}),
+        ("56-time-zones-light-americas", Screen::TimeZones(Region::Americas), false, &|_| {}),
+        ("56-time-zones-dark-europe-africa", Screen::TimeZones(Region::EuropeAfrica), true, &|app| {
+            app.state.time_zone = listed("Europe/London").expect("London is listed");
+        }),
+        ("56-time-zones-light-russia", Screen::TimeZones(Region::Russia), false, &|_| {}),
+        ("56-time-zones-light-asia", Screen::TimeZones(Region::Asia), false, &|_| {}),
+        ("56-time-zones-light-oceania", Screen::TimeZones(Region::Oceania), false, &|_| {}),
         ("57-logs-light", Screen::Logs, false, &|_| {}),
         ("113-update-light-waiting", Screen::Update, false, &|app| {
             app.set_update(Standing::Waiting)
@@ -2604,6 +2617,7 @@ fn opened(screen: Screen, w: u32, h: u32, ppd: f32) -> App {
     let mut app = App::new(screen, w, h, ppd);
     app.state.lang = lang();
     app.state.data = Data::Open;
+    app.set_now(LISTED);
     app
 }
 
@@ -2664,6 +2678,7 @@ fn haotian(cfg: &DeviceConfig) -> DeviceInfo {
         os_version: Some("OS4.0.0.19.XOBCNXM".into()),
         android: Some("17".into()),
         locale: Some("zh-CN".into()),
+        time_zone: Some("Asia/Shanghai".into()),
         security_patch: Some(PatchLevel {
             year: 2026,
             month: 9,
