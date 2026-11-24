@@ -82,6 +82,14 @@ in crates/skyward-browser/NOTICE.md still apply.
 
 ## Offline Results
 
+The reproducible local entry point is scripts/build-miro-local.sh. It takes
+the stock303 image, the existing pinned runtime/jail and a new output folder.
+It runs checks and packs locally, with no phone commands or upload steps.
+The private browser inputs are not downloaded automatically or redistributed.
+The host needs Rust 1.100.0, cargo-ndk 4.1.2, NDK r29, a C++ compiler and the
+normal Cargo native build prerequisites. Set ANDROID_NDK_HOME and invoke it
+with bash from Linux or the existing WSL build environment.
+
 - 1722 passing test invocations, 3 existing ignored invocations.
 - 485 UI tests in both workspace and AERA-feature runs.
 - Host and Android all-target Clippy passed with warnings denied.
