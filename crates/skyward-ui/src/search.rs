@@ -1,5 +1,5 @@
 use crate::app::Screen;
-use crate::lang::{same, Lang, Text};
+use crate::lang::{Lang, Text, same};
 use crate::texts::{self, page, search::keys};
 use unicode_script::{Script, UnicodeScript};
 
@@ -18,7 +18,12 @@ pub struct Entry {
 }
 
 const fn entry(title: Text, place: Text, screen: Screen, keys: Text) -> Entry {
-    Entry { title, place, screen, keys }
+    Entry {
+        title,
+        place,
+        screen,
+        keys,
+    }
 }
 
 /// A title as the keyboard can type it: in small letters, each Latin
@@ -36,7 +41,12 @@ fn typed(title: &str) -> String {
 
 /// A partition, named the same in every language.
 const fn partition(name: &'static str, place: Text, screen: Screen) -> Entry {
-    Entry { title: same(name), place, screen, keys: same("") }
+    Entry {
+        title: same(name),
+        place,
+        screen,
+        keys: same(""),
+    }
 }
 
 const HOME: Text = page::HOME;
@@ -50,14 +60,24 @@ pub const ENTRIES: &[Entry] = &[
     entry(page::DUAL_BOOT, HOME, Screen::Systems, keys::DUAL_BOOT),
     entry(INSTALL, HOME, Screen::Install, keys::INSTALL),
     entry(texts::install::title::FROM_STORAGE, INSTALL, Screen::Install, keys::FROM_STORAGE),
-    entry(texts::install::title::FROM_USB_DRIVE, INSTALL, Screen::Install, keys::FROM_USB_DRIVE),
+    entry(
+        texts::install::title::FROM_USB_DRIVE,
+        INSTALL,
+        Screen::Install,
+        keys::FROM_USB_DRIVE,
+    ),
     entry(texts::install::title::FROM_COMPUTER, INSTALL, Screen::Install, keys::FROM_COMPUTER),
     entry(page::BACKUP, HOME, Screen::Backup, keys::BACKUP),
     entry(page::RESTORE, HOME, Screen::Restore, keys::RESTORE),
     entry(MOUNT, HOME, Screen::Mount, keys::MOUNT),
     entry(page::WIPE, HOME, Screen::Wipe, keys::WIPE),
     entry(ADVANCED, HOME, Screen::Advanced, keys::ADVANCED),
-    entry(crate::lang::legacy(["AVB 校验", "AVB 驗證", "AVB verification"]), ADVANCED, Screen::Avb, crate::lang::same("avb verity vbmeta jiaoyan verification")),
+    entry(
+        crate::lang::legacy(["AVB 校验", "AVB 驗證", "AVB verification"]),
+        ADVANCED,
+        Screen::Avb,
+        crate::lang::same("avb verity vbmeta jiaoyan verification"),
+    ),
     entry(page::FILES, ADVANCED, Screen::Files, keys::FILES),
     entry(page::TERMINAL, ADVANCED, Screen::Terminal, keys::TERMINAL),
     entry(page::RELABEL, ADVANCED, Screen::Relabel, keys::RELABEL),
@@ -68,8 +88,18 @@ pub const ENTRIES: &[Entry] = &[
     entry(texts::settings::DARK_MODE, SETTINGS, Screen::Settings, keys::DARK_MODE),
     entry(texts::settings::SCREEN_BRIGHTNESS, SETTINGS, Screen::Settings, keys::BRIGHTNESS),
     entry(page::SCREEN_TIMEOUT, SETTINGS, Screen::ScreenOff, keys::SCREEN_TIMEOUT),
-    entry(crate::lang::legacy(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"]), SETTINGS, Screen::Settings, crate::lang::same("shuangjiliangping sjlp doubletap wake")),
-    entry(texts::settings::VIBRATION_INTENSITY, SETTINGS, Screen::Settings, keys::VIBRATION_INTENSITY),
+    entry(
+        crate::lang::legacy(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"]),
+        SETTINGS,
+        Screen::Settings,
+        crate::lang::same("shuangjiliangping sjlp doubletap wake"),
+    ),
+    entry(
+        texts::settings::VIBRATION_INTENSITY,
+        SETTINGS,
+        Screen::Settings,
+        keys::VIBRATION_INTENSITY,
+    ),
     entry(texts::settings::TOUCH_VIBRATION, SETTINGS, Screen::Settings, keys::TOUCH_VIBRATION),
     entry(texts::settings::FILE_TRANSFER, SETTINGS, Screen::Settings, keys::FILE_TRANSFER),
     entry(page::LANGUAGE, SETTINGS, Screen::Language, keys::LANGUAGE),
@@ -167,7 +197,13 @@ mod tests {
     #[test]
     fn the_wlan_is_found_where_the_phone_has_it() {
         assert_eq!(titles("wifi"), ["WLAN"]);
-        assert_eq!(find_on("wlan", Lang::Hans, |_| true).iter().map(|e| Lang::Hans.pick(e.title)).collect::<Vec<_>>(), ["WLAN"]);
+        assert_eq!(
+            find_on("wlan", Lang::Hans, |_| true)
+                .iter()
+                .map(|e| Lang::Hans.pick(e.title))
+                .collect::<Vec<_>>(),
+            ["WLAN"]
+        );
         assert!(find_on("wlan", Lang::Hans, |s| s != Screen::Wlan).is_empty());
         assert_eq!(titles("xiazai"), ["系统更新", "Skyward 更新"]);
     }
@@ -176,7 +212,10 @@ mod tests {
     fn the_second_system_is_found_where_the_phone_can_hold_one() {
         assert_eq!(titles("sxt"), ["双系统"]);
         assert_eq!(titles("qiehuan"), ["双系统"]);
-        assert_eq!(find("dual", Lang::En).iter().map(|e| Lang::En.pick(e.title)).collect::<Vec<_>>(), ["Dual boot"]);
+        assert_eq!(
+            find("dual", Lang::En).iter().map(|e| Lang::En.pick(e.title)).collect::<Vec<_>>(),
+            ["Dual boot"]
+        );
         assert!(find_on("shuangxitong", Lang::Hans, |s| s != Screen::Systems).is_empty());
     }
 
@@ -195,7 +234,10 @@ mod tests {
         assert_eq!(english("wi-fi"), ["Wi-Fi"]);
         let traditional = find("設定", Lang::Hant);
         assert_eq!(traditional.first().map(|e| Lang::Hant.pick(e.title)), Some("設定"));
-        assert!(find("设置", Lang::Hant).is_empty(), "the simplified title belongs to the other script");
+        assert!(
+            find("设置", Lang::Hant).is_empty(),
+            "the simplified title belongs to the other script"
+        );
     }
 
     #[test]
@@ -203,7 +245,11 @@ mod tests {
         assert!(find("beifen", Lang::En).is_empty(), "pinyin is Chinese's own");
         for l in Lang::ALL {
             let found: Vec<Screen> = find("sideload", l).iter().map(|e| e.screen).collect();
-            assert_eq!(found, [Screen::Install], "{l:?} finds installing from a computer by the name every language borrows");
+            assert_eq!(
+                found,
+                [Screen::Install],
+                "{l:?} finds installing from a computer by the name every language borrows"
+            );
         }
     }
 
@@ -219,7 +265,10 @@ mod tests {
             for e in ENTRIES {
                 let title = typed(l.pick(e.title));
                 let found = find(&title, l);
-                assert!(found.iter().any(|f| f.screen == e.screen && l.pick(f.title) == l.pick(e.title)), "{l:?} finds {title:?} by its own title");
+                assert!(
+                    found.iter().any(|f| f.screen == e.screen && l.pick(f.title) == l.pick(e.title)),
+                    "{l:?} finds {title:?} by its own title"
+                );
             }
         }
     }
@@ -229,8 +278,14 @@ mod tests {
         for l in Lang::ALL {
             for e in ENTRIES {
                 let keys = l.pick(e.keys);
-                assert!(keys.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == ' '), "{l:?} gives {keys:?}");
-                assert!(!keys.starts_with(' ') && !keys.ends_with(' ') && !keys.contains("  "), "{l:?} gives {keys:?}");
+                assert!(
+                    keys.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == ' '),
+                    "{l:?} gives {keys:?}"
+                );
+                assert!(
+                    !keys.starts_with(' ') && !keys.ends_with(' ') && !keys.contains("  "),
+                    "{l:?} gives {keys:?}"
+                );
             }
         }
     }

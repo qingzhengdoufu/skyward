@@ -1,6 +1,6 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use skyward_config::DeviceConfig;
-use skyward_sys::{prop, ToldOnce};
+use skyward_sys::{ToldOnce, prop};
 use skyward_vab::{Slot, SnapshotState};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -69,8 +69,14 @@ impl FromStr for PatchLevel {
 
     fn from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split('-').collect();
-        let [y, m, d] = parts.as_slice() else { bail!("security patch {s:?} is not YYYY-MM-DD") };
-        let level = PatchLevel { year: parse(y, "patch year")?, month: parse(m, "patch month")?, day: parse(d, "patch day")? };
+        let [y, m, d] = parts.as_slice() else {
+            bail!("security patch {s:?} is not YYYY-MM-DD")
+        };
+        let level = PatchLevel {
+            year: parse(y, "patch year")?,
+            month: parse(m, "patch month")?,
+            day: parse(d, "patch day")?,
+        };
         if !(1..=12).contains(&level.month) || !(1..=31).contains(&level.day) {
             bail!("security patch {s:?} is not a date");
         }
@@ -171,7 +177,10 @@ pub fn collect_with(cfg: &DeviceConfig, battery: Option<Battery>) -> Result<Devi
         battery,
         slot: skyward_vab::current_slot()?,
         snapshot: skyward_vab::snapshot_state()?,
-        boot: Boot { unlocked, verified: skyward_block::boot_param("androidboot.verifiedbootstate")? },
+        boot: Boot {
+            unlocked,
+            verified: skyward_block::boot_param("androidboot.verifiedbootstate")?,
+        },
     })
 }
 
@@ -213,7 +222,11 @@ pub fn kept_time_zone(data: &Path) -> Result<Option<String>> {
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
     let kept = KeptProps::decode(bytes.as_slice()).with_context(|| format!("read {} as init's kept properties", path.display()))?;
-    let zone = kept.properties.into_iter().find(|p| p.name.as_deref() == Some(TIME_ZONE)).and_then(|p| p.value);
+    let zone = kept
+        .properties
+        .into_iter()
+        .find(|p| p.name.as_deref() == Some(TIME_ZONE))
+        .and_then(|p| p.value);
     Ok(zone.filter(|zone| !zone.is_empty()))
 }
 
@@ -239,7 +252,10 @@ impl SystemProps {
         };
         let why = read.as_ref().err().map(|e| format!("{e:#}"));
         if PROPS_UNREAD.lock().expect("nothing panics while it is held").untold(why.as_deref()) {
-            let _ = skyward_sys::kmsg(&format!("the installed system's properties could not be read; continuing without them: {}", why.unwrap_or_default()));
+            let _ = skyward_sys::kmsg(&format!(
+                "the installed system's properties could not be read; continuing without them: {}",
+                why.unwrap_or_default()
+            ));
         }
         Ok(SystemProps::Installed(read.unwrap_or_default()))
     }
@@ -254,7 +270,16 @@ impl SystemProps {
 
 /// The order init reads build.prop files in at boot; later files override
 /// earlier ones.
-const PROP_ORDER: [&str; 8] = ["system", "system_ext", "system_dlkm", "vendor", "vendor_dlkm", "odm_dlkm", "odm", "product"];
+const PROP_ORDER: [&str; 8] = [
+    "system",
+    "system_ext",
+    "system_dlkm",
+    "vendor",
+    "vendor_dlkm",
+    "odm_dlkm",
+    "odm",
+    "product",
+];
 
 /// What init names the properties the bootloader passes.
 const BOOT_PROPS: &str = "ro.boot.";
@@ -267,7 +292,10 @@ const BOOT_PROPS: &str = "ro.boot.";
 /// they come first here too, the same in a recovery as in the system.
 pub fn installed_props(slot: Slot) -> Result<HashMap<String, String>> {
     let base = |m: &skyward_vab::Mounted| -> String {
-        m.partition.strip_suffix(slot.suffix()).expect("mounted partitions carry the slot suffix").to_string()
+        m.partition
+            .strip_suffix(slot.suffix())
+            .expect("mounted partitions carry the slot suffix")
+            .to_string()
     };
     let mut parts = skyward_vab::mounted_partitions(slot)?;
     parts.sort_by_key(|m| PROP_ORDER.iter().position(|b| *b == base(m)).unwrap_or(PROP_ORDER.len()));
@@ -294,7 +322,10 @@ pub fn installed_props(slot: Slot) -> Result<HashMap<String, String>> {
 
 fn read(path: impl AsRef<Path>) -> Result<String> {
     let p = path.as_ref();
-    Ok(fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?.trim().to_string())
+    Ok(fs::read_to_string(p)
+        .with_context(|| format!("read {}", p.display()))?
+        .trim()
+        .to_string())
 }
 
 /// `None` when the file does not exist; any other failure is an error.
@@ -330,7 +361,10 @@ fn cpu(root: &Path) -> Result<Cpu> {
             max_khz = Some(max_khz.map_or(khz, |m| m.max(khz)));
         }
     }
-    Ok(Cpu { cores: ids.len() as u32, max_khz })
+    Ok(Cpu {
+        cores: ids.len() as u32,
+        max_khz,
+    })
 }
 
 /// Kernel cpulist syntax: comma-separated ids and inclusive ranges (`0-3,6`).
@@ -377,8 +411,15 @@ fn storage() -> Result<Storage> {
     let dev = fs::canonicalize(&link).with_context(|| format!("resolve {}", link.display()))?;
     let name = dev.file_name().ok_or_else(|| anyhow!("{} has no device name", dev.display()))?;
     let sectors: u64 = parse(&read(Path::new(SYS_BLOCK).join(name).join("size"))?, "block size")?;
-    let free = if is_mountpoint(Path::new("/data"))? { Some(free_bytes("/data")?) } else { None };
-    Ok(Storage { total: sectors * 512, free })
+    let free = if is_mountpoint(Path::new("/data"))? {
+        Some(free_bytes("/data")?)
+    } else {
+        None
+    };
+    Ok(Storage {
+        total: sectors * 512,
+        free,
+    })
 }
 
 /// A directory is a mountpoint when it lives on a different filesystem from
@@ -448,7 +489,8 @@ fn battery(root: &Path) -> Result<Option<Battery>> {
         voltage: parse_opt(dir.join("voltage_now"), "voltage_now")?,
         // How quickly the charger charges: 0 normally, then fast, flash,
         // turbo and super, which the stock SystemUI all counts quick.
-        quick: parse_opt::<u8>(root.with_file_name("qcom-battery").join("quick_charge_type"), "quick_charge_type")?.is_some_and(|k| (1..=4).contains(&k)),
+        quick: parse_opt::<u8>(root.with_file_name("qcom-battery").join("quick_charge_type"), "quick_charge_type")?
+            .is_some_and(|k| (1..=4).contains(&k)),
         plugged,
     }))
 }
@@ -496,15 +538,31 @@ mod tests {
     #[test]
     fn the_time_zone_the_system_is_set_to_is_read_from_what_init_keeps() {
         use prost::Message;
-        let record = |name: &str, value: &str| KeptProp { name: Some(name.into()), value: Some(value.into()) };
+        let record = |name: &str, value: &str| KeptProp {
+            name: Some(name.into()),
+            value: Some(value.into()),
+        };
         let data = tempfile::tempdir().unwrap();
         assert_eq!(kept_time_zone(data.path()).unwrap(), None, "a data partition made afresh");
         let file = data.path().join(KEPT_PROPS);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let kept = KeptProps { properties: vec![record("persist.sys.locale", "tr-TR"), record(TIME_ZONE, "Europe/Istanbul"), record("persist.sys.timezone_confidence", "100")] };
+        let kept = KeptProps {
+            properties: vec![
+                record("persist.sys.locale", "tr-TR"),
+                record(TIME_ZONE, "Europe/Istanbul"),
+                record("persist.sys.timezone_confidence", "100"),
+            ],
+        };
         fs::write(&file, kept.encode_to_vec()).unwrap();
         assert_eq!(kept_time_zone(data.path()).unwrap().as_deref(), Some("Europe/Istanbul"));
-        fs::write(&file, KeptProps { properties: vec![record("persist.sys.locale", "tr-TR"), record(TIME_ZONE, "")] }.encode_to_vec()).unwrap();
+        fs::write(
+            &file,
+            KeptProps {
+                properties: vec![record("persist.sys.locale", "tr-TR"), record(TIME_ZONE, "")],
+            }
+            .encode_to_vec(),
+        )
+        .unwrap();
         assert_eq!(kept_time_zone(data.path()).unwrap(), None, "a system that has set none");
         fs::write(&file, [0xff, 0xff, 0xff]).unwrap();
         assert!(kept_time_zone(data.path()).is_err(), "a file that is not init's");
@@ -513,7 +571,14 @@ mod tests {
     #[test]
     fn patch_level_parses_dates_only() {
         let p: PatchLevel = "2026-10-01".parse().unwrap();
-        assert_eq!(p, PatchLevel { year: 2026, month: 10, day: 1 });
+        assert_eq!(
+            p,
+            PatchLevel {
+                year: 2026,
+                month: 10,
+                day: 1
+            }
+        );
         assert!("2026-13-01".parse::<PatchLevel>().is_err());
         assert!("2026-10".parse::<PatchLevel>().is_err());
         assert!("October 2026".parse::<PatchLevel>().is_err());
@@ -535,7 +600,11 @@ mod tests {
             fs::write(bat.join(name), format!("{value}\n")).unwrap();
         }
         let b = battery(&supplies).unwrap().expect("a battery");
-        assert_eq!((b.level, b.temp, b.quick), (96, Some(377), false), "a phone that does not tell charges as it may");
+        assert_eq!(
+            (b.level, b.temp, b.quick),
+            (96, Some(377), false),
+            "a phone that does not tell charges as it may"
+        );
         let qcom = class.path().join("qcom-battery");
         fs::create_dir_all(&qcom).unwrap();
         fs::write(qcom.join("quick_charge_type"), "0\n").unwrap();
@@ -559,7 +628,10 @@ mod tests {
         supply("battery", &[("type", "Battery"), ("status", "Discharging"), ("capacity", "80")]);
         supply("usb", &[("type", "USB"), ("online", "0")]);
         supply("wireless", &[("type", "Wireless"), ("online", "0")]);
-        supply("ucsi-source-psy-soc:qcom,pmic_glink:qcom,ucsi1", &[("type", "USB"), ("online", "0")]);
+        supply(
+            "ucsi-source-psy-soc:qcom,pmic_glink:qcom,ucsi1",
+            &[("type", "USB"), ("online", "0")],
+        );
         assert!(!battery(&supplies).unwrap().expect("a battery").plugged, "on its battery alone");
         supply("usb", &[("type", "USB_PD"), ("online", "1")]);
         supply("ucsi-source-psy-soc:qcom,pmic_glink:qcom,ucsi1", &[("online", "1")]);
@@ -575,8 +647,17 @@ mod tests {
         use std::io::Error;
         assert!(said_online(Ok("1\n".into())).unwrap());
         assert!(!said_online(Ok("0\n".into())).unwrap());
-        assert!(!said_online(Err(Error::from(ErrorKind::WouldBlock))).unwrap(), "Qualcomm's USB-C connector early in a boot");
-        assert!(!said_online(Err(Error::from(ErrorKind::NotFound))).unwrap(), "a supply without the file");
-        assert!(said_online(Err(Error::from(ErrorKind::PermissionDenied))).is_err(), "anything else is an error");
+        assert!(
+            !said_online(Err(Error::from(ErrorKind::WouldBlock))).unwrap(),
+            "Qualcomm's USB-C connector early in a boot"
+        );
+        assert!(
+            !said_online(Err(Error::from(ErrorKind::NotFound))).unwrap(),
+            "a supply without the file"
+        );
+        assert!(
+            said_online(Err(Error::from(ErrorKind::PermissionDenied))).is_err(),
+            "anything else is an error"
+        );
     }
 }

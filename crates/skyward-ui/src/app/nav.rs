@@ -127,10 +127,7 @@ impl App {
             Screen::Slot => self.state.next_slot = None,
             Screen::Systems => {
                 if self.state.systems_work.is_some() {
-                    self.say(
-                        l.pick(crate::texts::toast::back::WRITING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::WRITING), now);
                     return fx;
                 }
                 self.state.system_pick = None;
@@ -155,10 +152,7 @@ impl App {
                 let changed = self.state.editor.as_ref().expect("the editor page shows a file").changed;
                 if changed && self.unsaved_warned.is_none_or(|at| now >= at + TOAST_MS) {
                     self.unsaved_warned = Some(now);
-                    self.say(
-                        l.pick(crate::texts::toast::back::UNSAVED),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::UNSAVED), now);
                     return fx;
                 }
                 self.state.editor = None;
@@ -199,10 +193,7 @@ impl App {
             }
             Screen::PartWork => {
                 if self.state.part_work.as_ref().is_some_and(|w| w.outcome.is_none()) {
-                    self.say(
-                        l.pick(crate::texts::toast::back::WAIT),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::WAIT), now);
                     return fx;
                 }
                 self.state.part_work = None;
@@ -214,10 +205,7 @@ impl App {
             }
             Screen::SkywardUpdate => match self.state.skyward_job.as_ref().filter(|j| j.outcome.is_none()).map(|j| j.stage) {
                 Some(Some(SkywardStage::Write { .. })) => {
-                    self.say(
-                        l.pick(crate::texts::toast::back::WRITING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::WRITING), now);
                     return fx;
                 }
                 Some(_) => {
@@ -252,31 +240,19 @@ impl App {
                     fx.push(Effect::Cancel);
                 }
                 Install::Checking { .. } => {
-                    self.say(
-                        l.pick(crate::texts::toast::back::READING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::READING), now);
                     return fx;
                 }
                 Install::Updating { .. } | Install::Scripting { .. } => {
-                    self.say(
-                        l.pick(crate::texts::toast::back::INSTALLING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::INSTALLING), now);
                     return fx;
                 }
                 Install::Flashing { .. } => {
-                    self.say(
-                        l.pick(crate::texts::toast::back::FLASHING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::FLASHING), now);
                     return fx;
                 }
                 Install::Systeming { .. } => {
-                    self.say(
-                        l.pick(crate::texts::toast::back::INSTALLING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::INSTALLING), now);
                     return fx;
                 }
                 Install::Opening => {
@@ -284,10 +260,7 @@ impl App {
                     return fx;
                 }
                 Install::Wiping => {
-                    self.say(
-                        l.pick(crate::texts::toast::back::WIPING),
-                        now,
-                    );
+                    self.say(l.pick(crate::texts::toast::back::WIPING), now);
                     return fx;
                 }
                 Install::Starting

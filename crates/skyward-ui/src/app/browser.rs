@@ -796,7 +796,10 @@ impl App {
                     return Vec::new();
                 }
                 if !self.state.data.storage_open() {
-                    self.say(l.pick(crate::lang::legacy(["请先解密 data", "請先解密 data", "Decrypt data first"])), now);
+                    self.say(
+                        l.pick(crate::lang::legacy(["请先解密 data", "請先解密 data", "Decrypt data first"])),
+                        now,
+                    );
                     return Vec::new();
                 }
                 self.state.browser.plugin_download = Some(PluginDownload {

@@ -40,7 +40,11 @@ fn laid(root: &Path) -> Laid {
     put(&laid.system, "libdeep.so");
     put(&laid.system, "libshared.so");
     put(&laid.bootstrap, "libbootstrap.so");
-    std::os::unix::fs::symlink("/apex/com.android.runtime/lib64/bionic/libbootstrap.so", laid.system.join("libbootstrap.so")).unwrap();
+    std::os::unix::fs::symlink(
+        "/apex/com.android.runtime/lib64/bionic/libbootstrap.so",
+        laid.system.join("libbootstrap.so"),
+    )
+    .unwrap();
     laid
 }
 
@@ -58,7 +62,14 @@ fn what_the_loader_finds_in_none_of_its_folders_is_found_in_the_others() {
     let loader = [laid.own.clone(), root.path().join("odm/lib64"), root.path().join("vendor/lib64")];
     let others = [laid.own.clone(), laid.system.clone(), laid.bootstrap.clone()];
     let found = loaded::beyond(&laid.program, &loader, &others, &laid.own).unwrap();
-    let expected = Beyond { elsewhere: vec![laid.system.join("libshared.so"), laid.system.join("libdeep.so"), laid.bootstrap.join("libbootstrap.so")], nowhere: vec!["libgone.so".into()] };
+    let expected = Beyond {
+        elsewhere: vec![
+            laid.system.join("libshared.so"),
+            laid.system.join("libdeep.so"),
+            laid.bootstrap.join("libbootstrap.so"),
+        ],
+        nowhere: vec!["libgone.so".into()],
+    };
     assert_eq!(found, expected);
 }
 
@@ -74,7 +85,13 @@ fn what_is_put_in_the_loader_s_folder_is_found_there() {
     for file in loaded::beyond(&laid.program, &loader, &others, &laid.own).unwrap().elsewhere {
         std::fs::copy(&file, laid.own.join(file.file_name().unwrap())).unwrap();
     }
-    assert_eq!(loaded::beyond(&laid.program, &loader, &others, &laid.own).unwrap(), Beyond { elsewhere: Vec::new(), nowhere: vec!["libgone.so".into()] });
+    assert_eq!(
+        loaded::beyond(&laid.program, &loader, &others, &laid.own).unwrap(),
+        Beyond {
+            elsewhere: Vec::new(),
+            nowhere: vec!["libgone.so".into()]
+        }
+    );
 }
 
 /// A library found elsewhere names its folders from where it is to be
@@ -84,7 +101,13 @@ fn a_library_found_elsewhere_names_its_folders_from_where_it_is_put() {
     let root = tempfile::tempdir().unwrap();
     let laid = laid(root.path());
     put(&laid.system.join("extra/lib64"), "libextra.so");
-    let found = loaded::beyond(&laid.program, std::slice::from_ref(&laid.own), &[laid.system.clone(), laid.bootstrap.clone()], &laid.own).unwrap();
+    let found = loaded::beyond(
+        &laid.program,
+        std::slice::from_ref(&laid.own),
+        &[laid.system.clone(), laid.bootstrap.clone()],
+        &laid.own,
+    )
+    .unwrap();
     assert_eq!(found.nowhere, ["libgone.so", "libextra.so"]);
 }
 

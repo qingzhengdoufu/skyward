@@ -16,8 +16,8 @@ use crate::ota::{self, Log, Status};
 use crate::package::{self, Build, Package, Phone, Update};
 use crate::script::{self, Bar, Request};
 use crate::signature::{self, Verdict};
-use crate::{Avb, Command, Event, Failure, Options, Outcome, Reflash, Refusal, Stage, ENGINE_LOG, SCRIPT_LOG};
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use crate::{Avb, Command, ENGINE_LOG, Event, Failure, Options, Outcome, Reflash, Refusal, SCRIPT_LOG, Stage};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use skyward_sys::worker::{Teller, Worker};
 use skyward_sys::{kmsg, prop};
 use skyward_vab::{Slot, SlotMaps, SnapshotState};
@@ -25,13 +25,13 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -150,7 +150,15 @@ impl Installer {
         let shared = Arc::new(Shared::default());
         let theirs = shared.clone();
         let worker = Worker::start("installer", move |events| {
-            let mut ctx = Context { events, commands: command_rx, shared: theirs, detach: Some(detach), options, origin, local: None };
+            let mut ctx = Context {
+                events,
+                commands: command_rx,
+                shared: theirs,
+                detach: Some(detach),
+                options,
+                origin,
+                local: None,
+            };
             let outcome = work(&mut ctx);
             let _ = kmsg(&format!("install: {outcome:?}"));
             ctx.send(Event::Finished(outcome));
@@ -313,7 +321,10 @@ enum Done {
     Engine(i32),
     /// The install script ended with this status; `wipe_cache` when it
     /// asked for the cache partition to be erased after.
-    Script { code: i32, wipe_cache: bool },
+    Script {
+        code: i32,
+        wipe_cache: bool,
+    },
     Error(anyhow::Error),
 }
 
@@ -323,7 +334,8 @@ enum Done {
 fn receive(ctx: &mut Context, mut conn: Connection<Endpoints>, offer: Offer, rescue: bool) -> (Outcome, Option<Connection<Endpoints>>) {
     let _ = kmsg(&format!("install: {} bytes offered in blocks of {}", offer.size, offer.block_size));
     let ending = |outcome: &Outcome| match (rescue, outcome) {
-        (true, Outcome::Installed { .. } | Outcome::Flashed { .. } | Outcome::Ran { .. } | Outcome::SystemInstalled { .. }) | (false, _) => adb::DONE,
+        (true, Outcome::Installed { .. } | Outcome::Flashed { .. } | Outcome::Ran { .. } | Outcome::SystemInstalled { .. })
+        | (false, _) => adb::DONE,
         (true, _) => adb::FAILED,
     };
     if let Err(e) = offer.check() {
@@ -387,13 +399,7 @@ fn run_mapped(ctx: &mut Context, map: &Path) -> Outcome {
 
 /// Serve a package the phone holds, which `path` names, and install it. It
 /// is served under `name` beside package.zip where there is one.
-fn serve_local<S: fuse::Source + Send + 'static>(
-    ctx: &mut Context,
-    source: S,
-    offer: Offer,
-    path: &Path,
-    name: Option<Name>,
-) -> Outcome {
+fn serve_local<S: fuse::Source + Send + 'static>(ctx: &mut Context, source: S, offer: Offer, path: &Path, name: Option<Name>) -> Outcome {
     if offer.size == 0 {
         return Outcome::Refused(Refusal::Unknown);
     }
@@ -530,7 +536,9 @@ fn conclude(done: Done, served: Result<Option<Fault>>, origin: Origin) -> Outcom
         // to read past.
         (Done::Script { code: 0, wipe_cache }, served) => {
             if !matches!(served, Ok(None)) {
-                let _ = kmsg(&format!("install: the package stopped being readable while the script ran: {served:?}"));
+                let _ = kmsg(&format!(
+                    "install: the package stopped being readable while the script ran: {served:?}"
+                ));
             }
             Outcome::Ran { wipe_cache }
         }
@@ -560,7 +568,12 @@ fn install<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done> {
             _ => Refusal::Image,
         }))),
         Package::Image(image) => {
-            let name = ctx.local.as_ref().and_then(|p| p.file_name()).and_then(|name| name.to_str()).map(str::to_owned);
+            let name = ctx
+                .local
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|name| name.to_str())
+                .map(str::to_owned);
             flash_image(ctx, mount, &image, name.as_deref())
         }
         Package::Script => run_script(ctx, mount, size),
@@ -595,14 +608,21 @@ fn install_system(ctx: &Context, contents: &skyward_systems::package::Contents) 
     let room = skyward_systems::install::room_now(slot)?;
     let sizes = skyward_systems::install::sizes(contents.least(), room);
     if sizes.is_empty() {
-        return refused(Refusal::NoRoom { least: contents.least(), room });
+        return refused(Refusal::NoRoom {
+            least: contents.least(),
+            room,
+        });
     }
     // The screen may have left the page before it heard the package came.
     if ctx.shared.cancelled() {
         return Ok(Done::Decided(Outcome::Cancelled));
     }
     let name = contents.manifest.name.clone();
-    ctx.send(Event::System { name: name.clone(), version: contents.manifest.version.clone(), sizes: sizes.clone() });
+    ctx.send(Event::System {
+        name: name.clone(),
+        version: contents.manifest.version.clone(),
+        sizes: sizes.clone(),
+    });
     let size = match ctx.commands.recv() {
         Ok(Command::InstallSystem { size }) => size,
         Ok(Command::Cancel) | Err(_) => return Ok(Done::Decided(Outcome::Cancelled)),
@@ -611,7 +631,11 @@ fn install_system(ctx: &Context, contents: &skyward_systems::package::Contents) 
     ensure!(sizes.contains(&size), "{size} bytes is not among the sizes offered, {sizes:?}");
     let program = Path::new("/").join(skyward_config::ramdisk::SYSTEM_INIT);
     let program = fs::read(&program).with_context(|| format!("read {}", program.display()))?;
-    let mut zip = zip::ZipArchive::new(BufReader::with_capacity(1 << 20, File::open(fuse::PACKAGE).context("open the package")?)).context("read the package")?;
+    let mut zip = zip::ZipArchive::new(BufReader::with_capacity(
+        1 << 20,
+        File::open(fuse::PACKAGE).context("open the package")?,
+    ))
+    .context("read the package")?;
     let mut told: Option<Instant> = None;
     skyward_systems::install::install(&mut zip, contents, size, &program, slot, &mut |step| {
         let stage = match step {
@@ -619,13 +643,16 @@ fn install_system(ctx: &Context, contents: &skyward_systems::package::Contents) 
             skyward_systems::install::Step::Writing { done, total } => Stage::Root { done, total },
             skyward_systems::install::Step::Finishing => Stage::Storing,
         };
-        let last = matches!(stage, Stage::Storing) || matches!(stage, Stage::Allocating { done, total } | Stage::Root { done, total } if done == total);
+        let last = matches!(stage, Stage::Storing)
+            || matches!(stage, Stage::Allocating { done, total } | Stage::Root { done, total } if done == total);
         if last || told.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
             ctx.send(Event::Progress(stage));
             told = Some(Instant::now());
         }
     })?;
-    let _ = kmsg(&format!("install: {name} installed beside the installed system, with {size} bytes for its root"));
+    let _ = kmsg(&format!(
+        "install: {name} installed beside the installed system, with {size} bytes for its root"
+    ));
     Ok(Done::Decided(Outcome::SystemInstalled { name }))
 }
 
@@ -678,10 +705,15 @@ fn detach_once(ctx: &mut Context) -> Result<()> {
 fn describe(package: &Package) -> String {
     match package {
         Package::Update(u) => format!("an update to {}", u.version().unwrap_or("an unnamed version")),
-        Package::Image(image) if image.layout.sparse => format!("a sparse image of {:?}, {} bytes in its partition", image.kind, image.layout.size),
+        Package::Image(image) if image.layout.sparse => {
+            format!("a sparse image of {:?}, {} bytes in its partition", image.kind, image.layout.size)
+        }
         Package::Image(image) => format!("an image of {:?}", image.kind),
         Package::Script => "a zip with an install script".into(),
-        Package::System(c) => format!("the system {} {}, to install beside the installed one", c.manifest.name, c.manifest.version),
+        Package::System(c) => format!(
+            "the system {} {}, to install beside the installed one",
+            c.manifest.name, c.manifest.version
+        ),
         Package::Unknown => "a file of no known kind".into(),
     }
 }
@@ -705,7 +737,10 @@ fn update_system<S>(ctx: &mut Context, mount: &Mount<S>, update: &Update) -> Res
     let version = update.version().map(str::to_string);
     let wipe = update.wipes();
     if waits(ctx.origin, wipe) {
-        ctx.send(Event::Ready { version: version.clone(), wipe });
+        ctx.send(Event::Ready {
+            version: version.clone(),
+            wipe,
+        });
         match ctx.commands.recv() {
             Ok(Command::Install) => {}
             Ok(Command::Cancel) | Err(_) => return Ok(Done::Decided(Outcome::Cancelled)),
@@ -891,9 +926,16 @@ fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
         let now = if finishing {
             Stage::Finishing
         } else if let Some((index, partition)) = &verifying {
-            Stage::Verifying { index: *index, count: partitions.max(index + 1), partition: partition.clone() }
+            Stage::Verifying {
+                index: *index,
+                count: partitions.max(index + 1),
+                partition: partition.clone(),
+            }
         } else {
-            Stage::Writing { done: mount.followed(), total }
+            Stage::Writing {
+                done: mount.followed(),
+                total,
+            }
         };
         let moved_on = std::mem::discriminant(&now) != std::mem::discriminant(&stage);
         if now != stage && (moved_on || told.elapsed() >= PROGRESS_EVERY) {
@@ -904,8 +946,14 @@ fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
     };
     let ended = wait_engine(&mut child, &rx, &mut receive);
     stop.store(true, Ordering::Relaxed);
-    status.join().expect("the status reader does not panic").context("read update_engine's status")?;
-    logged.join().expect("the log reader does not panic").context("read update_engine's log")?;
+    status
+        .join()
+        .expect("the status reader does not panic")
+        .context("read update_engine's status")?;
+    logged
+        .join()
+        .expect("the log reader does not panic")
+        .context("read update_engine's log")?;
     for line in rx.try_iter() {
         receive(line);
     }
@@ -949,7 +997,11 @@ fn flash_image<S>(ctx: &mut Context, mount: &Mount<S>, image: &Image, file_name:
     });
     let all = image::targets(image.kind, file_name.map(image::named), dir, &logical)?;
     let state = skyward_vab::snapshot_state()?;
-    let partitions: Vec<Target> = all.iter().filter(|t| state == SnapshotState::None || t.place == Place::Slotted).cloned().collect();
+    let partitions: Vec<Target> = all
+        .iter()
+        .filter(|t| state == SnapshotState::None || t.place == Place::Slotted)
+        .cloned()
+        .collect();
     if partitions.is_empty() {
         let refusal = match image.kind {
             _ if !all.is_empty() => Refusal::Pending(state),
@@ -959,13 +1011,20 @@ fn flash_image<S>(ctx: &mut Context, mount: &Mount<S>, image: &Image, file_name:
         return Ok(Done::Decided(Outcome::Refused(refusal)));
     }
     let layout = &image.layout;
-    ctx.send(Event::Image { kind: image.kind, size: layout.size, partitions: partitions.clone() });
+    ctx.send(Event::Image {
+        kind: image.kind,
+        size: layout.size,
+        partitions: partitions.clone(),
+    });
     let (partition, slots) = match ctx.commands.recv() {
         Ok(Command::Flash { partition, slots }) => (partition, slots),
         Ok(Command::Cancel) | Err(_) => return Ok(Done::Decided(Outcome::Cancelled)),
         Ok(other) => bail!("an image waiting for its partition was told {other:?}"),
     };
-    let target = partitions.iter().find(|t| t.name == partition).with_context(|| format!("{partition} is not among {partitions:?}"))?;
+    let target = partitions
+        .iter()
+        .find(|t| t.name == partition)
+        .with_context(|| format!("{partition} is not among {partitions:?}"))?;
     let path = ctx.source(mount);
     let mut file = BufReader::with_capacity(1 << 20, File::open(&path).with_context(|| format!("open {}", path.display()))?);
     match target.place {
@@ -985,7 +1044,10 @@ fn flash_image<S>(ctx: &mut Context, mount: &Mount<S>, image: &Image, file_name:
             write_image(ctx, &mut file, layout, &[device], false)?;
         }
         Place::Logical => {
-            ensure!(slots == [slot], "{partition} is a logical partition of slot {slot:?}, and was sent to {slots:?}");
+            ensure!(
+                slots == [slot],
+                "{partition} is a logical partition of slot {slot:?}, and was sent to {slots:?}"
+            );
             skyward_vab::can_remake(slot, &partition, layout.size)?;
             detach_once(ctx)?;
             ctx.send(Event::Progress(Stage::Resizing));
@@ -1040,13 +1102,19 @@ fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done>
     detach_once(ctx)?;
     // Scripts may stream modem images with unzip/dd themselves. Release their
     // firmware aliases and BLKRO flag before handing control to the script.
-    let _modem = if modem { Some(crate::modem::prepare(Path::new(skyward_block::BY_NAME), &[Slot::A, Slot::B])?) } else { None };
+    let _modem = if modem {
+        Some(crate::modem::prepare(Path::new(skyward_block::BY_NAME), &[Slot::A, Slot::B])?)
+    } else {
+        None
+    };
     // While an update is in flight, the slot's partitions in super are its
     // and stay unmapped.
     let mapped = match skyward_vab::snapshot_state()? {
         SnapshotState::None => skyward_vab::map_slot(slot)?,
         state => {
-            let _ = kmsg(&format!("install: the slot's partitions stay unmapped while an update is in flight ({state:?})"));
+            let _ = kmsg(&format!(
+                "install: the slot's partitions stay unmapped while an update is in flight ({state:?})"
+            ));
             SlotMaps::default()
         }
     };
@@ -1070,7 +1138,10 @@ fn run_script<S>(ctx: &mut Context, mount: &Mount<S>, size: u64) -> Result<Done>
         // The package is written and the phone is otherwise ready: a check
         // left on is something the owner can change from the AVB page, not a
         // reason to call a finished install failed.
-        if let Err(e) = post_avb(ctx, skyward_vab::boot::next_slot().context("ask which slot the phone starts from next")) {
+        if let Err(e) = post_avb(
+            ctx,
+            skyward_vab::boot::next_slot().context("ask which slot the phone starts from next"),
+        ) {
             let _ = kmsg(&format!("install: the AVB checks are not written: {e:#}"));
         }
     }
@@ -1087,7 +1158,10 @@ fn post_avb(ctx: &mut Context, slot: Result<skyward_vab::Slot>) -> Result<()> {
     let slot = match slot {
         Ok(slot) => slot,
         Err(e) => {
-            ctx.send(Event::Avb(Avb { slot: None, done: Err(format!("{e:#}")) }));
+            ctx.send(Event::Avb(Avb {
+                slot: None,
+                done: Err(format!("{e:#}")),
+            }));
             return Ok(());
         }
     };
@@ -1129,9 +1203,14 @@ fn extract_script<S>(mount: &Mount<S>) -> Result<()> {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => return Err(e).with_context(|| format!("take away the {BINARY} an earlier install left")),
     }
-    let mut out = OpenOptions::new().write(true).create_new(true).open(BINARY).with_context(|| format!("make {BINARY}"))?;
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(BINARY)
+        .with_context(|| format!("make {BINARY}"))?;
     io::copy(&mut script, &mut out).with_context(|| format!("write {BINARY}"))?;
-    out.set_permissions(fs::Permissions::from_mode(0o755)).with_context(|| format!("make {BINARY} runnable"))
+    out.set_permissions(fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("make {BINARY} runnable"))
 }
 
 /// Give scripts written for other recoveries the shell they start with.
@@ -1275,7 +1354,8 @@ fn run_binary<S>(ctx: &Context, mount: &Mount<S>) -> Result<(i32, bool)> {
             Ok(Said::Output(line)) => {
                 writeln!(log, "{line}").context("write the log")?;
                 if let Some(warning) = crate::warnings::classify(&line)
-                    && !warnings.contains(&warning) {
+                    && !warnings.contains(&warning)
+                {
                     warnings.push(warning);
                     ctx.send(Event::Warning(warning));
                 }
@@ -1291,7 +1371,10 @@ fn run_binary<S>(ctx: &Context, mount: &Mount<S>) -> Result<(i32, bool)> {
             ctx.send(Event::Progress(Stage::Script { thousandths: now }));
         }
         if ended.is_none() {
-            ended = child.try_wait().context("see whether the install script has ended")?.map(|status| (status, Instant::now()));
+            ended = child
+                .try_wait()
+                .context("see whether the install script has ended")?
+                .map(|status| (status, Instant::now()));
         }
         let now_served = mount.served();
         if now_served != served {
@@ -1316,7 +1399,10 @@ fn run_binary<S>(ctx: &Context, mount: &Mount<S>) -> Result<(i32, bool)> {
         // for ever. The install is stopped here instead, and the screen is
         // told what the script was doing when it was stopped.
         if ended.is_none() && last_heard.elapsed() >= GIVE_UP && served_at.elapsed() >= GIVE_UP {
-            bail!("{}; the install is stopped", stall_report(child.id(), last_heard.elapsed(), &last_output));
+            bail!(
+                "{}; the install is stopped",
+                stall_report(child.id(), last_heard.elapsed(), &last_output)
+            );
         }
         if let Some((_, at)) = ended {
             if at.elapsed() >= LINGER && !others_ended {
@@ -1358,7 +1444,9 @@ fn mirror(line: &str, mirrored: &mut usize) {
         // Said once, where the mirroring stops, so that a log read afterwards
         // tells a quiet script from one whose words were not kept.
         *mirrored += 1;
-        let _ = kmsg(&format!("install: the script's output stops being mirrored after {MIRRORED_LINES} lines"));
+        let _ = kmsg(&format!(
+            "install: the script's output stops being mirrored after {MIRRORED_LINES} lines"
+        ));
     }
 }
 
@@ -1369,8 +1457,15 @@ fn stall_report(pid: u32, quiet: Duration, last_output: &str) -> String {
     let waiting = read_proc(pid, "wchan").unwrap_or_else(|| "?".to_string());
     let state = process_state(pid).map_or_else(|| "?".to_string(), |state| state.to_string());
     let short: String = last_output.chars().take(MIRRORED_CHARS).collect();
-    let last = if short.is_empty() { "nothing".to_string() } else { format!("\"{short}\"") };
-    format!("install: the script has printed nothing and asked for nothing for {}s (pid {pid}, waiting in {waiting}, state {state}); its last line was {last}", quiet.as_secs())
+    let last = if short.is_empty() {
+        "nothing".to_string()
+    } else {
+        format!("\"{short}\"")
+    };
+    format!(
+        "install: the script has printed nothing and asked for nothing for {}s (pid {pid}, waiting in {waiting}, state {state}); its last line was {last}",
+        quiet.as_secs()
+    )
 }
 
 /// What `/proc/<pid>/<what>` holds, trimmed and cut short: none when it
@@ -1395,7 +1490,11 @@ fn process_state(pid: u32) -> Option<char> {
 /// away.
 fn clean_up(before: &[(i32, PathBuf)], mapped: &SlotMaps) -> Result<()> {
     let kept: HashSet<i32> = before.iter().map(|(id, _)| *id).collect();
-    for (_, point) in skyward_block::mount::mount_ids()?.into_iter().rev().filter(|(id, _)| !kept.contains(id)) {
+    for (_, point) in skyward_block::mount::mount_ids()?
+        .into_iter()
+        .rev()
+        .filter(|(id, _)| !kept.contains(id))
+    {
         skyward_block::mount::umount_detach(&point)?;
     }
     skyward_vab::unmap_slot(mapped)?;
@@ -1445,7 +1544,8 @@ fn write_unmounted<R: Read + io::Seek>(ctx: &Context, file: &mut R, layout: &Lay
     let mut unmarked = Vec::new();
     let readied = (|| -> Result<()> {
         for device in devices {
-            let mounts = skyward_block::mount::release(device).with_context(|| format!("take {} off its mount points", device.display()))?;
+            let mounts =
+                skyward_block::mount::release(device).with_context(|| format!("take {} off its mount points", device.display()))?;
             released.push((device, mounts));
             if skyward_block::read_only(device)? {
                 skyward_block::set_read_only(device, false)?;

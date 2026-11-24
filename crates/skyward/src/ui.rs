@@ -239,7 +239,11 @@ impl Transfer {
         };
         let service = skyward_mtp::Service::start(device, zone.clone())?;
         skyward_sys::usb::set_mtp(true);
-        Ok(Transfer { service, offered: false, zone: zone.clone() })
+        Ok(Transfer {
+            service,
+            offered: false,
+            zone: zone.clone(),
+        })
     }
     /// Offer internal storage, named for the computer in `lang`, or take it
     /// back. Once this returns, nothing the computer had under way in it
@@ -552,7 +556,7 @@ fn image_backups_at(place: Place) -> Result<Vec<BackupEntry>> {
                 held: Ok(Held {
                     made: copy.made,
                     size: copy.size,
-                    parts: [false; 4],
+                    parts: [false; 5],
                     device: String::new(),
                     system: None,
                     slot,
@@ -973,10 +977,16 @@ pub(super) fn answer(request: Request, fastboot: bool) -> Vec<Effect> {
 /// carries no rules for goes to the kernel log, and the clock stays in the
 /// zone it keeps.
 fn follow_system_zone(app: &mut App, kept: Option<&str>, info: &skyward_info::DeviceInfo) -> Result<()> {
-    let Some(name) = kept.or(info.time_zone.as_deref()) else { return Ok(()) };
+    let Some(name) = kept.or(info.time_zone.as_deref()) else {
+        return Ok(());
+    };
     match app.set_system_zone(name) {
-        Ok(()) => { let _ = skyward_sys::kmsg(&format!("the installed system keeps the time zone {name}")); }
-        Err(e) => { let _ = skyward_sys::kmsg(&format!("the installed system's time zone is not followed: {e:#}")); }
+        Ok(()) => {
+            let _ = skyward_sys::kmsg(&format!("the installed system keeps the time zone {name}"));
+        }
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("the installed system's time zone is not followed: {e:#}"));
+        }
     }
     Ok(())
 }
@@ -1487,7 +1497,7 @@ impl<'a> Pages<'a> {
         app.state.double_tap_supported = app.state.panel_taps;
         app.state.efs_backup_available = !cfg.backup.efs.is_empty();
         if !app.state.efs_backup_available {
-            app.state.backup[3] = false;
+            app.state.backup[4] = false;
         }
         if app.state.remember_password {
             app.state.remembered = crate::remembered::load();
@@ -3256,7 +3266,10 @@ impl Pages<'_> {
             }
             Effect::Flash { partition, place, pick } => {
                 let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
-                self.installer.as_ref().context("no installer holds an image")?.flash(partition, pick.slots(place, slot));
+                self.installer
+                    .as_ref()
+                    .context("no installer holds an image")?
+                    .flash(partition, pick.slots(place, slot));
             }
             Effect::Cancel => self.cancel_install(now)?,
             Effect::ReadMounts => self.app.set_mounts(self.mounts()),
@@ -3471,8 +3484,12 @@ impl Pages<'_> {
                     false => PathBuf::from(TMP_LOGS),
                 };
                 match export_logs(recovery, kernel, &into, self.app.state.zone()) {
-                    Ok(folder) => self.app.report(&skyward_ui::fmt::exported(self.app.state.lang, &folder.display().to_string()), now),
-                    Err(e) => self.app.report(&skyward_ui::fmt::export_failed(self.app.state.lang, &format!("{e:#}")), now),
+                    Ok(folder) => self
+                        .app
+                        .report(&skyward_ui::fmt::exported(self.app.state.lang, &folder.display().to_string()), now),
+                    Err(e) => self
+                        .app
+                        .report(&skyward_ui::fmt::export_failed(self.app.state.lang, &format!("{e:#}")), now),
                 }
             }
             Effect::SetMode { path, mode } => {

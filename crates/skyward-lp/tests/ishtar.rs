@@ -1,4 +1,4 @@
-use skyward_lp::{read, read_image, write, Extent, Geometry, ATTR_READONLY, ATTR_UPDATED, HEADER_FLAG_VIRTUAL_AB_DEVICE};
+use skyward_lp::{ATTR_READONLY, ATTR_UPDATED, Extent, Geometry, HEADER_FLAG_VIRTUAL_AB_DEVICE, read, read_image, write};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +28,14 @@ const PRIMARY_SLOT_1: usize = 12288 + 65536;
 #[test]
 fn reads_slot_b() {
     let md = read(fixture(), 1).unwrap();
-    assert_eq!(md.geometry, Geometry { metadata_max_size: 65536, metadata_slot_count: 3, logical_block_size: 4096 });
+    assert_eq!(
+        md.geometry,
+        Geometry {
+            metadata_max_size: 65536,
+            metadata_slot_count: 3,
+            logical_block_size: 4096
+        }
+    );
     assert_eq!((md.major_version, md.minor_version), (10, 2));
     assert_eq!(md.header_flags, HEADER_FLAG_VIRTUAL_AB_DEVICE);
     assert!(md.damaged.is_empty());
@@ -36,7 +43,17 @@ fn reads_slot_b() {
     let names: Vec<&str> = md.partitions.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         names,
-        ["odm_b", "product_b", "system_b", "system_dlkm_b", "system_ext_b", "vendor_b", "vendor_dlkm_b", "mi_ext_b", "odm_b-cow"]
+        [
+            "odm_b",
+            "product_b",
+            "system_b",
+            "system_dlkm_b",
+            "system_ext_b",
+            "vendor_b",
+            "vendor_dlkm_b",
+            "mi_ext_b",
+            "odm_b-cow"
+        ]
     );
     let groups: Vec<&str> = md.groups.iter().map(|g| g.name.as_str()).collect();
     assert_eq!(groups, ["default", "qti_dynamic_partitions_b", "cow"]);
@@ -51,9 +68,21 @@ fn reads_slot_b() {
     assert_eq!(
         vendor_dlkm.extents,
         [
-            Extent::Linear { sectors: 81_088, device: 0, sector: 18_248_976 },
-            Extent::Linear { sectors: 32, device: 0, sector: 13_378_032 },
-            Extent::Linear { sectors: 8, device: 0, sector: 13_320_184 },
+            Extent::Linear {
+                sectors: 81_088,
+                device: 0,
+                sector: 18_248_976
+            },
+            Extent::Linear {
+                sectors: 32,
+                device: 0,
+                sector: 13_378_032
+            },
+            Extent::Linear {
+                sectors: 8,
+                device: 0,
+                sector: 13_320_184
+            },
         ]
     );
     assert_eq!(md.partition("odm_b").unwrap().sectors(), 4_078_440);
@@ -118,7 +147,12 @@ fn an_image_file_keeps_the_geometry_then_one_copy_of_the_metadata() {
 fn whole(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("skyward-lp-{name}-{}", std::process::id()));
     std::fs::copy(fixture(), &path).unwrap();
-    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(SUPER_SIZE).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(SUPER_SIZE)
+        .unwrap();
     path
 }
 
@@ -155,16 +189,39 @@ fn a_partition_grows_into_the_free_room_behind_it() {
     assert_eq!(
         grown.extents,
         [
-            Extent::Linear { sectors: 81_088, device: 0, sector: 18_248_976 },
-            Extent::Linear { sectors: 32, device: 0, sector: 13_378_032 },
-            Extent::Linear { sectors: 8 + 2048, device: 0, sector: 13_320_184 },
+            Extent::Linear {
+                sectors: 81_088,
+                device: 0,
+                sector: 18_248_976
+            },
+            Extent::Linear {
+                sectors: 32,
+                device: 0,
+                sector: 13_378_032
+            },
+            Extent::Linear {
+                sectors: 8 + 2048,
+                device: 0,
+                sector: 13_320_184
+            },
         ]
     );
     // Another partition takes what is left from where the first stopped.
     md.resize("system_dlkm_b", 680 * 512 + 8192).unwrap();
     assert_eq!(
         md.partition("system_dlkm_b").unwrap().extents,
-        [Extent::Linear { sectors: 680, device: 0, sector: 15_157_560 }, Extent::Linear { sectors: 16, device: 0, sector: FREE.start + 2048 }]
+        [
+            Extent::Linear {
+                sectors: 680,
+                device: 0,
+                sector: 15_157_560
+            },
+            Extent::Linear {
+                sectors: 16,
+                device: 0,
+                sector: FREE.start + 2048
+            }
+        ]
     );
 }
 
@@ -192,7 +249,14 @@ fn a_partition_takes_no_more_than_super_or_its_group_holds() {
 fn a_partition_that_shrinks_gives_up_its_last_sectors() {
     let mut md = read(fixture(), 1).unwrap();
     md.resize("system_b", 104_857_600).unwrap();
-    assert_eq!(md.partition("system_b").unwrap().extents, [Extent::Linear { sectors: 204_800, device: 0, sector: 13_392_312 }]);
+    assert_eq!(
+        md.partition("system_b").unwrap().extents,
+        [Extent::Linear {
+            sectors: 204_800,
+            device: 0,
+            sector: 13_392_312
+        }]
+    );
     // What it gave up is free for another to take, in the order it lies
     // in super: the eight sectors of its last extent, then the hole.
     let held = md.partition("mi_ext_b").unwrap().bytes();
@@ -200,7 +264,18 @@ fn a_partition_that_shrinks_gives_up_its_last_sectors() {
     let extents = &md.partition("mi_ext_b").unwrap().extents;
     assert_eq!(
         extents[extents.len() - 2..],
-        [Extent::Linear { sectors: 8, device: 0, sector: 13_320_168 }, Extent::Linear { sectors: FREE.end - FREE.start, device: 0, sector: FREE.start }]
+        [
+            Extent::Linear {
+                sectors: 8,
+                device: 0,
+                sector: 13_320_168
+            },
+            Extent::Linear {
+                sectors: FREE.end - FREE.start,
+                device: 0,
+                sector: FREE.start
+            }
+        ]
     );
     md.resize("system_b", 0).unwrap();
     assert!(md.partition("system_b").unwrap().extents.is_empty());
@@ -241,7 +316,12 @@ fn a_copy_that_no_longer_reads_is_made_good_before_the_new_one_is_written() {
     damage(backup);
     // Metadata too large to write stops before either copy is touched.
     let mut large = old.clone();
-    large.partitions = Vec::from_fn(2000, |k| skyward_lp::Partition { name: format!("p{k}"), attributes: 0, group: 0, extents: Vec::new() });
+    large.partitions = Vec::from_fn(2000, |k| skyward_lp::Partition {
+        name: format!("p{k}"),
+        attributes: 0,
+        group: 0,
+        extents: Vec::new(),
+    });
     let refused = write(&path, &large, &[1]).unwrap_err();
     assert!(format!("{refused:#}").contains("65536 at most"), "{refused:#}");
     assert_eq!(read(&path, 1).unwrap(), old);
@@ -251,7 +331,11 @@ fn a_copy_that_no_longer_reads_is_made_good_before_the_new_one_is_written() {
     damage(PRIMARY_SLOT_1);
     let from_backup = read(&path, 1);
     std::fs::remove_file(&path).unwrap();
-    assert_eq!(from_backup.unwrap().partitions, md.partitions, "the backup copy was written as well");
+    assert_eq!(
+        from_backup.unwrap().partitions,
+        md.partitions,
+        "the backup copy was written as well"
+    );
 }
 
 #[test]

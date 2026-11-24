@@ -5,9 +5,9 @@
 //! its own, run as another account than root.
 
 use anyhow::{Context, Result};
+use object::Endianness;
 use object::elf::{DT_NEEDED, DT_RUNPATH};
 use object::read::elf::ElfFile64;
-use object::Endianness;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -42,7 +42,8 @@ fn asks(file: &Path) -> Result<Asks> {
                 asks.libraries.push(String::from_utf8_lossy(table.string(entry)?).into_owned());
             } else if entry.tag == DT_RUNPATH {
                 let folders = String::from_utf8_lossy(table.string(entry)?).into_owned();
-                asks.folders.extend(folders.split(':').filter(|folder| !folder.is_empty()).map(str::to_string));
+                asks.folders
+                    .extend(folders.split(':').filter(|folder| !folder.is_empty()).map(str::to_string));
             }
         }
         Ok(asks)

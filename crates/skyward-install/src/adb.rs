@@ -95,7 +95,12 @@ pub struct Packet {
 
 impl Packet {
     pub fn new(command: u32, arg0: u32, arg1: u32, payload: impl Into<Vec<u8>>) -> Packet {
-        Packet { command, arg0, arg1, payload: payload.into() }
+        Packet {
+            command,
+            arg0,
+            arg1,
+            payload: payload.into(),
+        }
     }
 
     /// The packet's header; `version` decides whether it carries the
@@ -130,7 +135,9 @@ impl Header {
         let m = Message::read_from_bytes(bytes).expect("a message is HEADER_LEN bytes");
         let (command, magic) = (m.command.get(), m.magic.get());
         if magic != !command {
-            return Err(Error::Protocol(format!("magic {magic:#010x} does not match command {command:#010x}")));
+            return Err(Error::Protocol(format!(
+                "magic {magic:#010x} does not match command {command:#010x}"
+            )));
         }
         if ![SYNC, CNXN, AUTH, OPEN, OKAY, CLSE, WRTE, STLS].contains(&command) {
             return Err(Error::Protocol(format!("unknown command {command:#010x}")));
@@ -139,7 +146,13 @@ impl Header {
         if len > MAX_PAYLOAD {
             return Err(Error::Protocol(format!("a payload of {len} bytes")));
         }
-        Ok(Header { command, arg0: m.arg0.get(), arg1: m.arg1.get(), len, check: m.data_check.get() })
+        Ok(Header {
+            command,
+            arg0: m.arg0.get(),
+            arg1: m.arg1.get(),
+            len,
+            check: m.data_check.get(),
+        })
     }
 }
 
@@ -217,7 +230,10 @@ pub enum Service {
     RescueGetprop(String),
     /// `rescue-wipe:<target>:<size>`: erase what `target` names, the
     /// answer padded to `size` bytes.
-    RescueWipe { target: String, size: usize },
+    RescueWipe {
+        target: String,
+        size: usize,
+    },
     /// `reboot:<target>`: leave for that target, or for the system where
     /// it is empty.
     Reboot(String),
@@ -236,9 +252,12 @@ pub fn service(payload: &[u8]) -> Service {
         return Service::RescueGetprop(prop.to_string());
     }
     if let Some(args) = name.strip_prefix("rescue-wipe:") {
-        let asked = args
-            .split_once(':')
-            .and_then(|(target, size)| Some(Service::RescueWipe { target: target.to_string(), size: size.parse().ok()? }));
+        let asked = args.split_once(':').and_then(|(target, size)| {
+            Some(Service::RescueWipe {
+                target: target.to_string(),
+                size: size.parse().ok()?,
+            })
+        });
         return asked.unwrap_or(Service::Other(name));
     }
     if let Some(target) = name.strip_prefix("reboot:") {
@@ -280,11 +299,7 @@ pub fn rescue_getprop(asked: &str, read: impl Fn(&str) -> Option<String>) -> Str
         name if RESCUE_PROPERTIES.contains(&name) => read(name).map(|v| v + "\n").unwrap_or_default(),
         _ => String::new(),
     };
-    if answer.is_empty() {
-        "\n".to_string()
-    } else {
-        answer
-    }
+    if answer.is_empty() { "\n".to_string() } else { answer }
 }
 
 /// What `rescue-wipe` answers, padded with NULs to the `size` the computer
@@ -298,7 +313,10 @@ pub fn rescue_wiped(erased: bool, size: usize) -> Vec<u8> {
 /// What a service's `<size>:<block size>` offers to send.
 fn offered(args: &str) -> Option<Offer> {
     let (size, block_size) = args.split_once(':')?;
-    Some(Offer { size: size.parse().ok()?, block_size: block_size.parse().ok()? })
+    Some(Offer {
+        size: size.parse().ok()?,
+        block_size: block_size.parse().ok()?,
+    })
 }
 
 /// The USB endpoints the protocol runs over. A read fails with
@@ -333,7 +351,14 @@ pub struct Connection<L> {
 
 impl<L: Link> Connection<L> {
     pub fn new(link: L, banner: Vec<u8>) -> Connection<L> {
-        Connection { link, inbox: Vec::new(), chunk: vec![0; READ_CHUNK], version: VERSION, banner, stream: None }
+        Connection {
+            link,
+            inbox: Vec::new(),
+            chunk: vec![0; READ_CHUNK],
+            version: VERSION,
+            banner,
+            stream: None,
+        }
     }
 
     /// The endpoints back, once the connection is done with.
@@ -560,7 +585,16 @@ mod tests {
         let old = p.header(VERSION_MIN);
         assert_eq!(u32::from_le_bytes(old[16..20].try_into().unwrap()), 8 * u32::from(b'0') + 4 + 2);
         let back = Header::parse(&h).unwrap();
-        assert_eq!(back, Header { command: WRTE, arg0: 1, arg1: 7, len: 8, check: 0 });
+        assert_eq!(
+            back,
+            Header {
+                command: WRTE,
+                arg0: 1,
+                arg1: 7,
+                len: 8,
+                check: 0
+            }
+        );
     }
 
     #[test]
@@ -588,7 +622,10 @@ mod tests {
     fn services_are_read_as_adb_names_them() {
         assert_eq!(
             service(b"sideload-host:7340032000:65536\0"),
-            Service::SideloadHost(Offer { size: 7_340_032_000, block_size: 65536 })
+            Service::SideloadHost(Offer {
+                size: 7_340_032_000,
+                block_size: 65536
+            })
         );
         assert_eq!(service(b"sideload:123456\0"), Service::Sideload);
         assert_eq!(service(b"shell:ls\0"), Service::Other("shell:ls".into()));
@@ -597,10 +634,29 @@ mod tests {
 
     #[test]
     fn the_services_of_rescue_are_read_too() {
-        assert_eq!(service(b"rescue-install:4096:4096\0"), Service::RescueInstall(Offer { size: 4096, block_size: 4096 }));
-        assert_eq!(service(b"rescue-getprop:ro.build.fingerprint\0"), Service::RescueGetprop("ro.build.fingerprint".into()));
-        assert_eq!(service(b"rescue-getprop:\0"), Service::RescueGetprop(String::new()), "all that rescue answers for");
-        assert_eq!(service(b"rescue-wipe:userdata:8\0"), Service::RescueWipe { target: "userdata".into(), size: 8 });
+        assert_eq!(
+            service(b"rescue-install:4096:4096\0"),
+            Service::RescueInstall(Offer {
+                size: 4096,
+                block_size: 4096
+            })
+        );
+        assert_eq!(
+            service(b"rescue-getprop:ro.build.fingerprint\0"),
+            Service::RescueGetprop("ro.build.fingerprint".into())
+        );
+        assert_eq!(
+            service(b"rescue-getprop:\0"),
+            Service::RescueGetprop(String::new()),
+            "all that rescue answers for"
+        );
+        assert_eq!(
+            service(b"rescue-wipe:userdata:8\0"),
+            Service::RescueWipe {
+                target: "userdata".into(),
+                size: 8
+            }
+        );
         assert_eq!(service(b"rescue-wipe:userdata\0"), Service::Other("rescue-wipe:userdata".into()));
         assert_eq!(service(b"reboot:bootloader\0"), Service::Reboot("bootloader".into()));
         assert_eq!(service(b"reboot:\0"), Service::Reboot(String::new()));
@@ -626,7 +682,10 @@ mod tests {
 
     #[test]
     fn rescue_gives_all_it_may_tell_for_an_empty_name() {
-        assert_eq!(rescue_getprop("", props), "[rescue.battery_level]: [76]\n[ro.product.device]: [ishtar]\n");
+        assert_eq!(
+            rescue_getprop("", props),
+            "[rescue.battery_level]: [76]\n[ro.product.device]: [ishtar]\n"
+        );
         assert_eq!(rescue_getprop("", |_| None), "\n");
     }
 
@@ -638,13 +697,30 @@ mod tests {
 
     #[test]
     fn offers_are_cut_into_blocks_and_checked() {
-        let offer = Offer { size: 65536 * 3 + 100, block_size: 65536 };
+        let offer = Offer {
+            size: 65536 * 3 + 100,
+            block_size: 65536,
+        };
         assert_eq!(offer.blocks(), 4);
         assert_eq!(offer.block_len(0), 65536);
         assert_eq!(offer.block_len(3), 100);
         assert!(offer.check().is_ok());
-        assert!(Offer { size: 0, block_size: 65536 }.check().is_err());
+        assert!(
+            Offer {
+                size: 0,
+                block_size: 65536
+            }
+            .check()
+            .is_err()
+        );
         assert!(Offer { size: 10, block_size: 512 }.check().is_err());
-        assert!(Offer { size: 65536 * (MAX_BLOCKS + 1), block_size: 65536 }.check().is_err());
+        assert!(
+            Offer {
+                size: 65536 * (MAX_BLOCKS + 1),
+                block_size: 65536
+            }
+            .check()
+            .is_err()
+        );
     }
 }

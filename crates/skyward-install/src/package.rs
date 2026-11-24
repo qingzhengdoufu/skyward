@@ -4,9 +4,9 @@
 //! an update package may go on this phone, checked the way Android's
 //! recovery checks it.
 
-use crate::image::{self, Image};
 use crate::Refusal;
-use anyhow::{bail, Context, Result};
+use crate::image::{self, Image};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use zip::{CompressionMethod, ZipArchive};
@@ -82,7 +82,10 @@ impl Metadata {
 /// directory.
 pub fn identify<R: Read + Seek>(mut file: R) -> Result<Package> {
     let mut head = Vec::with_capacity(ZIP_MAGIC.len());
-    (&mut file).take(ZIP_MAGIC.len() as u64).read_to_end(&mut head).context("read the package's first bytes")?;
+    (&mut file)
+        .take(ZIP_MAGIC.len() as u64)
+        .read_to_end(&mut head)
+        .context("read the package's first bytes")?;
     if head != ZIP_MAGIC {
         let len = file.seek(SeekFrom::End(0)).context("find the package's size")?;
         return image::open(&mut file, len).map(Package::Image);
@@ -111,7 +114,12 @@ fn update<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Update> {
         bail!("payload.bin is compressed ({:?})", payload.compression());
     }
     let payload_offset = payload.data_start().context("payload.bin has no data offset")?;
-    Ok(Update { payload_offset, payload_size: payload.size(), properties, metadata })
+    Ok(Update {
+        payload_offset,
+        payload_size: payload.size(),
+        properties,
+        metadata,
+    })
 }
 
 fn text<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<String> {
@@ -166,14 +174,20 @@ pub fn check(update: &Update, phone: &Phone) -> Result<(), Refusal> {
     // one.
     let timestamp = m.get("post-timestamp").and_then(|t| t.parse().ok()).unwrap_or(0);
     if timestamp < build.timestamp {
-        return Err(Refusal::Older { package: timestamp, installed: build.timestamp });
+        return Err(Refusal::Older {
+            package: timestamp,
+            installed: build.timestamp,
+        });
     }
     // Patch levels are yyyy-mm-dd, so they order as text. Data that is
     // erased before the older system starts is never read under it.
     if let Some(patch) = m.get("post-security-patch-level") {
         let allowed = m.get("spl-downgrade") == Some("yes") || m.get("ota-downgrade") == Some("yes") || update.wipes();
         if patch < build.security_patch.as_str() && !allowed {
-            return Err(Refusal::OlderPatch { package: patch.to_string(), installed: build.security_patch.clone() });
+            return Err(Refusal::OlderPatch {
+                package: patch.to_string(),
+                installed: build.security_patch.clone(),
+            });
         }
     }
     Ok(())
@@ -213,18 +227,27 @@ METADATA_SIZE=1024
         Phone {
             device: "ishtar".into(),
             serial: "2674dc3e".into(),
-            installed: Some(Build { timestamp: 1_778_243_655, security_patch: "2026-04-01".into() }),
+            installed: Some(Build {
+                timestamp: 1_778_243_655,
+                security_patch: "2026-04-01".into(),
+            }),
         }
     }
 
     fn update_with(metadata: &str, properties: &str) -> Update {
-        Update { payload_offset: 0, payload_size: 0, properties: properties.into(), metadata: Metadata::parse(metadata) }
+        Update {
+            payload_offset: 0,
+            payload_size: 0,
+            properties: properties.into(),
+            metadata: Metadata::parse(metadata),
+        }
     }
 
     fn zip_with(entries: &[(&str, &[u8], CompressionMethod)]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, data, method) in entries {
-            w.start_file(*name, SimpleFileOptions::default().compression_method(*method)).unwrap();
+            w.start_file(*name, SimpleFileOptions::default().compression_method(*method))
+                .unwrap();
             w.write_all(data).unwrap();
         }
         w.finish().unwrap().into_inner()
@@ -244,7 +267,10 @@ METADATA_SIZE=1024
     #[test]
     fn packages_for_other_phones_are_refused() {
         let other = METADATA_TEXT.replace("pre-device=ishtar", "pre-device=nezha");
-        assert_eq!(check(&update_with(&other, PROPERTIES_TEXT), &phone()), Err(Refusal::OtherDevice("nezha".into())));
+        assert_eq!(
+            check(&update_with(&other, PROPERTIES_TEXT), &phone()),
+            Err(Refusal::OtherDevice("nezha".into()))
+        );
         let listed = METADATA_TEXT.replace("pre-device=ishtar", "pre-device=nezha|ishtar");
         assert_eq!(check(&update_with(&listed, PROPERTIES_TEXT), &phone()), Ok(()));
         let serial = format!("{METADATA_TEXT}serialno=abc|def\n");
@@ -252,7 +278,10 @@ METADATA_SIZE=1024
         let ours = format!("{METADATA_TEXT}serialno=abc|2674dc3e\n");
         assert_eq!(check(&update_with(&ours, PROPERTIES_TEXT), &phone()), Ok(()));
         let block = METADATA_TEXT.replace("ota-type=AB", "ota-type=BLOCK");
-        assert_eq!(check(&update_with(&block, PROPERTIES_TEXT), &phone()), Err(Refusal::NotAb("BLOCK".into())));
+        assert_eq!(
+            check(&update_with(&block, PROPERTIES_TEXT), &phone()),
+            Err(Refusal::NotAb("BLOCK".into()))
+        );
     }
 
     #[test]
@@ -260,16 +289,25 @@ METADATA_SIZE=1024
         let incremental = format!(
             "{METADATA_TEXT}pre-build=Xiaomi/ishtar/ishtar:16/X/OS3.0.305.0.WMACNXM:user/release-keys\npre-build-incremental=OS3.0.305.0.WMACNXM\n"
         );
-        assert_eq!(check(&update_with(&incremental, PROPERTIES_TEXT), &phone()), Err(Refusal::Incremental));
+        assert_eq!(
+            check(&update_with(&incremental, PROPERTIES_TEXT), &phone()),
+            Err(Refusal::Incremental)
+        );
         let older = METADATA_TEXT.replace("1781000000", "1770000000");
         assert_eq!(
             check(&update_with(&older, PROPERTIES_TEXT), &phone()),
-            Err(Refusal::Older { package: 1_770_000_000, installed: 1_778_243_655 })
+            Err(Refusal::Older {
+                package: 1_770_000_000,
+                installed: 1_778_243_655
+            })
         );
         let patch = METADATA_TEXT.replace("2026-06-01", "2026-03-01");
         assert_eq!(
             check(&update_with(&patch, PROPERTIES_TEXT), &phone()),
-            Err(Refusal::OlderPatch { package: "2026-03-01".into(), installed: "2026-04-01".into() })
+            Err(Refusal::OlderPatch {
+                package: "2026-03-01".into(),
+                installed: "2026-04-01".into()
+            })
         );
         let allowed = format!("{}spl-downgrade=yes\n", METADATA_TEXT.replace("2026-06-01", "2026-03-01"));
         assert_eq!(check(&update_with(&allowed, PROPERTIES_TEXT), &phone()), Ok(()));
@@ -286,13 +324,20 @@ METADATA_SIZE=1024
         assert!(wipe.wipes());
         assert!(!update_with(METADATA_TEXT, &format!("{PROPERTIES_TEXT}POWERWASH=0\n")).wipes());
         let older_patch = format!("{}ota-wipe=yes\n", METADATA_TEXT.replace("2026-06-01", "2026-03-01"));
-        assert_eq!(check(&update_with(&older_patch, PROPERTIES_TEXT), &phone()), Ok(()), "the data it could not read is erased");
+        assert_eq!(
+            check(&update_with(&older_patch, PROPERTIES_TEXT), &phone()),
+            Ok(()),
+            "the data it could not read is erased"
+        );
     }
 
     #[test]
     fn without_an_installed_system_only_the_package_itself_is_checked() {
         let older = METADATA_TEXT.replace("1781000000", "1770000000");
-        let bare = Phone { installed: None, ..phone() };
+        let bare = Phone {
+            installed: None,
+            ..phone()
+        };
         assert_eq!(check(&update_with(&older, PROPERTIES_TEXT), &bare), Ok(()));
     }
 
@@ -302,9 +347,15 @@ METADATA_SIZE=1024
         let bytes = zip_with(&[
             ("payload.bin", payload, CompressionMethod::Stored),
             ("payload_properties.txt", PROPERTIES_TEXT.as_bytes(), CompressionMethod::Stored),
-            ("META-INF/com/android/metadata", METADATA_TEXT.as_bytes(), CompressionMethod::Deflated),
+            (
+                "META-INF/com/android/metadata",
+                METADATA_TEXT.as_bytes(),
+                CompressionMethod::Deflated,
+            ),
         ]);
-        let Package::Update(u) = identify(Cursor::new(&bytes)).unwrap() else { panic!("an update package") };
+        let Package::Update(u) = identify(Cursor::new(&bytes)).unwrap() else {
+            panic!("an update package")
+        };
         let at = u.payload_offset as usize;
         assert_eq!(&bytes[at..at + payload.len()], payload);
         assert_eq!(u.payload_size, payload.len() as u64);
@@ -314,7 +365,11 @@ METADATA_SIZE=1024
 
     #[test]
     fn script_zips_compressed_payloads_and_other_files_are_told_apart() {
-        let script = zip_with(&[("META-INF/com/google/android/update-binary", b"#!/sbin/sh\n", CompressionMethod::Deflated)]);
+        let script = zip_with(&[(
+            "META-INF/com/google/android/update-binary",
+            b"#!/sbin/sh\n",
+            CompressionMethod::Deflated,
+        )]);
         assert_eq!(identify(Cursor::new(script)).unwrap(), Package::Script);
         let squeezed = zip_with(&[
             ("payload.bin", &[7u8; 4096], CompressionMethod::Deflated),
@@ -324,8 +379,21 @@ METADATA_SIZE=1024
         assert!(identify(Cursor::new(squeezed)).is_err());
         let other = zip_with(&[("readme.txt", b"hello", CompressionMethod::Stored)]);
         assert_eq!(identify(Cursor::new(other)).unwrap(), Package::Unknown);
-        let text = Image { kind: image::ImageKind::Other, layout: image::Layout::whole(14) };
-        assert_eq!(identify(Cursor::new(b"just some text".to_vec())).unwrap(), Package::Image(text), "no zip, and nothing an image is known by");
-        assert_eq!(identify(Cursor::new(Vec::new())).unwrap(), Package::Image(Image { kind: image::ImageKind::Other, layout: image::Layout::whole(0) }));
+        let text = Image {
+            kind: image::ImageKind::Other,
+            layout: image::Layout::whole(14),
+        };
+        assert_eq!(
+            identify(Cursor::new(b"just some text".to_vec())).unwrap(),
+            Package::Image(text),
+            "no zip, and nothing an image is known by"
+        );
+        assert_eq!(
+            identify(Cursor::new(Vec::new())).unwrap(),
+            Package::Image(Image {
+                kind: image::ImageKind::Other,
+                layout: image::Layout::whole(0)
+            })
+        );
     }
 }

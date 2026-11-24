@@ -6,7 +6,7 @@
 
 use skyward_config::Service;
 use skyward_programs::naming::{self, Does};
-use skyward_programs::phone::{Happens, Partition, Phone, PARTITIONS};
+use skyward_programs::phone::{Happens, PARTITIONS, Partition, Phone};
 use skyward_programs::script::{Socket, SocketKind};
 use skyward_programs::secure::{self, Driver, Started, Step};
 use std::collections::HashMap;
@@ -35,8 +35,18 @@ fn phone(codename: &str, properties: &[(&str, &str)]) -> Phone {
 /// its partitions were built against.
 fn with_bundle(codename: &str, properties: &[(&str, &str)], bundle: Option<&Path>) -> Phone {
     let at = described(codename);
-    let partitions = PARTITIONS.iter().map(|name| Partition { name: name.to_string(), mounted: mounted(name).into(), at: at.join(name) }).collect();
-    let properties: HashMap<String, String> = properties.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
+    let partitions = PARTITIONS
+        .iter()
+        .map(|name| Partition {
+            name: name.to_string(),
+            mounted: mounted(name).into(),
+            at: at.join(name),
+        })
+        .collect();
+    let properties: HashMap<String, String> = properties
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
     Phone::read(partitions, properties, bundle).unwrap()
 }
 
@@ -60,9 +70,26 @@ fn strings(words: &[&str]) -> Vec<String> {
 
 /// The folders a program finds its libraries in, by the partition it is
 /// on.
-const ON_VENDOR: [&str; 5] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"];
-const ON_ODM: [&str; 6] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"];
-const ON_SYSTEM: [&str; 3] = ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64"];
+const ON_VENDOR: [&str; 5] = [
+    "/system/lib64",
+    "/vendor/lib64",
+    "/vendor/lib64/hw",
+    "/mnt/system/system/lib64",
+    "/mnt/system/system/lib64/bootstrap",
+];
+const ON_ODM: [&str; 6] = [
+    "/system/lib64",
+    "/vendor/lib64",
+    "/vendor/lib64/hw",
+    "/odm/lib64",
+    "/mnt/system/system/lib64",
+    "/mnt/system/system/lib64/bootstrap",
+];
+const ON_SYSTEM: [&str; 3] = [
+    "/mnt/system/system/lib64/bootstrap",
+    "/mnt/system/system/lib64",
+    "/mnt/system_ext/lib64",
+];
 
 /// A program kept running as `user` in `groups`, with nothing else said
 /// of it.
@@ -86,7 +113,15 @@ fn program(path: &str, libraries: &[&str], user: &str, groups: &[&str]) -> Servi
 }
 
 fn socket(name: &str, group: &str) -> Socket {
-    Socket { name: name.into(), kind: SocketKind::Stream, passcred: false, listen: false, mode: 0o660, user: Some("system".into()), group: Some(group.into()) }
+    Socket {
+        name: name.into(),
+        kind: SocketKind::Stream,
+        passcred: false,
+        listen: false,
+        mode: 0o660,
+        user: Some("system".into()),
+        group: Some(group.into()),
+    }
 }
 
 #[test]
@@ -94,16 +129,42 @@ fn miro_retains_one_configured_chain_while_discovery_remains_available_to_other_
     let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/miro.toml")).unwrap();
     assert!(cfg.configured_keys);
     let at = |tail: &str| cfg.services.iter().position(|s| s.path.ends_with(tail)).unwrap();
-    let chain = ["qseecomd", "ssgtzd", "hlosminkdaemon", "android.hardware.security.keymint-service-qti", "android.hardware.gatekeeper-service-qti", "android.hardware.secure_element-service.qti", "se_omapi", "android.hardware.weaver-service.nxp-qti", "android.hardware.boot-service.qti"];
+    let chain = [
+        "qseecomd",
+        "ssgtzd",
+        "hlosminkdaemon",
+        "android.hardware.security.keymint-service-qti",
+        "android.hardware.gatekeeper-service-qti",
+        "android.hardware.secure_element-service.qti",
+        "se_omapi",
+        "android.hardware.weaver-service.nxp-qti",
+        "android.hardware.boot-service.qti",
+    ];
     assert!(chain.windows(2).all(|pair| at(pair[0]) < at(pair[1])));
     for tail in chain {
         assert_eq!(cfg.services.iter().filter(|s| s.path.ends_with(tail)).count(), 1);
     }
-    let read = phone("miro", &[("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", "miro"), ("ro.boot.product.vendor.sku", "sun")]);
+    let read = phone(
+        "miro",
+        &[
+            ("ro.boot.hardware", "qcom"),
+            ("ro.boot.product.hardware.sku", "miro"),
+            ("ro.boot.product.vendor.sku", "sun"),
+        ],
+    );
     let steps = secure::steps(&read).unwrap();
     assert_eq!(steps.iter().filter(|s| **s == Step::ServeElements).count(), 1);
     let starts = secure::programs(&steps);
-    for suffix in ["qseecomd", "ssgtzd", "hlosminkdaemon", "android.hardware.security.keymint-service-qti", "android.hardware.gatekeeper-service-qti", "android.hardware.secure_element-service.qti", "android.hardware.weaver-service.nxp-qti", "android.hardware.boot-service.qti"] {
+    for suffix in [
+        "qseecomd",
+        "ssgtzd",
+        "hlosminkdaemon",
+        "android.hardware.security.keymint-service-qti",
+        "android.hardware.gatekeeper-service-qti",
+        "android.hardware.secure_element-service.qti",
+        "android.hardware.weaver-service.nxp-qti",
+        "android.hardware.boot-service.qti",
+    ] {
         assert_eq!(starts.iter().filter(|s| s.service.path.ends_with(suffix)).count(), 1, "{suffix}");
     }
 }
@@ -119,7 +180,10 @@ const BOOT: &str = "android.hardware.boot.IBootControl/default";
 /// The listeners of the secure world, which every phone here starts the
 /// same.
 fn listeners() -> Service {
-    Service { ready_property: Some("vendor.sys.listeners.registered".into()), ..program("/vendor/bin/qseecomd", &ON_VENDOR, "root", &["root", "drmrpc"]) }
+    Service {
+        ready_property: Some("vendor.sys.listeners.registered".into()),
+        ..program("/vendor/bin/qseecomd", &ON_VENDOR, "root", &["root", "drmrpc"])
+    }
 }
 
 /// The builds of the hardware a partition's main descriptions are named
@@ -151,7 +215,10 @@ fn builds(codename: &str, partition: &str) -> Vec<String> {
 /// of accounts give a number.
 #[test]
 fn every_phone_names_one_program_for_each_service() {
-    let mut codenames: Vec<String> = std::fs::read_dir(described("")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let mut codenames: Vec<String> = std::fs::read_dir(described(""))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     codenames.sort();
     assert!(codenames.len() >= 21, "the phones described are {codenames:?}");
     let mut with_nxp_s_weaver: Vec<&str> = Vec::new();
@@ -160,62 +227,135 @@ fn every_phone_names_one_program_for_each_service() {
         if vendor.is_empty() {
             vendor.push(String::new());
         }
-        let hardware = builds(codename, "odm").into_iter().find(|build| build == codename).unwrap_or_default();
+        let hardware = builds(codename, "odm")
+            .into_iter()
+            .find(|build| build == codename)
+            .unwrap_or_default();
         let mut found: Vec<(String, Vec<Step>)> = Vec::new();
         for build in &vendor {
-            let properties = [("ro.boot.hardware", "qcom"), ("ro.boot.product.vendor.sku", build.as_str()), ("ro.boot.product.hardware.sku", hardware.as_str())];
+            let properties = [
+                ("ro.boot.hardware", "qcom"),
+                ("ro.boot.product.vendor.sku", build.as_str()),
+                ("ro.boot.product.hardware.sku", hardware.as_str()),
+            ];
             let read = phone(codename, &properties);
             let steps = secure::steps(&read).unwrap_or_else(|e| panic!("{codename}, as the build {build:?} of its hardware: {e:#}"));
             let told_of = read.told_of();
-            let written = skyward_programs::description::offering(&told_of).unwrap_or_else(|e| panic!("{codename}, as the build {build:?} of its hardware: {e:#}"));
-            let read_back: Vec<String> = skyward_programs::description::read(&written).unwrap().iter().map(|described| described.name()).collect();
-            assert_eq!(read_back, told_of, "{codename}, as the build {build:?} of its hardware: what the directory is told of is all the phone describes");
+            let written = skyward_programs::description::offering(&told_of)
+                .unwrap_or_else(|e| panic!("{codename}, as the build {build:?} of its hardware: {e:#}"));
+            let read_back: Vec<String> = skyward_programs::description::read(&written)
+                .unwrap()
+                .iter()
+                .map(|described| described.name())
+                .collect();
+            assert_eq!(
+                read_back, told_of,
+                "{codename}, as the build {build:?} of its hardware: what the directory is told of is all the phone describes"
+            );
             for started in secure::programs(&steps) {
                 for name in started.service.ready_service.iter().chain(&started.service.registers) {
-                    assert!(told_of.contains(name), "{codename}, as the build {build:?} of its hardware, describes {name}");
+                    assert!(
+                        told_of.contains(name),
+                        "{codename}, as the build {build:?} of its hardware, describes {name}"
+                    );
                 }
             }
             found.push((build.clone(), steps));
         }
         let (_, first) = &found[0];
         for (build, steps) in &found {
-            assert_eq!(steps, first, "{codename} does the same as the build {build:?} of its hardware as any other");
+            assert_eq!(
+                steps, first,
+                "{codename} does the same as the build {build:?} of its hardware as any other"
+            );
         }
         let steps = names(first);
         if let Some(weaver) = steps.iter().position(|name| name.contains("weaver-service")) {
-            assert!(weaver > 0 && (steps[weaver - 1].contains("secure_element") || steps[weaver - 1] == "(the secure element service)"), "{codename}: {steps:?}");
+            assert!(
+                weaver > 0 && (steps[weaver - 1].contains("secure_element") || steps[weaver - 1] == "(the secure element service)"),
+                "{codename}: {steps:?}"
+            );
         }
-        let drivers: Vec<(usize, &Driver)> = first.iter().enumerate().filter_map(|(at, step)| if let Step::Drive(driver) = step { Some((at, driver)) } else { None }).collect();
+        let drivers: Vec<(usize, &Driver)> = first
+            .iter()
+            .enumerate()
+            .filter_map(|(at, step)| if let Step::Drive(driver) = step { Some((at, driver)) } else { None })
+            .collect();
         match steps.iter().any(|name| name.ends_with("weaver-service.nxp-qti")) {
             true => {
-                let [(at, driver)] = drivers[..] else { panic!("{codename} loads one driver: {steps:?}") };
-                assert_eq!(*driver, Driver { module: "nxp-nci", node: "/dev/nq-nci" }, "{codename}");
+                let [(at, driver)] = drivers[..] else {
+                    panic!("{codename} loads one driver: {steps:?}")
+                };
+                assert_eq!(
+                    *driver,
+                    Driver {
+                        module: "nxp-nci",
+                        node: "/dev/nq-nci"
+                    },
+                    "{codename}"
+                );
                 assert!(steps[at + 1].contains("secure_element"), "{codename}: {steps:?}");
                 with_nxp_s_weaver.push(codename);
             }
             false => assert!(drivers.is_empty(), "{codename}: {steps:?}"),
         }
-        let lists: Vec<String> = ["vendor/etc/passwd", "odm/etc/passwd", "vendor/etc/group", "odm/etc/group"].iter().map(|list| described(codename).join(list).to_string_lossy().into_owned()).collect();
+        let lists: Vec<String> = ["vendor/etc/passwd", "odm/etc/passwd", "vendor/etc/group", "odm/etc/group"]
+            .iter()
+            .map(|list| described(codename).join(list).to_string_lossy().into_owned())
+            .collect();
         let known = skyward_sys::ueventd::accounts(&lists.iter().map(String::as_str).collect::<Vec<_>>());
         let mut registered: Vec<&String> = Vec::new();
         for started in secure::programs(first) {
             let service = &started.service;
             let handed = started.sockets.iter().flat_map(|socket| socket.user.iter().chain(&socket.group));
             for account in service.user.iter().chain(&service.groups).chain(handed) {
-                assert!(skyward_sys::ueventd::account(&known, account).is_some(), "{codename}: {} runs with the account {account}, which the phone gives no number", service.path);
+                assert!(
+                    skyward_sys::ueventd::account(&known, account).is_some(),
+                    "{codename}: {} runs with the account {account}, which the phone gives no number",
+                    service.path
+                );
             }
-            assert!(Path::new(&service.path).starts_with("/vendor") || Path::new(&service.path).starts_with("/odm") || Path::new(&service.path).starts_with("/mnt/system_ext"), "{codename}: {}", service.path);
-            assert!(service.registers.len() < 8, "{codename}: {} registers what one program does, {:?}", service.path, service.registers);
+            assert!(
+                Path::new(&service.path).starts_with("/vendor")
+                    || Path::new(&service.path).starts_with("/odm")
+                    || Path::new(&service.path).starts_with("/mnt/system_ext"),
+                "{codename}: {}",
+                service.path
+            );
+            assert!(
+                service.registers.len() < 8,
+                "{codename}: {} registers what one program does, {:?}",
+                service.path,
+                service.registers
+            );
             for name in service.ready_service.iter().chain(&service.registers) {
                 assert!(!registered.contains(&name), "{codename}: {name} is registered once");
                 registered.push(name);
             }
-            let said: Vec<String> = service.ready_property.iter().chain(&service.ready_service).chain(&service.ready_hardware_service).chain(&service.registers).cloned().collect();
-            println!("{codename}: {} as {} in {:?}: {}", service.path, service.user.as_deref().unwrap_or("root"), service.groups, said.join(", "));
+            let said: Vec<String> = service
+                .ready_property
+                .iter()
+                .chain(&service.ready_service)
+                .chain(&service.ready_hardware_service)
+                .chain(&service.registers)
+                .cloned()
+                .collect();
+            println!(
+                "{codename}: {} as {} in {:?}: {}",
+                service.path,
+                service.user.as_deref().unwrap_or("root"),
+                service.groups,
+                said.join(", ")
+            );
         }
         println!("{codename}: {}", steps.join(", "));
     }
-    assert_eq!(with_nxp_s_weaver, ["annibale", "athens", "aurora", "byron", "houji", "miro", "myron", "pandora", "popsicle", "shennong", "warsaw", "zorn"]);
+    assert_eq!(
+        with_nxp_s_weaver,
+        [
+            "annibale", "athens", "aurora", "byron", "houji", "miro", "myron", "pandora", "popsicle", "shennong", "warsaw", "zorn"
+        ]
+    );
 }
 
 /// The 17 Ultra in the build whose weaver is Goodix's, which goes through
@@ -225,9 +365,22 @@ fn every_phone_names_one_program_for_each_service() {
 fn nezha_s_programs_are_found_as_they_were_started_on_the_phone() {
     let steps = secure::steps(&phone("nezha", &[("ro.boot.hardware", "qcom"), ("ro.special_edition", "true")])).unwrap();
     let expected = [
-        Started { service: listeners(), sockets: vec![socket("notify-topology", "drmrpc")], environment: Vec::new(), anew: false },
         Started {
-            service: Service { capabilities: strings(&["WAKE_ALARM", "BLOCK_SUSPEND"]), ..program("/vendor/bin/hlosminkdaemon", &ON_VENDOR, "system", &["system", "oem_2912", "wakelock"]) },
+            service: listeners(),
+            sockets: vec![socket("notify-topology", "drmrpc")],
+            environment: Vec::new(),
+            anew: false,
+        },
+        Started {
+            service: Service {
+                capabilities: strings(&["WAKE_ALARM", "BLOCK_SUSPEND"]),
+                ..program(
+                    "/vendor/bin/hlosminkdaemon",
+                    &ON_VENDOR,
+                    "system",
+                    &["system", "oem_2912", "wakelock"],
+                )
+            },
             sockets: vec![socket("ssgtzd", "oem_2912"), socket("hlos_mink_opener", "system")],
             environment: Vec::new(),
             anew: false,
@@ -235,20 +388,46 @@ fn nezha_s_programs_are_found_as_they_were_started_on_the_phone() {
         Started::from(Service {
             ready_service: Some(KEYS.into()),
             registers: strings(&[PROVISIONING, CLOCK, SHARED_SECRET]),
-            ..program("/vendor/bin/hw/android.hardware.security.onekeymint-service-qti", &ON_VENDOR, "system", &["system", "drmrpc"])
+            ..program(
+                "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti",
+                &ON_VENDOR,
+                "system",
+                &["system", "drmrpc"],
+            )
         }),
-        Started::from(Service { ready_service: Some(CREDENTIALS.into()), ..program("/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti", &ON_VENDOR, "system", &["system"]) }),
+        Started::from(Service {
+            ready_service: Some(CREDENTIALS.into()),
+            ..program(
+                "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti",
+                &ON_VENDOR,
+                "system",
+                &["system"],
+            )
+        }),
         Started::from(Service {
             ready_service: Some("android.hardware.secure_element.ISecureElement/eSE2".into()),
             registers: strings(&["vendor.goodix.hardware.secure_element_aidl.IGdxEse/default"]),
-            ..program("/odm/bin/hw/android.hardware.secure_element-service-goodix", &ON_ODM, "system", &["system"])
+            ..program(
+                "/odm/bin/hw/android.hardware.secure_element-service-goodix",
+                &ON_ODM,
+                "system",
+                &["system"],
+            )
         }),
         Started::from(Service {
             ready_service: Some(WEAVER.into()),
             capabilities: strings(&["WAKE_ALARM"]),
-            ..program("/odm/bin/hw/android.hardware.weaver-service", &ON_ODM, "system", &["system", "drmrpc"])
+            ..program(
+                "/odm/bin/hw/android.hardware.weaver-service",
+                &ON_ODM,
+                "system",
+                &["system", "drmrpc"],
+            )
         }),
-        Started::from(Service { ready_service: Some(BOOT.into()), ..program("/vendor/bin/hw/android.hardware.boot-service.qti", &ON_VENDOR, "root", &["root"]) }),
+        Started::from(Service {
+            ready_service: Some(BOOT.into()),
+            ..program("/vendor/bin/hw/android.hardware.boot-service.qti", &ON_VENDOR, "root", &["root"])
+        }),
     ];
     let found: Vec<Started> = secure::programs(&steps).into_iter().cloned().collect();
     assert_eq!(found, expected);
@@ -257,7 +436,10 @@ fn nezha_s_programs_are_found_as_they_were_started_on_the_phone() {
 
 #[test]
 fn nezha_s_other_builds_reach_their_weaver_s_secure_element_through_the_secure_element_service() {
-    for properties in [&[("ro.boot.hardware", "qcom")][..], &[("ro.boot.hardware", "qcom"), ("ro.special_edition", "false")][..]] {
+    for properties in [
+        &[("ro.boot.hardware", "qcom")][..],
+        &[("ro.boot.hardware", "qcom"), ("ro.special_edition", "false")][..],
+    ] {
         let steps = secure::steps(&phone("nezha", properties)).unwrap();
         assert_eq!(
             names(&steps),
@@ -273,7 +455,9 @@ fn nezha_s_other_builds_reach_their_weaver_s_secure_element_through_the_secure_e
             ]
         );
         let found = secure::programs(&steps);
-        let [.., element, weaver, _] = &found[..] else { panic!("seven programs") };
+        let [.., element, weaver, _] = &found[..] else {
+            panic!("seven programs")
+        };
         // The phone tells of the secure element built into it in the
         // description of its NFC chip's service, which its init starts
         // only when the NFC service itself is asked for: the secure
@@ -281,11 +465,31 @@ fn nezha_s_other_builds_reach_their_weaver_s_secure_element_through_the_secure_e
         // NFC service stays that program's to register.
         let own = Service {
             ready_service: Some("android.hardware.secure_element.ISecureElement/eSE1".into()),
-            ..program("/vendor/bin/hw/android.hardware.secure_element-service.qti", &ON_VENDOR, "system", &["nfc", "system"])
+            ..program(
+                "/vendor/bin/hw/android.hardware.secure_element-service.qti",
+                &ON_VENDOR,
+                "system",
+                &["nfc", "system"],
+            )
         };
         assert_eq!(**element, Started::from(own));
-        let thales = Service { ready_service: Some(WEAVER.into()), ..program("/odm/bin/hw/android.hardware.weaver-service.thales", &ON_ODM, "vendor_thales_weaver", &["vendor_thales_weaver", "system", "drmrpc"]) };
-        assert_eq!(**weaver, Started { anew: true, ..Started::from(thales) }, "it holds on to the service the recovery serves");
+        let thales = Service {
+            ready_service: Some(WEAVER.into()),
+            ..program(
+                "/odm/bin/hw/android.hardware.weaver-service.thales",
+                &ON_ODM,
+                "vendor_thales_weaver",
+                &["vendor_thales_weaver", "system", "drmrpc"],
+            )
+        };
+        assert_eq!(
+            **weaver,
+            Started {
+                anew: true,
+                ..Started::from(thales)
+            },
+            "it holds on to the service the recovery serves"
+        );
         assert!(found.iter().filter(|started| started.anew).count() == 1);
     }
 }
@@ -298,10 +502,19 @@ fn nezha_s_other_builds_reach_their_weaver_s_secure_element_through_the_secure_e
 /// secret, the secure clock and the provisioning as well.
 #[test]
 fn ishtar_s_programs_are_found_as_they_were_started_on_the_phone_and_its_opener_with_them() {
-    let properties = [("ro.boot.hardware", "qcom"), ("ro.boot.product.vendor.sku", "kalama"), ("ro.boot.product.hardware.sku", "ishtar")];
+    let properties = [
+        ("ro.boot.hardware", "qcom"),
+        ("ro.boot.product.vendor.sku", "kalama"),
+        ("ro.boot.product.hardware.sku", "ishtar"),
+    ];
     let steps = secure::steps(&phone("ishtar", &properties)).unwrap();
     let expected = [
-        Started { service: listeners(), sockets: vec![socket("notify-topology", "drmrpc")], environment: Vec::new(), anew: false },
+        Started {
+            service: listeners(),
+            sockets: vec![socket("notify-topology", "drmrpc")],
+            environment: Vec::new(),
+            anew: false,
+        },
         Started {
             service: program("/vendor/bin/ssgtzd", &ON_VENDOR, "system", &["system", "oem_2912"]),
             sockets: vec![socket("ssgtzd", "oem_2912"), socket("ssgtzd_opener", "system")],
@@ -311,14 +524,35 @@ fn ishtar_s_programs_are_found_as_they_were_started_on_the_phone_and_its_opener_
         Started::from(Service {
             ready_service: Some(KEYS.into()),
             registers: strings(&[SHARED_SECRET, CLOCK, PROVISIONING]),
-            ..program("/vendor/bin/hw/android.hardware.security.keymint-service-qti", &ON_VENDOR, "system", &["system", "drmrpc"])
+            ..program(
+                "/vendor/bin/hw/android.hardware.security.keymint-service-qti",
+                &ON_VENDOR,
+                "system",
+                &["system", "drmrpc"],
+            )
         }),
-        Started::from(Service { ready_property: Some("hwservicemanager.ready".into()), ..program("/mnt/system_ext/bin/hwservicemanager", &ON_SYSTEM, "system", &["system", "readproc"]) }),
+        Started::from(Service {
+            ready_property: Some("hwservicemanager.ready".into()),
+            ..program(
+                "/mnt/system_ext/bin/hwservicemanager",
+                &ON_SYSTEM,
+                "system",
+                &["system", "readproc"],
+            )
+        }),
         Started::from(Service {
             ready_hardware_service: Some("android.hardware.gatekeeper@1.0::IGatekeeper/default".into()),
-            ..program("/vendor/bin/hw/android.hardware.gatekeeper@1.0-service-qti", &ON_VENDOR, "system", &["system"])
+            ..program(
+                "/vendor/bin/hw/android.hardware.gatekeeper@1.0-service-qti",
+                &ON_VENDOR,
+                "system",
+                &["system"],
+            )
         }),
-        Started::from(Service { ready_hardware_service: Some("android.hardware.boot@1.2::IBootControl/default".into()), ..program("/vendor/bin/hw/android.hardware.boot@1.2-service", &ON_VENDOR, "root", &["root"]) }),
+        Started::from(Service {
+            ready_hardware_service: Some("android.hardware.boot@1.2::IBootControl/default".into()),
+            ..program("/vendor/bin/hw/android.hardware.boot@1.2-service", &ON_VENDOR, "root", &["root"])
+        }),
     ];
     let found: Vec<Started> = secure::programs(&steps).into_iter().cloned().collect();
     assert_eq!(found, expected);
@@ -330,7 +564,11 @@ fn ishtar_s_programs_are_found_as_they_were_started_on_the_phone_and_its_opener_
 #[test]
 fn socrates_s_programs_are_the_13_ultra_s() {
     let found = |codename: &str| {
-        let properties = [("ro.boot.hardware", "qcom"), ("ro.boot.product.vendor.sku", "kalama"), ("ro.boot.product.hardware.sku", codename)];
+        let properties = [
+            ("ro.boot.hardware", "qcom"),
+            ("ro.boot.product.vendor.sku", "kalama"),
+            ("ro.boot.product.hardware.sku", codename),
+        ];
         let steps = secure::steps(&phone(codename, &properties)).unwrap();
         secure::programs(&steps).into_iter().cloned().collect::<Vec<Started>>()
     };
@@ -344,16 +582,42 @@ fn socrates_s_programs_are_the_13_ultra_s() {
 /// programs; the installed system's own program looks in the bundle last.
 #[test]
 fn ishtar_s_programs_look_in_its_bundle_before_the_installed_system_s_folders() {
-    let properties = [("ro.boot.hardware", "qcom"), ("ro.boot.product.vendor.sku", "kalama"), ("ro.boot.product.hardware.sku", "ishtar")];
+    let properties = [
+        ("ro.boot.hardware", "qcom"),
+        ("ro.boot.product.vendor.sku", "kalama"),
+        ("ro.boot.product.hardware.sku", "ishtar"),
+    ];
     let bundle = "/apex/com.android.vndk.v33/lib64";
     let steps = secure::steps(&with_bundle("ishtar", &properties, Some(Path::new(bundle)))).unwrap();
     let found = secure::programs(&steps);
-    let libraries = |path: &str| &found.iter().find(|s| s.service.path == path).unwrap_or_else(|| panic!("{path} is started")).service.libraries;
+    let libraries = |path: &str| {
+        &found
+            .iter()
+            .find(|s| s.service.path == path)
+            .unwrap_or_else(|| panic!("{path} is started"))
+            .service
+            .libraries
+    };
     assert_eq!(
         *libraries("/vendor/bin/hw/android.hardware.security.keymint-service-qti"),
-        ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", bundle, "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+        [
+            "/system/lib64",
+            "/vendor/lib64",
+            "/vendor/lib64/hw",
+            bundle,
+            "/mnt/system/system/lib64",
+            "/mnt/system/system/lib64/bootstrap"
+        ]
     );
-    assert_eq!(*libraries("/mnt/system_ext/bin/hwservicemanager"), ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64", bundle]);
+    assert_eq!(
+        *libraries("/mnt/system_ext/bin/hwservicemanager"),
+        [
+            "/mnt/system/system/lib64/bootstrap",
+            "/mnt/system/system/lib64",
+            "/mnt/system_ext/lib64",
+            bundle
+        ]
+    );
 }
 
 /// A phone whose weaver's secure element is behind a service of its own,
@@ -378,16 +642,44 @@ fn dada_s_weaver_goes_through_the_secure_element_service_to_the_element_s_own_se
         ]
     );
     let found = secure::programs(&steps);
-    let at = |path: &str| found.iter().find(|s| s.service.path == path).unwrap_or_else(|| panic!("{path} is started"));
+    let at = |path: &str| {
+        found
+            .iter()
+            .find(|s| s.service.path == path)
+            .unwrap_or_else(|| panic!("{path} is started"))
+    };
     let opener = at("/vendor/bin/hlosminkdaemon");
-    assert_eq!((opener.service.user.as_deref(), &opener.service.groups[..]), (Some("system"), &strings(&["system"])[..]), "as its script on the phone has it");
-    let credentials = Service { ready_service: Some(CREDENTIALS.into()), ..program("/vendor/bin/hw/android.hardware.gatekeeper-service-qti", &ON_VENDOR, "system", &["system"]) };
-    assert_eq!(*at("/vendor/bin/hw/android.hardware.gatekeeper-service-qti"), &Started::from(credentials));
+    assert_eq!(
+        (opener.service.user.as_deref(), &opener.service.groups[..]),
+        (Some("system"), &strings(&["system"])[..]),
+        "as its script on the phone has it"
+    );
+    let credentials = Service {
+        ready_service: Some(CREDENTIALS.into()),
+        ..program(
+            "/vendor/bin/hw/android.hardware.gatekeeper-service-qti",
+            &ON_VENDOR,
+            "system",
+            &["system"],
+        )
+    };
+    assert_eq!(
+        *at("/vendor/bin/hw/android.hardware.gatekeeper-service-qti"),
+        &Started::from(credentials)
+    );
     let element = Service {
         ready_service: Some("android.hardware.secure_element.ISecureElement/eSE1".into()),
-        ..program("/vendor/bin/hw/android.hardware.secure_element-service.qti", &ON_VENDOR, "system", &["nfc", "system"])
+        ..program(
+            "/vendor/bin/hw/android.hardware.secure_element-service.qti",
+            &ON_VENDOR,
+            "system",
+            &["nfc", "system"],
+        )
     };
-    assert_eq!(*at("/vendor/bin/hw/android.hardware.secure_element-service.qti"), &Started::from(element));
+    assert_eq!(
+        *at("/vendor/bin/hw/android.hardware.secure_element-service.qti"),
+        &Started::from(element)
+    );
     assert!(at("/odm/bin/hw/android.hardware.weaver-service.thales").anew);
 }
 
@@ -399,8 +691,14 @@ fn byron_s_secure_element_is_told_of_among_all_its_vendor_partition_registers() 
         let properties = [("ro.boot.hardware", "qcom"), ("ro.boot.product.vendor.sku", build.as_str())];
         let steps = secure::steps(&phone("byron", &properties)).unwrap();
         let found = secure::programs(&steps);
-        let element = found.iter().find(|s| s.service.path.ends_with("secure_element-service.qti")).expect("its secure element has a service of its own");
-        assert_eq!(element.service.ready_service.as_deref(), Some("android.hardware.secure_element.ISecureElement/eSE1"));
+        let element = found
+            .iter()
+            .find(|s| s.service.path.ends_with("secure_element-service.qti"))
+            .expect("its secure element has a service of its own");
+        assert_eq!(
+            element.service.ready_service.as_deref(),
+            Some("android.hardware.secure_element.ISecureElement/eSE1")
+        );
         assert!(element.service.registers.is_empty(), "{:?}", element.service.registers);
     }
 }
@@ -422,12 +720,27 @@ fn a_program_its_partition_does_not_carry_is_not_one_the_phone_runs() {
     std::fs::write(vendor.join("etc/init/programs.rc"), script).unwrap();
     std::fs::write(vendor.join("bin/there"), b"").unwrap();
     std::fs::write(odm.join("bin/linked"), b"").unwrap();
-    let partitions = vec![Partition { name: "vendor".into(), mounted: "/vendor".into(), at: vendor }, Partition { name: "odm".into(), mounted: "/odm".into(), at: odm }];
+    let partitions = vec![
+        Partition {
+            name: "vendor".into(),
+            mounted: "/vendor".into(),
+            at: vendor,
+        },
+        Partition {
+            name: "odm".into(),
+            mounted: "/odm".into(),
+            at: odm,
+        },
+    ];
     let phone = Phone::read(partitions, HashMap::new(), None).unwrap();
     let runs = |name: &str| phone.runs(phone.programs.iter().find(|p| p.name == name).unwrap());
     assert_eq!(runs("there"), Happens::Yes);
     assert_eq!(runs("gone"), Happens::No);
-    assert_eq!(runs("linked"), Happens::Yes, "on the odm partition, which the vendor partition links to");
+    assert_eq!(
+        runs("linked"),
+        Happens::Yes,
+        "on the odm partition, which the vendor partition links to"
+    );
     assert_eq!(runs("elsewhere"), Happens::No, "on a partition that is not read");
     let linked = phone.programs.iter().find(|p| p.name == "linked").unwrap();
     assert_eq!(phone.started_from(&linked.path), "/odm/bin/linked");
@@ -443,8 +756,15 @@ fn the_hardware_s_script_is_named_by_what_the_bootloader_calls_the_hardware() {
     assert_eq!(named.properties.get("ro.bootmode").map(String::as_str), Some("unknown"));
     assert_eq!(named.properties.get("ro.serialno"), None);
     let unnamed = phone("nezha", &[("ro.hardware", "qcom")]);
-    assert_eq!(unnamed.properties.get("ro.hardware").map(String::as_str), Some("unknown"), "init sets it from the bootloader's alone");
-    assert!(unnamed.actions.len() < named.actions.len(), "the hardware's script and those it has init read are left unread");
+    assert_eq!(
+        unnamed.properties.get("ro.hardware").map(String::as_str),
+        Some("unknown"),
+        "init sets it from the bootloader's alone"
+    );
+    assert!(
+        unnamed.actions.len() < named.actions.len(),
+        "the hardware's script and those it has init read are left unread"
+    );
 }
 
 /// No bootloader says which build of the hardware a phone's vendor
@@ -455,21 +775,46 @@ fn the_hardware_s_script_is_named_by_what_the_bootloader_calls_the_hardware() {
 /// nothing more to do.
 #[test]
 fn every_phone_s_init_names_the_build_its_vendor_partition_describes_after_its_chip() {
-    let codenames: Vec<String> = std::fs::read_dir(described("")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let codenames: Vec<String> = std::fs::read_dir(described(""))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     assert!(codenames.len() >= 21, "the phones described are {codenames:?}");
-    let makes_the_chip_out = Service { oneshot: true, user: None, groups: Vec::new(), ..program("/vendor/bin/init.qti.qcv.sh", &ON_VENDOR, "root", &[]) };
+    let makes_the_chip_out = Service {
+        oneshot: true,
+        user: None,
+        groups: Vec::new(),
+        ..program("/vendor/bin/init.qti.qcv.sh", &ON_VENDOR, "root", &[])
+    };
     let named_as_init_names_it = [
         Does::Run(Box::new(Started::from(makes_the_chip_out))),
-        Does::Set { name: "ro.boot.product.vendor.sku".into(), value: "${ro.vendor.qti.soc_name}".into() },
+        Does::Set {
+            name: "ro.boot.product.vendor.sku".into(),
+            value: "${ro.vendor.qti.soc_name}".into(),
+        },
     ];
     for codename in &codenames {
         let hardware = [("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", codename.as_str())];
-        assert_eq!(naming::steps(&phone(codename, &hardware)).unwrap(), named_as_init_names_it, "{codename}");
+        assert_eq!(
+            naming::steps(&phone(codename, &hardware)).unwrap(),
+            named_as_init_names_it,
+            "{codename}"
+        );
         let chips = builds(codename, "vendor");
-        assert!(!chips.is_empty(), "{codename} keeps a main description for each chip its vendor partition serves");
-        assert!(!described(codename).join("vendor/etc/vintf/manifest.xml").exists(), "{codename} keeps none for a phone left unnamed");
+        assert!(
+            !chips.is_empty(),
+            "{codename} keeps a main description for each chip its vendor partition serves"
+        );
+        assert!(
+            !described(codename).join("vendor/etc/vintf/manifest.xml").exists(),
+            "{codename} keeps none for a phone left unnamed"
+        );
         for chip in &chips {
-            let named = [("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", codename.as_str()), ("ro.boot.product.vendor.sku", chip.as_str())];
+            let named = [
+                ("ro.boot.hardware", "qcom"),
+                ("ro.boot.product.hardware.sku", codename.as_str()),
+                ("ro.boot.product.vendor.sku", chip.as_str()),
+            ];
             assert_eq!(naming::steps(&phone(codename, &named)).unwrap(), [], "{codename}, named {chip}");
         }
     }

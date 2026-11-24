@@ -1,5 +1,5 @@
-use crate::waveform::{made, scaled, share, ticks, RATE, TICKS_RATE};
-use anyhow::{anyhow, ensure, Context, Result};
+use crate::waveform::{RATE, TICKS_RATE, made, scaled, share, ticks};
+use anyhow::{Context, Result, anyhow, ensure};
 use evdev::raw_stream::RawDevice;
 use skyward_config::Strength;
 use std::fs::{self, File, OpenOptions};
@@ -65,9 +65,13 @@ impl Haptics {
         if cfg.effect == skyward_config::HapticEffect::QcomWaveform {
             let id = cfg.click.context("Qualcomm waveform needs a click ID")?;
             return Ok(Haptics {
-                dev, click: Click::Miro(id), ticks: Click::Miro(id), strength: cfg.strength,
+                dev,
+                click: Click::Miro(id),
+                ticks: Click::Miro(id),
+                strength: cfg.strength,
                 scale_samples: false,
-                playing: Arc::new(Mutex::new(None)), clicks: 0,
+                playing: Arc::new(Mutex::new(None)),
+                clicks: 0,
             });
         }
         let hz = match cfg.resonance.as_deref().map(resonance).transpose() {
@@ -81,16 +85,33 @@ impl Haptics {
         };
         let click = match cfg.click {
             Some(id) => {
-                eprintln!("haptics {}: clicks with waveform {id}, ticks made for a motor swinging at {hz} Hz", path.display());
+                eprintln!(
+                    "haptics {}: clicks with waveform {id}, ticks made for a motor swinging at {hz} Hz",
+                    path.display()
+                );
                 Click::Kept(id)
             }
             None => {
                 eprintln!("haptics {}: clicks and ticks made for a motor swinging at {hz} Hz", path.display());
-                Click::Samples { data: made(hz), rate: RATE }
+                Click::Samples {
+                    data: made(hz),
+                    rate: RATE,
+                }
             }
         };
-        let ticks = Click::Samples { data: ticks(hz), rate: TICKS_RATE };
-        Ok(Haptics { dev, click, ticks, strength: cfg.strength, scale_samples: cfg.scale_samples, playing: Arc::new(Mutex::new(None)), clicks: 0 })
+        let ticks = Click::Samples {
+            data: ticks(hz),
+            rate: TICKS_RATE,
+        };
+        Ok(Haptics {
+            dev,
+            click,
+            ticks,
+            strength: cfg.strength,
+            scale_samples: cfg.scale_samples,
+            playing: Arc::new(Mutex::new(None)),
+            clicks: 0,
+        })
     }
 
     /// One short click at the strength the slider's `position` gives, after
@@ -127,7 +148,12 @@ impl Haptics {
         *playing = Some(this);
         drop(playing);
         let dev = self.dev.try_clone().context("share the motor")?;
-        let length = loaded.length + if ticks && matches!(effect, Click::Samples { .. }) { TICKS_REST } else { Duration::ZERO };
+        let length = loaded.length
+            + if ticks && matches!(effect, Click::Samples { .. }) {
+                TICKS_REST
+            } else {
+                Duration::ZERO
+            };
         // Timed from now: a thread may wait a while before it first runs.
         let until = Instant::now() + length;
         let playing = self.playing.clone();
@@ -158,7 +184,10 @@ pub fn probe(cfg: &skyward_config::Haptics, position: f32, ticks: bool) -> Resul
     // Once it has played out, what played goes with the device as the
     // command ends.
     std::thread::sleep(length);
-    println!("played the {what} at {strength:.3} of the full strength, {} ms long", length.as_millis());
+    println!(
+        "played the {what} at {strength:.3} of the full strength, {} ms long",
+        length.as_millis()
+    );
     Ok(())
 }
 
@@ -167,9 +196,16 @@ pub fn probe(cfg: &skyward_config::Haptics, position: f32, ticks: bool) -> Resul
 fn motor(effect: skyward_config::HapticEffect) -> Result<(PathBuf, File)> {
     for (path, dev) in evdev::raw_stream::enumerate() {
         let qcom = effect == skyward_config::HapticEffect::QcomWaveform;
-        if takes_periodic(&dev) && (!qcom || (dev.name() == Some("qcom-hv-haptics")
-            && dev.supported_ff().is_some_and(|ff| ff.contains(evdev::FFEffectCode::FF_CUSTOM)))) {
-            let file = OpenOptions::new().read(true).write(true).open(&path).with_context(|| format!("open {}", path.display()))?;
+        if takes_periodic(&dev)
+            && (!qcom
+                || (dev.name() == Some("qcom-hv-haptics")
+                    && dev.supported_ff().is_some_and(|ff| ff.contains(evdev::FFEffectCode::FF_CUSTOM))))
+        {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("open {}", path.display()))?;
             return Ok((path, file));
         }
     }
@@ -184,7 +220,11 @@ fn takes_periodic(dev: &RawDevice) -> bool {
 /// it in, in tenths of a hertz.
 fn resonance(file: &str) -> Result<f32> {
     let text = fs::read_to_string(file).with_context(|| format!("read {file}"))?;
-    let tenths: u32 = text.split_whitespace().next().and_then(|n| n.parse().ok()).with_context(|| format!("{file} holds {text:?}"))?;
+    let tenths: u32 = text
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .with_context(|| format!("{file} holds {text:?}"))?;
     ensure!(tenths > 0, "{file} says the motor swings at 0 Hz");
     Ok(tenths as f32 / 10.0)
 }
@@ -225,7 +265,12 @@ fn upload(dev: &File, click: &Click, share: f32, scale_samples: bool) -> Result<
     // waveform's number from the first of three values and writes how long
     // it plays into the other two, in whole seconds and then milliseconds.
     let mut kept: [i16; 3] = [0; 3];
-    let mut samples = Samples { index: 0, length: 0, rate: RATE, data: std::ptr::null() };
+    let mut samples = Samples {
+        index: 0,
+        length: 0,
+        rate: RATE,
+        data: std::ptr::null(),
+    };
     let (len, data) = match click {
         Click::Kept(id) | Click::Miro(id) => {
             kept = qcom::packet(*id);
@@ -241,10 +286,19 @@ fn upload(dev: &File, click: &Click, share: f32, scale_samples: bool) -> Result<
     let periodic = libc::ff_periodic_effect {
         waveform: FF_CUSTOM,
         period: 0,
-        magnitude: if lighter.is_some() { i16::MAX } else { (share * f32::from(i16::MAX)).round() as i16 },
+        magnitude: if lighter.is_some() {
+            i16::MAX
+        } else {
+            (share * f32::from(i16::MAX)).round() as i16
+        },
         offset: 0,
         phase: 0,
-        envelope: libc::ff_envelope { attack_length: 0, attack_level: 0, fade_length: 0, fade_level: 0 },
+        envelope: libc::ff_envelope {
+            attack_length: 0,
+            attack_level: 0,
+            fade_length: 0,
+            fade_level: 0,
+        },
         custom_len: len as u32,
         custom_data: data,
     };
@@ -276,7 +330,10 @@ fn upload(dev: &File, click: &Click, share: f32, scale_samples: bool) -> Result<
         Click::Kept(id) => {
             let [_, seconds, millis] = kept;
             let length = Duration::from_secs(u64::try_from(seconds)?) + Duration::from_millis(u64::try_from(millis)?);
-            ensure!(!length.is_zero(), "the driver loaded waveform {id} without saying how long it plays");
+            ensure!(
+                !length.is_zero(),
+                "the driver loaded waveform {id} without saying how long it plays"
+            );
             length
         }
         // The queue is full before the samples start playing.
@@ -287,8 +344,18 @@ fn upload(dev: &File, click: &Click, share: f32, scale_samples: bool) -> Result<
 
 /// Start the loaded effect in slot `id`.
 fn play(dev: &mut File, id: i16) -> io::Result<()> {
-    let event = libc::input_event { time: libc::timeval { tv_sec: 0, tv_usec: 0 }, type_: EV_FF, code: id as u16, value: 1 };
-    let bytes = unsafe { std::slice::from_raw_parts((&event as *const libc::input_event).cast::<u8>(), std::mem::size_of::<libc::input_event>()) };
+    let event = libc::input_event {
+        time: libc::timeval { tv_sec: 0, tv_usec: 0 },
+        type_: EV_FF,
+        code: id as u16,
+        value: 1,
+    };
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            (&event as *const libc::input_event).cast::<u8>(),
+            std::mem::size_of::<libc::input_event>(),
+        )
+    };
     dev.write_all(bytes)
 }
 

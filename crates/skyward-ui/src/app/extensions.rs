@@ -213,7 +213,11 @@ impl App {
                 tr!(l, "已忘记「{name}」", "已忘記「{name}」", "“{name}” is forgotten")
             }
             Ok(_) => l
-                .pick(crate::lang::legacy(["已清除保存的网络", "已清除儲存的網路", "The networks kept are cleared"]))
+                .pick(crate::lang::legacy([
+                    "已清除保存的网络",
+                    "已清除儲存的網路",
+                    "The networks kept are cleared",
+                ]))
                 .to_string(),
             Err(why) => {
                 format!(
@@ -245,7 +249,14 @@ impl App {
         self.refresh();
         let l = self.state.lang;
         match outcome {
-            Ok(0) => self.say(l.pick(crate::lang::legacy(["安装包已不存在", "安裝檔已不存在", "The package is already gone"])), now),
+            Ok(0) => self.say(
+                l.pick(crate::lang::legacy([
+                    "安装包已不存在",
+                    "安裝檔已不存在",
+                    "The package is already gone",
+                ])),
+                now,
+            ),
             Ok(freed) => {
                 let size = crate::fmt::file_size(freed);
                 self.say(
@@ -324,10 +335,11 @@ impl App {
 impl App {
     /// What a page whose entry has gone says, instead of acting on nothing.
     pub(super) fn no_entry(&mut self, now: u64) -> Vec<Effect> {
-        let said = self
-            .state
-            .lang
-            .pick(crate::lang::legacy(["没有可操作的条目", "沒有可操作的項目", "There is no entry left to act on"]));
+        let said = self.state.lang.pick(crate::lang::legacy([
+            "没有可操作的条目",
+            "沒有可操作的項目",
+            "There is no entry left to act on",
+        ]));
         self.say(said, now);
         Vec::new()
     }

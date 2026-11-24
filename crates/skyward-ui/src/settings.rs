@@ -488,7 +488,10 @@ mod tests {
         let mut back = State::default();
         kept.apply(&mut back);
         assert_eq!(Settings::of(&back), Settings::of(&state));
-        assert_eq!((back.lang, back.screen_off, back.time_zone), (Lang::En, 6, zone("America/New_York")));
+        assert_eq!(
+            (back.lang, back.screen_off, back.time_zone),
+            (Lang::En, 6, zone("America/New_York"))
+        );
         assert!(back.always_on, "a face turned on is still on at the next start");
         assert!(!back.double_tap, "the disabled double-tap setting survives a restart");
         // The value carried is the one a start does not have of itself, so
@@ -502,18 +505,30 @@ mod tests {
             "miro keeps its established software double-tap default"
         );
         assert!(!back.follow_system_zone);
-        assert_eq!(back.system_zone, state.system_zone, "a zone of the system's that the pages do not list");
+        assert_eq!(
+            back.system_zone, state.system_zone,
+            "a zone of the system's that the pages do not list"
+        );
     }
 
     #[test]
     fn each_value_is_kept_as_what_it_means() {
         let system = Some(SystemZone::named("Europe/Rome").unwrap());
-        let state = State { screen_off: 3, time_zone: zone("Asia/Hong_Kong"), system_zone: system, backup: [true, false, false, false, true], ..State::default() };
+        let state = State {
+            screen_off: 3,
+            time_zone: zone("Asia/Hong_Kong"),
+            system_zone: system,
+            backup: [true, false, false, false, true],
+            ..State::default()
+        };
         let text = Settings::of(&state).text();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["screen_off"], 120, "two minutes, in seconds");
         assert_eq!(json["time_zone"], "Asia/Hong_Kong");
-        assert_eq!(json["follow_system_time_zone"], true, "the system's zone is followed until one is chosen");
+        assert_eq!(
+            json["follow_system_time_zone"], true,
+            "the system's zone is followed until one is chosen"
+        );
         assert_eq!(json["system_time_zone"], "Europe/Rome", "by the name the system gives it");
         assert_eq!(json["backup"]["parts"], serde_json::json!(["boot", "modem"]));
         assert_eq!(json["logs"]["to"], "temporary");
@@ -559,8 +574,15 @@ mod tests {
             screen_off: 7,
             time_zone: "Mars/Olympus".into(),
             system_time_zone: Some("Mars/Olympus".into()),
-            backup: Backup { parts: vec!["boot".into(), "photos".into()], to: "cloud".into(), ..Backup::default() },
-            logs: Logs { kinds: vec!["kernel".into()], to: "printer".into() },
+            backup: Backup {
+                parts: vec!["boot".into(), "photos".into()],
+                to: "cloud".into(),
+                ..Backup::default()
+            },
+            logs: Logs {
+                kinds: vec!["kernel".into()],
+                to: "printer".into(),
+            },
             ..Settings::default()
         };
         let mut state = State::default();
@@ -573,7 +595,11 @@ mod tests {
         );
         assert!(!state.language_chosen);
         assert_eq!(state.system_zone, None, "a zone the recovery carries no rules for");
-        assert_eq!(state.backup, [true, false, false, false, false], "a part this version has not is left out");
+        assert_eq!(
+            state.backup,
+            [true, false, false, false, false],
+            "a part this version has not is left out"
+        );
         assert_eq!(state.logs, [false, true]);
     }
 

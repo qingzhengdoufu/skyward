@@ -1148,7 +1148,14 @@ impl Canvas {
         }
         watched(|w| {
             let (text, canvas) = (text.to_string(), (self.w, self.h));
-            w.drawn.push(Drawn { text, canvas, left: x, right: pen, top: baseline - face.cap(px), bottom: baseline });
+            w.drawn.push(Drawn {
+                text,
+                canvas,
+                left: x,
+                right: pen,
+                top: baseline - face.cap(px),
+                bottom: baseline,
+            });
         });
         pen - x
     }

@@ -31,13 +31,18 @@ impl Encryption {
     /// Read what an entry of the phone's own table says, which is nothing
     /// where the entry does not have the partition encrypted whole.
     pub fn of(entry: &Entry) -> Result<Option<Encryption>> {
-        let Some(said) = entry.extra("metadata_encryption") else { return Ok(None) };
+        let Some(said) = entry.extra("metadata_encryption") else {
+            return Ok(None);
+        };
         let (name, rest) = said.split_once(':').unwrap_or((said, ""));
         let cipher = CIPHERS
             .iter()
             .find_map(|(theirs, kernels)| (*theirs == name).then_some(*kernels))
             .with_context(|| format!("no cipher here is the {name} the phone names"))?;
-        Ok(Some(Encryption { cipher: cipher.to_string(), wrapped: rest == "wrappedkey_v0" }))
+        Ok(Some(Encryption {
+            cipher: cipher.to_string(),
+            wrapped: rest == "wrappedkey_v0",
+        }))
     }
 }
 
@@ -75,7 +80,9 @@ pub fn made_afresh(entry: &Entry) -> bool {
 
 /// Where the phone keeps the key for the filesystem an entry describes.
 pub fn key_dir(entry: &Entry) -> Result<PathBuf> {
-    let dir = entry.extra("keydirectory").context("the phone says where the key for its data partition is not")?;
+    let dir = entry
+        .extra("keydirectory")
+        .context("the phone says where the key for its data partition is not")?;
     Ok(Path::new(dir).join(KEY_DIR))
 }
 
@@ -108,9 +115,21 @@ mod tests {
     #[test]
     fn the_phones_own_words_for_the_cipher_become_the_kernels() {
         let e = entry("metadata_encryption=aes-256-xts:wrappedkey_v0,keydirectory=/metadata/vold/metadata_encryption");
-        assert_eq!(Encryption::of(&e).unwrap(), Some(Encryption { cipher: "aes-xts-plain64".into(), wrapped: true }));
+        assert_eq!(
+            Encryption::of(&e).unwrap(),
+            Some(Encryption {
+                cipher: "aes-xts-plain64".into(),
+                wrapped: true
+            })
+        );
         let plain = entry("metadata_encryption=adiantum");
-        assert_eq!(Encryption::of(&plain).unwrap(), Some(Encryption { cipher: "xchacha12,aes-adiantum-plain64".into(), wrapped: false }));
+        assert_eq!(
+            Encryption::of(&plain).unwrap(),
+            Some(Encryption {
+                cipher: "xchacha12,aes-adiantum-plain64".into(),
+                wrapped: false
+            })
+        );
     }
 
     #[test]
@@ -143,11 +162,21 @@ mod tests {
         let stock = STOCK.map(entry);
         let (said_in, encryption) = whole(&stock).unwrap().expect("encrypted whole");
         assert_eq!(said_in, &stock[0]);
-        assert_eq!(encryption, Encryption { cipher: "aes-xts-plain64".into(), wrapped: true });
+        assert_eq!(
+            encryption,
+            Encryption {
+                cipher: "aes-xts-plain64".into(),
+                wrapped: true
+            }
+        );
         assert!(files(&stock));
 
         let turned = [entry(STOCK[1]), entry(STOCK[0])];
-        assert_eq!(whole(&turned).unwrap().expect("encrypted whole").0, &turned[1], "whichever entry says so");
+        assert_eq!(
+            whole(&turned).unwrap().expect("encrypted whole").0,
+            &turned[1],
+            "whichever entry says so"
+        );
         assert!(files(&turned));
 
         let files_only = [entry(FILES_ONLY)];
@@ -162,7 +191,10 @@ mod tests {
     #[test]
     fn an_emptied_partition_is_made_afresh_where_the_table_lets_the_system() {
         assert!(made_afresh(&entry(STOCK[0])));
-        assert!(made_afresh(&entry(FILES_ONLY)), "its keys are in the partition, and go and come with it");
+        assert!(
+            made_afresh(&entry(FILES_ONLY)),
+            "its keys are in the partition, and go and come with it"
+        );
         assert!(made_afresh(&entry(PLAIN)));
         assert!(!made_afresh(&entry("latemount,wait,quota")), "not formattable");
         assert!(
@@ -179,9 +211,21 @@ mod tests {
 
     #[test]
     fn the_partition_is_mapped_in_whole_units_of_the_hardwares_reads() {
-        let e = Encryption { cipher: "aes-xts-plain64".into(), wrapped: true };
+        let e = Encryption {
+            cipher: "aes-xts-plain64".into(),
+            wrapped: true,
+        };
         let t = target("/dev/block/by-name/userdata", 969_825_751, &[0xAB, 0x01], &e);
-        let Target::DefaultKey { sectors, key, cipher, device, wrapped } = t else { panic!("a decrypting target") };
+        let Target::DefaultKey {
+            sectors,
+            key,
+            cipher,
+            device,
+            wrapped,
+        } = t
+        else {
+            panic!("a decrypting target")
+        };
         assert_eq!(sectors, 969_825_744, "a whole number of 4096-byte units");
         assert_eq!(key, "ab01");
         assert_eq!(cipher, "aes-xts-plain64");

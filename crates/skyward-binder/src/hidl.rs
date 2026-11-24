@@ -7,7 +7,7 @@
 //! the bytes themselves pointing back at that frame.
 
 use crate::parcel::Payload;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// An address a call hands over, as the driver carries it.
 const ADDRESS: u32 = u32::from_be_bytes([b'p', b't', b'*', 0x85]);
@@ -193,7 +193,12 @@ impl<'a> Answer<'a> {
         while !self.at.is_multiple_of(4) && self.at < self.data.len() {
             self.at += 1;
         }
-        let utf16: Vec<u16> = raw[..units as usize * 2].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        let utf16: Vec<u16> = raw[..units as usize * 2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
         Ok(String::from_utf16_lossy(&utf16))
     }
 
@@ -230,10 +235,15 @@ pub fn find<'a>(binder: &'a crate::driver::Binder, interface: &str, instance: &s
     let mut call = Message::call(DIRECTORY);
     call.text(interface);
     call.text(instance);
-    let reply = directory.transact(GET, &call).with_context(|| format!("look up {interface}/{instance}"))?;
+    let reply = directory
+        .transact(GET, &call)
+        .with_context(|| format!("look up {interface}/{instance}"))?;
     let mut read = Answer::new(reply.bytes());
     read.status().with_context(|| format!("look up {interface}/{instance}"))?;
-    match read.object().with_context(|| format!("read what the directory answered for {interface}"))? {
+    match read
+        .object()
+        .with_context(|| format!("read what the directory answered for {interface}"))?
+    {
         Some(handle) => Ok(Some(Handle::hold(reply.binder(), handle)?)),
         None => Ok(None),
     }
@@ -247,7 +257,9 @@ pub fn describes(service: &crate::driver::Handle) -> Result<String> {
     // call on it is named as being on it whatever else the service serves.
     const BASE: &str = "android.hidl.base@1.0::IBase";
     const DESCRIBE: u32 = 256_136_003;
-    let reply = service.transact(DESCRIBE, &Message::call(BASE)).context("ask the service what it serves")?;
+    let reply = service
+        .transact(DESCRIBE, &Message::call(BASE))
+        .context("ask the service what it serves")?;
     let mut read = Answer::new(reply.bytes());
     read.status().context("ask the service what it serves")?;
     let frame = read.pointed().context("read the frame of what the service serves")?;
@@ -308,7 +320,11 @@ mod tests {
         assert_eq!(parts.len(), 2, "the frame, then the bytes");
         assert_eq!(parts[0].0, 0, "the frame points inside nothing");
         assert_eq!(parts[0].2.len(), FRAME_BYTES);
-        assert_eq!(u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()), 3, "how many bytes there are");
+        assert_eq!(
+            u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()),
+            3,
+            "how many bytes there are"
+        );
         assert_eq!(parts[1].0, INSIDE_ANOTHER, "the bytes sit inside the frame");
         assert_eq!(parts[1].1, 0, "inside the first address of the call");
         assert_eq!(parts[1].2, vec![1, 2, 3]);
@@ -320,7 +336,11 @@ mod tests {
         let mut m = Message::call("a.b@1.0::IC");
         m.text("default");
         let parts = written(&m);
-        assert_eq!(u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()), 7, "the terminator is not counted");
+        assert_eq!(
+            u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()),
+            7,
+            "the terminator is not counted"
+        );
         assert_eq!(parts[1].2, b"default\0", "but it is carried");
     }
 

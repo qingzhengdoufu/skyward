@@ -1,6 +1,6 @@
 use crate::app::{Action, FileKind, FileRow, Found, Hit, Pinned, Rows};
 use crate::canvas::Canvas;
-use crate::color::{mix, Rgba};
+use crate::color::{Rgba, mix};
 use crate::fmt;
 use crate::font::{Face, Fonts};
 use crate::geom::Rect;
@@ -132,14 +132,40 @@ pub enum FileType {
 /// manager gives an icon of their own, grouped as it colours them, and the
 /// compressed files and images a recovery handles besides.
 const TYPES: [(FileType, &[&str]); 12] = [
-    (FileType::Archive, &["zip", "rar", "7z", "tar", "gz", "tgz", "xz", "bz2", "lz4", "zst"]),
+    (
+        FileType::Archive,
+        &["zip", "rar", "7z", "tar", "gz", "tgz", "xz", "bz2", "lz4", "zst"],
+    ),
     (FileType::DiskImage, &["img", "iso"]),
-    (FileType::Picture, &["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "dng", "svg", "tif", "tiff", "ico", "avif", "arw", "cr2", "nef", "psd"]),
-    (FileType::Video, &["mp4", "mkv", "mov", "avi", "3gp", "3gpp", "webm", "m4v", "ts", "flv", "wmv", "mpeg", "mpg", "rm", "rmvb", "vob", "mts", "m2ts", "f4v"]),
-    (FileType::Audio, &["mp3", "flac", "aac", "m4a", "wav", "ogg", "oga", "opus", "amr", "ape", "wma", "mid", "midi", "mka", "aif", "aiff", "ac3", "dsf", "dff", "awb"]),
+    (
+        FileType::Picture,
+        &[
+            "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "dng", "svg", "tif", "tiff", "ico", "avif", "arw", "cr2", "nef",
+            "psd",
+        ],
+    ),
+    (
+        FileType::Video,
+        &[
+            "mp4", "mkv", "mov", "avi", "3gp", "3gpp", "webm", "m4v", "ts", "flv", "wmv", "mpeg", "mpg", "rm", "rmvb", "vob", "mts",
+            "m2ts", "f4v",
+        ],
+    ),
+    (
+        FileType::Audio,
+        &[
+            "mp3", "flac", "aac", "m4a", "wav", "ogg", "oga", "opus", "amr", "ape", "wma", "mid", "midi", "mka", "aif", "aiff", "ac3",
+            "dsf", "dff", "awb",
+        ],
+    ),
     (FileType::Package, &["apk", "apks", "xapk"]),
     (FileType::Text, &["txt", "log", "md", "ini", "lrc"]),
-    (FileType::Code, &["xml", "html", "htm", "json", "sh", "py", "js", "css", "cfg", "conf", "prop", "rc", "yaml", "yml", "toml"]),
+    (
+        FileType::Code,
+        &[
+            "xml", "html", "htm", "json", "sh", "py", "js", "css", "cfg", "conf", "prop", "rc", "yaml", "yml", "toml",
+        ],
+    ),
     (FileType::Document, &["doc", "docx", "wps", "wpt", "odt", "rtf", "pages"]),
     (FileType::Spreadsheet, &["xls", "xlsx", "et", "ett", "ods", "csv", "numbers"]),
     (FileType::Presentation, &["ppt", "pptx", "pps", "dps", "dpt", "odp"]),
@@ -148,9 +174,14 @@ const TYPES: [(FileType, &[&str]); 12] = [
 
 /// What the file called `name` holds, by its extension in any case.
 pub fn file_type(name: &str) -> FileType {
-    let Some(ext) = Path::new(name).extension() else { return FileType::Other };
+    let Some(ext) = Path::new(name).extension() else {
+        return FileType::Other;
+    };
     let ext = ext.to_string_lossy().to_ascii_lowercase();
-    TYPES.iter().find(|(_, exts)| exts.contains(&ext.as_str())).map_or(FileType::Other, |&(kind, _)| kind)
+    TYPES
+        .iter()
+        .find(|(_, exts)| exts.contains(&ext.as_str()))
+        .map_or(FileType::Other, |&(kind, _)| kind)
 }
 
 /// The colour of a type's sheet, as the stock list shows it on screen.
@@ -182,7 +213,12 @@ pub fn name_lines(face: &Face, px: f32, name: &str, w: f32) -> Vec<String> {
     if lines.len() <= 2 {
         return lines;
     }
-    let cut = name.char_indices().map(|(at, ch)| at + ch.len_utf8()).take_while(|&end| width(&name[..end]) <= w).last().unwrap_or(0);
+    let cut = name
+        .char_indices()
+        .map(|(at, ch)| at + ch.len_utf8())
+        .take_while(|&end| width(&name[..end]) <= w)
+        .last()
+        .unwrap_or(0);
     let (first, rest) = name.split_at(cut);
     let second = match rest.rfind('.') {
         Some(dot) if width(&rest[dot..]) < w => {
@@ -212,7 +248,11 @@ fn middle(c: &Canvas, face: &Face, px: f32, text: &str, w: f32) -> String {
     while left < right && width(&chars[..=left]) <= left_room {
         left += 1;
     }
-    format!("{}…{}", chars[..left].iter().collect::<String>(), chars[right..].iter().collect::<String>())
+    format!(
+        "{}…{}",
+        chars[..left].iter().collect::<String>(),
+        chars[right..].iter().collect::<String>()
+    )
 }
 
 /// The list's rows for `entries`, the first starting `top` dp down the page,
@@ -228,7 +268,10 @@ pub fn rows(t: &Theme, f: &Fonts, top: f32, entries: &[&FileRow], action: fn(usi
         y += (m.dp(ROW_DP) + m.dp(NAME_LINE_DP) * (lines - 1) as f32).round();
         edges.push(y);
     }
-    Rows { edges, action: Some(action) }
+    Rows {
+        edges,
+        action: Some(action),
+    }
 }
 
 /// The rows of what a search found, each a line taller than a folder's own
@@ -245,7 +288,10 @@ pub fn found_rows(t: &Theme, f: &Fonts, top: f32, found: &[&Found], action: fn(u
         y += (m.dp(ROW_DP) + m.dp(NAME_LINE_DP) * (lines - 1) as f32 + m.dp(FOUND_LINE_DP)).round();
         edges.push(y);
     }
-    Rows { edges, action: Some(action) }
+    Rows {
+        edges,
+        action: Some(action),
+    }
 }
 
 /// What a search found, drawn as its entry's row with the folder it is in
@@ -258,16 +304,30 @@ pub fn found_row(c: &mut Canvas, t: &Theme, f: &Fonts, l: Lang, found: &Found, r
     let (x, w) = (m.dp(TEXT_X_DP), name_width(t));
     let lines = name_lines(&f.heading, m.dp(NAME_DP), &found.entry.name, w).len();
     let y = m.dp(LINE_BASE_DP + NAME_LINE_DP * (lines - 1) as f32 + FOUND_BASE_DP);
-    c.text(&f.value, &in_folder(&found.folder, root), x, y, m.dp(FOUND_DP), palette(t).note, Some(w));
+    c.text(
+        &f.value,
+        &in_folder(&found.folder, root),
+        x,
+        y,
+        m.dp(FOUND_DP),
+        palette(t).note,
+        Some(w),
+    );
 }
 
 /// The folder a found entry is in, said from the one searched in: the part
 /// of the path below it, or the folder searched in itself for an entry of
 /// that folder.
 fn in_folder(folder: &str, root: &str) -> String {
-    let under = Path::new(folder).strip_prefix(root).map(|rest| rest.to_string_lossy().into_owned()).unwrap_or_default();
+    let under = Path::new(folder)
+        .strip_prefix(root)
+        .map(|rest| rest.to_string_lossy().into_owned())
+        .unwrap_or_default();
     match under.trim_matches('/') {
-        "" => Path::new(root).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| folder.to_string()),
+        "" => Path::new(root)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder.to_string()),
         rest => rest.to_string(),
     }
 }
@@ -296,7 +356,15 @@ pub fn row(c: &mut Canvas, t: &Theme, f: &Fonts, l: Lang, e: &FileRow, now: i64,
     let (x, w) = (m.dp(TEXT_X_DP), name_width(t));
     let lines = name_lines(&f.heading, m.dp(NAME_DP), &e.name, w);
     for (k, line) in lines.iter().enumerate() {
-        c.text_top(&f.heading, line, x, m.dp(NAME_TOP_DP + NAME_LINE_DP * k as f32), m.dp(NAME_DP), p.name, None);
+        c.text_top(
+            &f.heading,
+            line,
+            x,
+            m.dp(NAME_TOP_DP + NAME_LINE_DP * k as f32),
+            m.dp(NAME_DP),
+            p.name,
+            None,
+        );
     }
     let base = m.dp(LINE_BASE_DP + NAME_LINE_DP * (lines.len() - 1) as f32);
     c.text(&f.value, &fmt::file_line(l, e, now, zone), x, base, m.dp(LINE_DP), p.line, Some(w));
@@ -412,10 +480,13 @@ fn sign(c: &mut Canvas, f: &Fonts, kind: FileType, x: f32, y: f32, u: f32, sheet
                 let a = deg.to_radians();
                 (20.0 + 7.2 * a.cos(), 23.2 + 7.2 * a.sin())
             };
-            c.fill_convex(&[30.0, 90.0, 150.0, 210.0, 270.0, 330.0].map(|deg| {
-                let (v, w) = corner(deg);
-                at(v, w)
-            }), WHITE);
+            c.fill_convex(
+                &[30.0, 90.0, 150.0, 210.0, 270.0, 330.0].map(|deg| {
+                    let (v, w) = corner(deg);
+                    at(v, w)
+                }),
+                WHITE,
+            );
             for deg in [90.0, 210.0, 330.0] {
                 line(c, (20.0, 23.2), corner(deg), 1.3, sheet);
             }
@@ -429,7 +500,12 @@ fn sign(c: &mut Canvas, f: &Fonts, kind: FileType, x: f32, y: f32, u: f32, sheet
         }
         // Angle brackets around a slash.
         FileType::Code => {
-            for (a, b) in [((17.0, 18.8), (13.6, 23.0)), ((13.6, 23.0), (17.0, 27.2)), ((23.0, 18.8), (26.4, 23.0)), ((26.4, 23.0), (23.0, 27.2))] {
+            for (a, b) in [
+                ((17.0, 18.8), (13.6, 23.0)),
+                ((13.6, 23.0), (17.0, 27.2)),
+                ((23.0, 18.8), (26.4, 23.0)),
+                ((26.4, 23.0), (23.0, 27.2)),
+            ] {
                 line(c, a, b, 1.8, WHITE);
             }
             line(c, (21.3, 17.8), (18.7, 28.2), 1.8, WHITE);
@@ -501,7 +577,10 @@ pub fn strip(t: &Theme, f: &Fonts, top: &str, folder: &str) -> Pinned {
     });
     let names: Vec<String> = std::iter::once(top.to_string()).chain(below).collect();
     let px = m.dp(PILL_TEXT_DP);
-    let widths: Vec<f32> = names.iter().map(|n| c.text_width(&f.value, n, px) + m.dp(PILL_PAD_DP) * 2.0).collect();
+    let widths: Vec<f32> = names
+        .iter()
+        .map(|n| c.text_width(&f.value, n, px) + m.dp(PILL_PAD_DP) * 2.0)
+        .collect();
     let step = m.dp(ARROW_GAP_DP) * 2.0 + m.dp(ARROW_DP);
     let total = widths.iter().sum::<f32>() + step * (names.len() - 1) as f32;
     let mut x = m.dp(SIDE_DP).min(m.w as f32 - m.dp(SIDE_DP) - total);
@@ -513,12 +592,19 @@ pub fn strip(t: &Theme, f: &Fonts, top: &str, folder: &str) -> Pinned {
         c.fill_round_rect(x, top, w, h, h / 2.0, fill);
         c.text_center(&f.value, name, x + w / 2.0, top + h / 2.0, px, ink);
         if !here {
-            hits.push(Hit { rect: Rect::new(x, top, w, h), action: Action::OpenAncestor(k) });
+            hits.push(Hit {
+                rect: Rect::new(x, top, w, h),
+                action: Action::OpenAncestor(k),
+            });
             arrow(&mut c, t, x + w + m.dp(ARROW_GAP_DP), top + h / 2.0, p.arrow);
         }
         x += w + step;
     }
-    Pinned { canvas: c, top: m.dp(STRIP_TOP_DP), hits }
+    Pinned {
+        canvas: c,
+        top: m.dp(STRIP_TOP_DP),
+        hits,
+    }
 }
 
 /// What the file manager holds still over its list: the search box with the
@@ -544,8 +630,14 @@ impl Head {
         if let Some(rect) = self.clear {
             self.pinned.hits.push(Hit { rect, action: clear });
         }
-        self.pinned.hits.push(Hit { rect: self.field, action: field });
-        self.pinned.hits.push(Hit { rect: self.order, action: order });
+        self.pinned.hits.push(Hit {
+            rect: self.field,
+            action: field,
+        });
+        self.pinned.hits.push(Hit {
+            rect: self.order,
+            action: order,
+        });
         self.pinned
     }
 }
@@ -570,10 +662,22 @@ pub fn head(t: &Theme, f: &Fonts, query: &str, hint: &str, order: &str, top: &st
     // The box's own hit stops at the cross, so the two never answer for the
     // same finger.
     let field = match clear {
-        Some(disc) => Rect { w: disc.x - m.dp(6.0) - field.x, ..field },
+        Some(disc) => Rect {
+            w: disc.x - m.dp(6.0) - field.x,
+            ..field
+        },
         None => field,
     };
-    Head { pinned: Pinned { canvas: c, top: path.top, hits: path.hits }, field, clear, order }
+    Head {
+        pinned: Pinned {
+            canvas: c,
+            top: path.top,
+            hits: path.hits,
+        },
+        field,
+        clear,
+        order,
+    }
 }
 
 /// What the page says in place of the list, `top` dp down the page (where
@@ -603,13 +707,20 @@ mod tests {
         assert_eq!(short, ["init.rc"]);
         let two = name_lines(&f.heading, px, "1d9bf122-130e-4db7-ae55-460c84819f0e.pdf", w);
         assert_eq!(two.len(), 2, "{two:?}");
-        assert_eq!(two.concat(), "1d9bf122-130e-4db7-ae55-460c84819f0e.pdf", "nothing is left out of two lines");
+        assert_eq!(
+            two.concat(),
+            "1d9bf122-130e-4db7-ae55-460c84819f0e.pdf",
+            "nothing is left out of two lines"
+        );
         let long = "2021一带一路暨金砖大赛之物联网技术及其在智慧城市与工业互联网领域的应用创新赛表彰文件.pdf";
         let lines = name_lines(&f.heading, px, long, w);
         let c = Canvas::new(0, 0);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(long.starts_with(&lines[0]), "the first line is the start: {lines:?}");
-        assert!(lines[1].contains('…') && lines[1].ends_with("文件.pdf"), "the middle goes, the end stays: {lines:?}");
+        assert!(
+            lines[1].contains('…') && lines[1].ends_with("文件.pdf"),
+            "the middle goes, the end stays: {lines:?}"
+        );
         for line in &lines {
             assert!(c.text_width(&f.heading, line, px) <= w, "{line:?} fits");
         }
@@ -719,10 +830,23 @@ mod tests {
         let t = Theme::light(1440, 3200, 3.5);
         let path = strip(&t, &f, "根目录", "/system/bin");
         let ups: Vec<Action> = path.hits.iter().map(|h| h.action).collect();
-        assert_eq!(ups, [Action::OpenAncestor(0), Action::OpenAncestor(1)], "the root and system go up; bin is where we are");
+        assert_eq!(
+            ups,
+            [Action::OpenAncestor(0), Action::OpenAncestor(1)],
+            "the root and system go up; bin is where we are"
+        );
         let place = strip(&t, &f, "内部存储", "Download");
-        assert_eq!(place.hits.iter().map(|h| h.action).collect::<Vec<_>>(), [Action::OpenAncestor(0)], "a place's top goes up");
-        let deep = strip(&t, &f, "根目录", "/data/media/0/Android/data/com.example.something.long/files/cache/images");
+        assert_eq!(
+            place.hits.iter().map(|h| h.action).collect::<Vec<_>>(),
+            [Action::OpenAncestor(0)],
+            "a place's top goes up"
+        );
+        let deep = strip(
+            &t,
+            &f,
+            "根目录",
+            "/data/media/0/Android/data/com.example.something.long/files/cache/images",
+        );
         let last = deep.hits.last().expect("the capsules before the folder shown");
         assert!(last.rect.x + last.rect.w < t.m.w as f32, "the end shows");
         assert!(deep.hits[0].rect.x < 0.0, "the start runs off the left edge");

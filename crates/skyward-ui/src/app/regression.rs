@@ -3580,7 +3580,12 @@ fn an_image_goes_where_it_is_sent_once_swiped() {
         Event::Image {
             kind,
             size: 201_326_592,
-            partitions: ["recovery", "boot"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
+            partitions: ["recovery", "boot"]
+                .map(|name| FlashTarget {
+                    name: name.into(),
+                    place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted },
+                })
+                .to_vec(),
         },
         0,
     );
@@ -3649,7 +3654,12 @@ fn a_super_image_is_written_whole_and_asks_for_no_slot() {
         Event::Image {
             kind: ImageKind::Super,
             size: 6 << 30,
-            partitions: ["super"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
+            partitions: ["super"]
+                .map(|name| FlashTarget {
+                    name: name.into(),
+                    place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted },
+                })
+                .to_vec(),
         },
         0,
     );
@@ -3778,7 +3788,12 @@ fn an_image_that_failed_part_way_names_its_partition() {
         Event::Image {
             kind: ImageKind::Dtbo,
             size: 1 << 20,
-            partitions: ["dtbo"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
+            partitions: ["dtbo"]
+                .map(|name| FlashTarget {
+                    name: name.into(),
+                    place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted },
+                })
+                .to_vec(),
         },
         0,
     );
@@ -5040,7 +5055,7 @@ fn a_backup_takes_what_is_ticked_to_where_it_is_sent() {
         verify: false,
     };
     assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![second]);
-    for k in 1..5 {
+    for k in [1, 2, 4] {
         tap(&mut app, &f, &i, Action::BackupPart(k));
     }
     assert!(
@@ -6871,7 +6886,12 @@ fn a_file_opened_as_an_install_ends_waits_for_it() {
         Event::Image {
             kind: ImageKind::Dtbo,
             size: 1 << 20,
-            partitions: ["dtbo"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
+            partitions: ["dtbo"]
+                .map(|name| FlashTarget {
+                    name: name.into(),
+                    place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted },
+                })
+                .to_vec(),
         },
         0,
     );
@@ -8840,7 +8860,12 @@ fn the_installer_lights_the_panel_when_it_needs_the_user() {
         Event::Image {
             kind: ImageKind::Dtbo,
             size: 1 << 20,
-            partitions: ["dtbo"].map(|name| FlashTarget { name: name.into(), place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted } }).to_vec(),
+            partitions: ["dtbo"]
+                .map(|name| FlashTarget {
+                    name: name.into(),
+                    place: if name == "super" { FlashPlace::Single } else { FlashPlace::Slotted },
+                })
+                .to_vec(),
         },
         20,
     );

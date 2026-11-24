@@ -6,18 +6,18 @@ use skyward_programs::secure::Started;
 use skyward_sys::{Power, bcb};
 use skyward_vab::SnapshotState;
 use std::path::{Path, PathBuf};
-mod crash;
 #[cfg(target_os = "android")]
 mod aod;
 #[cfg(target_os = "android")]
 mod browser;
 #[cfg(all(target_os = "android", feature = "aera-browser"))]
 mod browser_aera;
+#[cfg(any(target_os = "android", test))]
+mod browser_events;
 #[cfg(any(all(target_os = "android", not(feature = "aera-browser")), test))]
 #[cfg_attr(test, allow(dead_code))]
 mod cdp;
-#[cfg(any(target_os = "android", test))]
-mod browser_events;
+mod crash;
 #[cfg(any(target_os = "android", test))]
 mod effect_queue;
 #[cfg(target_os = "android")]
@@ -317,7 +317,13 @@ fn main() -> Result<()> {
             let slot = booted_slot()?;
             let props = skyward_info::installed_props(slot)?;
             let cfg = DeviceConfig::load(&config)?;
-            let services: Vec<Started> = cfg.services.iter().filter(|s| s.runs_on(&props)).cloned().map(Started::from).collect();
+            let services: Vec<Started> = cfg
+                .services
+                .iter()
+                .filter(|s| s.runs_on(&props))
+                .cloned()
+                .map(Started::from)
+                .collect();
             let libraries = secure::libraries()?;
             services::start(&services, libraries.as_deref())?;
             if !cfg.configured_keys {
@@ -368,7 +374,10 @@ fn main() -> Result<()> {
         Cmd::Clock => {
             let ms = skyward_sys::clock::set_from_rtc()?;
             let china = skyward_ui::app::listed(skyward_ui::app::FIRST_ZONE).context("the first zone is one listed")?;
-            println!("{}", skyward_ui::fmt::datetime(skyward_ui::Lang::En, (ms / 1000) as i64, skyward_ui::fmt::rules(china)));
+            println!(
+                "{}",
+                skyward_ui::fmt::datetime(skyward_ui::Lang::En, (ms / 1000) as i64, skyward_ui::fmt::rules(china))
+            );
             Ok(())
         }
         #[cfg(target_os = "android")]

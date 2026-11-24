@@ -1045,7 +1045,13 @@ pub(crate) fn place_firmware(file: &Firmware) -> Result<()> {
             if let Some(bytes) = read_through_mount(partition, &file.path) {
                 match bytes {
                     Ok(bytes) => Some(bytes),
-                    Err(e) if file.optional && e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => None,
+                    Err(e)
+                        if file.optional
+                            && e.downcast_ref::<std::io::Error>()
+                                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                    {
+                        None
+                    }
                     Err(e) => return Err(e),
                 }
             } else {

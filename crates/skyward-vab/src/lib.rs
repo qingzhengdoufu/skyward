@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use prost::Message;
 use std::fs;
 use std::io::ErrorKind;
@@ -11,9 +11,9 @@ pub mod snapshots;
 pub mod vbmeta;
 
 pub use partitions::{
-    can_remake, check_merge, map_slot, map_whole, mount_one, mount_partitions, mount_point, mounted_partitions, release_partitions,
-    remake, settle, slot_bases, slot_names, slot_sizes, snapshots_mapped, start_merge, unmap_slot, unmap_whole, unmount_one,
-    unmount_partitions, Mounted, Mounts, Remade, SlotMaps, Whole,
+    Mounted, Mounts, Remade, SlotMaps, Whole, can_remake, check_merge, map_slot, map_whole, mount_one, mount_partitions, mount_point,
+    mounted_partitions, release_partitions, remake, settle, slot_bases, slot_names, slot_sizes, snapshots_mapped, start_merge, unmap_slot,
+    unmap_whole, unmount_one, unmount_partitions,
 };
 pub use snapshots::Merge;
 
@@ -323,7 +323,10 @@ fn decode_status(bytes: &[u8]) -> Result<UpdateStatus> {
         "cancelled" => UpdateState::Cancelled,
         other => bail!("update state {other:?}"),
     };
-    Ok(UpdateStatus { state: state as i32, ..UpdateStatus::default() })
+    Ok(UpdateStatus {
+        state: state as i32,
+        ..UpdateStatus::default()
+    })
 }
 
 fn state_of(status: &UpdateStatus) -> Result<UpdateState> {
@@ -371,7 +374,9 @@ pub fn standing(current: Slot) -> Result<Standing> {
     if !skyward_block::mount::is_mount_point(Path::new(METADATA))? {
         return Ok(Standing::Unknown);
     }
-    let Some(snaps) = snapshots::Snapshots::lock(false)? else { return Ok(Standing::None) };
+    let Some(snaps) = snapshots::Snapshots::lock(false)? else {
+        return Ok(Standing::None);
+    };
     let update = snaps.update()?;
     Ok(match state_of(&update)? {
         UpdateState::None | UpdateState::Cancelled => Standing::None,
@@ -409,7 +414,11 @@ mod tests {
     }
 
     fn encoded(state: UpdateState) -> Vec<u8> {
-        UpdateStatus { state: state as i32, ..UpdateStatus::default() }.encode_to_vec()
+        UpdateStatus {
+            state: state as i32,
+            ..UpdateStatus::default()
+        }
+        .encode_to_vec()
     }
 
     fn decode_state(bytes: &[u8]) -> Result<UpdateState> {
@@ -438,7 +447,11 @@ mod tests {
 
     #[test]
     fn unknown_state_value_is_an_error() {
-        let bytes = UpdateStatus { state: 42, ..UpdateStatus::default() }.encode_to_vec();
+        let bytes = UpdateStatus {
+            state: 42,
+            ..UpdateStatus::default()
+        }
+        .encode_to_vec();
         assert!(decode_state(&bytes).is_err());
     }
 
@@ -475,12 +488,31 @@ mod tests {
     #[test]
     fn an_update_is_read_with_the_slot_it_came_from_once_that_is_written() {
         let dir = scratch("read");
-        assert_eq!(read_update(&dir).unwrap(), Update { state: UpdateState::None, source: None }, "no update yet");
+        assert_eq!(
+            read_update(&dir).unwrap(),
+            Update {
+                state: UpdateState::None,
+                source: None
+            },
+            "no update yet"
+        );
         fs::write(dir.join(STATE), encoded(UpdateState::Initiated)).unwrap();
-        assert_eq!(read_update(&dir).unwrap(), Update { state: UpdateState::Initiated, source: None });
+        assert_eq!(
+            read_update(&dir).unwrap(),
+            Update {
+                state: UpdateState::Initiated,
+                source: None
+            }
+        );
         fs::write(dir.join(STATE), encoded(UpdateState::Unverified)).unwrap();
         fs::write(dir.join(SOURCE), "_a").unwrap();
-        assert_eq!(read_update(&dir).unwrap(), Update { state: UpdateState::Unverified, source: Some(Slot::A) });
+        assert_eq!(
+            read_update(&dir).unwrap(),
+            Update {
+                state: UpdateState::Unverified,
+                source: Some(Slot::A)
+            }
+        );
         fs::write(dir.join(SOURCE), "_c").unwrap();
         assert!(read_update(&dir).is_err(), "a slot that is neither");
         fs::remove_dir_all(&dir).unwrap();
@@ -501,8 +533,14 @@ mod tests {
         for u in free {
             assert_eq!(u.holds_wipe(Slot::B), None, "{u:?} from slot B");
         }
-        assert_eq!(update(UpdateState::Unverified, Some(Slot::A)).holds_wipe(Slot::B), Some(Hold::Unconfirmed));
+        assert_eq!(
+            update(UpdateState::Unverified, Some(Slot::A)).holds_wipe(Slot::B),
+            Some(Hold::Unconfirmed)
+        );
         assert_eq!(update(UpdateState::Merging, Some(Slot::A)).holds_wipe(Slot::B), Some(Hold::Merging));
-        assert_eq!(update(UpdateState::MergeFailed, Some(Slot::A)).holds_wipe(Slot::B), Some(Hold::MergeFailed));
+        assert_eq!(
+            update(UpdateState::MergeFailed, Some(Slot::A)).holds_wipe(Slot::B),
+            Some(Hold::MergeFailed)
+        );
     }
 }

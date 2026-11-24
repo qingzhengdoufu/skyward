@@ -13,7 +13,7 @@ use crate::focus::{self, Group, Spot, Stop};
 use crate::font::Fonts;
 use crate::geom::Rect;
 use crate::glow::{self, GlowClock};
-use crate::lang::{same, Lang, Text};
+use crate::lang::{Lang, Text, same};
 use crate::motion::{self, Spring};
 use crate::pages::{self, Band, Ctx};
 use crate::search;
@@ -21,8 +21,8 @@ use crate::settings::Settings;
 use crate::sprite::{Blurs, Sprite};
 use crate::term::{self, Term, TermKey};
 use crate::texts;
-use crate::tr;
 use crate::theme::Theme;
+use crate::tr;
 use crate::widgets::{self, Bar, Bolt, Cap, Layer, WlanMark};
 use skyward_info::DeviceInfo;
 use skyward_install::commands::avbctl;
@@ -691,7 +691,11 @@ pub enum Effect {
     InstallPath(String),
     /// Write the image the installer holds to `partition`, which lies in
     /// `place`, in the slots `pick` means there.
-    Flash { partition: String, place: FlashPlace, pick: Pick },
+    Flash {
+        partition: String,
+        place: FlashPlace,
+        pick: Pick,
+    },
     /// Stop waiting for the computer, for where an image goes, or for an
     /// update to be agreed to.
     Cancel,

@@ -16,8 +16,8 @@ pub mod package;
 pub mod script;
 pub mod signature;
 pub mod upgrade;
-pub mod wipe;
 pub mod warnings;
+pub mod wipe;
 
 #[cfg(target_os = "android")]
 mod ffs;
@@ -41,11 +41,7 @@ const BATTERY_CHARGING: u8 = 15;
 
 /// The least charge to install on, with a charger in or not.
 pub fn least_charge(charging: bool) -> u8 {
-    if charging {
-        BATTERY_CHARGING
-    } else {
-        BATTERY_ALONE
-    }
+    if charging { BATTERY_CHARGING } else { BATTERY_ALONE }
 }
 
 /// Why `battery` holds too little charge to install on, if it does. A
@@ -53,7 +49,10 @@ pub fn least_charge(charging: bool) -> u8 {
 /// charging.
 pub fn battery_refusal(battery: &Battery) -> Option<Refusal> {
     let charging = matches!(battery.charge, Charge::Charging | Charge::Full | Charge::NotCharging);
-    (battery.level < least_charge(charging)).then_some(Refusal::Battery { level: battery.level, charging })
+    (battery.level < least_charge(charging)).then_some(Refusal::Battery {
+        level: battery.level,
+        charging,
+    })
 }
 
 /// Where the installer keeps what update_engine wrote while it last
@@ -93,16 +92,23 @@ pub enum Event {
     Waiting,
     /// A package of this many bytes is being looked at: one the computer
     /// started sending, or a file on the phone.
-    Checking { size: u64 },
+    Checking {
+        size: u64,
+    },
     /// An update package passed the checks and waits for
     /// [`Command::Install`] before anything is written: the version it
     /// brings, and whether all user data is to be erased before that
     /// system starts. One that erases always waits, and so does one from a
     /// file on the phone, which a single tap picks.
-    Ready { version: Option<String>, wipe: bool },
+    Ready {
+        version: Option<String>,
+        wipe: bool,
+    },
     /// An update package passed the checks and is being installed; the
     /// version it brings.
-    Installing { version: Option<String> },
+    Installing {
+        version: Option<String>,
+    },
     /// Super has no room to keep the running system beside the new one, so
     /// the update writes over it: until it finishes, the phone may not
     /// start.
@@ -113,7 +119,11 @@ pub enum Event {
     /// A partition image, held until [`Command::Flash`] says where it goes:
     /// the bytes it takes in a partition, and the partitions of this phone
     /// it can go to, the likeliest first.
-    Image { kind: ImageKind, size: u64, partitions: Vec<Target> },
+    Image {
+        kind: ImageKind,
+        size: u64,
+        partitions: Vec<Target>,
+    },
     /// A zip that installs itself by running the script inside it, held
     /// until [`Command::Install`]: a script may write over any partition,
     /// so it always waits.
@@ -121,7 +131,11 @@ pub enum Event {
     /// A system to install beside the installed one, held until
     /// [`Command::InstallSystem`] says how much room its root takes: its
     /// name, its version, and the sizes there is room for, the least first.
-    System { name: String, version: String, sizes: Vec<u64> },
+    System {
+        name: String,
+        version: String,
+        sizes: Vec<u64>,
+    },
     /// The install script has started.
     Running,
     /// A line the install script shows.
@@ -205,15 +219,25 @@ pub enum Stage {
 pub enum Outcome {
     /// The update is in `slot`, which starts next; `wipe` when all user data
     /// is to be erased before it does.
-    Installed { slot: Slot, wipe: bool },
+    Installed {
+        slot: Slot,
+        wipe: bool,
+    },
     /// The image is in the partition of these slots; of none, where the
     /// phone has the partition once.
-    Flashed { partition: String, slots: Vec<Slot> },
+    Flashed {
+        partition: String,
+        slots: Vec<Slot>,
+    },
     /// The install script ran to its end; `wipe_cache` when it asked for
     /// the cache partition to be erased after.
-    Ran { wipe_cache: bool },
+    Ran {
+        wipe_cache: bool,
+    },
     /// The system of this name is installed beside the installed one.
-    SystemInstalled { name: String },
+    SystemInstalled {
+        name: String,
+    },
     /// Stopped before anything was written.
     Cancelled,
     /// Not installed, for this reason; nothing was written.

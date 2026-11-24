@@ -2,7 +2,7 @@ use skyward_info::{Battery, Boot, Charge, Cpu, DeviceInfo, Storage};
 use skyward_ui::app::{Action, FileKind, FileRow, Key, Screen, Touch};
 use skyward_ui::pages::Band;
 use skyward_ui::widgets::{self, Cap};
-use skyward_ui::{pages, App, Canvas, Ctx, Fonts, Theme};
+use skyward_ui::{App, Canvas, Ctx, Fonts, Theme, pages};
 use skyward_vab::{Slot, SnapshotState};
 use std::time::Instant;
 
@@ -16,7 +16,9 @@ const FRAME_US: u64 = 8333;
 const BUDGET_MS: f64 = 5.5;
 
 /// The moves timed, each from the page it starts on.
-const MOVES: [&str; 12] = ["press", "open", "drag", "fold", "fling", "back", "search", "about", "files", "dark", "charge", "renders"];
+const MOVES: [&str; 12] = [
+    "press", "open", "drag", "fold", "fling", "back", "search", "about", "files", "dark", "charge", "renders",
+];
 
 /// Times what the UI draws: whole pages rendered, and every frame of the
 /// moves people make, driven the way the runtime drives the app. Run with
@@ -132,7 +134,8 @@ fn run(name: &str, f: &Fonts, i: &DeviceInfo, quiet: bool) {
                 uid: 1023,
                 gid: 1023,
             });
-            p.app.set_files("/sdcard/DCIM/Camera".into(), Ok(many.collect()), 1_792_348_260 + 86_400);
+            p.app
+                .set_files("/sdcard/DCIM/Camera".into(), Ok(many.collect()), 1_792_348_260 + 86_400);
             p.run(100);
             p.skip();
             p.fling(2600.0, 600.0);
@@ -167,7 +170,10 @@ fn run(name: &str, f: &Fonts, i: &DeviceInfo, quiet: bool) {
 /// the panel itself: its centre and what it does.
 fn hits(page: &str, f: &Fonts, i: &DeviceInfo) {
     let screens = [Screen::Home, Screen::Settings, Screen::Advanced, Screen::About, Screen::Search];
-    let screen = screens.into_iter().find(|s| format!("{s:?}") == page).unwrap_or_else(|| panic!("no page {page} among {screens:?}"));
+    let screen = screens
+        .into_iter()
+        .find(|s| format!("{s:?}") == page)
+        .unwrap_or_else(|| panic!("no page {page} among {screens:?}"));
     let mut p = Panel::new(screen, f, i, true);
     let (x, y) = widgets::back_rect(&p.app.theme()).centre();
     println!("{x:.0} {y:.0} Back");
@@ -181,11 +187,29 @@ fn hits(page: &str, f: &Fonts, i: &DeviceInfo) {
 /// theme and held down; only the page named `only`, when one is.
 fn renders(f: &Fonts, i: &DeviceInfo, only: Option<&str>, quiet: bool) {
     let state = skyward_ui::app::State::default();
-    let screens = [Screen::Home, Screen::Settings, Screen::Advanced, Screen::About, Screen::Search, Screen::Install, Screen::Reboot, Screen::Wipe, Screen::Backup, Screen::Specs];
+    let screens = [
+        Screen::Home,
+        Screen::Settings,
+        Screen::Advanced,
+        Screen::About,
+        Screen::Search,
+        Screen::Install,
+        Screen::Reboot,
+        Screen::Wipe,
+        Screen::Backup,
+        Screen::Specs,
+    ];
     for t in [Theme::light(W, H, PPD), Theme::light(W, H, PPD).pressed()] {
         for screen in screens.into_iter().filter(|s| only.is_none_or(|o| format!("{s:?}") == o)) {
             let time = |band| {
-                let cx = Ctx { t: &t, f, info: i, state: &state, term: None, band };
+                let cx = Ctx {
+                    t: &t,
+                    f,
+                    info: i,
+                    state: &state,
+                    term: None,
+                    band,
+                };
                 let mut ms: Vec<f64> = (0..5)
                     .map(|_| {
                         let t0 = Instant::now();
@@ -199,7 +223,11 @@ fn renders(f: &Fonts, i: &DeviceInfo, only: Option<&str>, quiet: bool) {
             let band = |rows| Some(Band { rows, cols: (0, W) });
             let (whole, first, laid) = (time(None), time(band((0, H))), time(band((0, 0))));
             if !quiet {
-                let held = if t.pal.card == Theme::light(W, H, PPD).pal.card { "" } else { " held down" };
+                let held = if t.pal.card == Theme::light(W, H, PPD).pal.card {
+                    ""
+                } else {
+                    " held down"
+                };
                 println!(
                     "render {screen:?}{held}: {:.1} ms (slowest {:.1}), its first screen {:.1} ms (slowest {:.1}), laid out only {:.2} ms",
                     whole.0, whole.1, first.0, first.1, laid.0
@@ -226,7 +254,15 @@ impl<'a> Panel<'a> {
     fn new(screen: Screen, f: &'a Fonts, i: &'a DeviceInfo, quiet: bool) -> Panel<'a> {
         let mut app = App::new(screen, W, H, PPD);
         app.set_screen_corners(140.0);
-        let mut p = Panel { app, f, i, out: Canvas::new(W, H), us: 0, ms: Vec::new(), quiet };
+        let mut p = Panel {
+            app,
+            f,
+            i,
+            out: Canvas::new(W, H),
+            us: 0,
+            ms: Vec::new(),
+            quiet,
+        };
         p.run(100);
         p.skip();
         p
@@ -272,7 +308,13 @@ impl<'a> Panel<'a> {
     /// Where the page's control doing `action` is on screen.
     fn at(&mut self, action: Action) -> (f32, f32) {
         let frame = self.app.frame(self.f, self.i);
-        frame.hits.iter().find(|h| h.action == action).unwrap_or_else(|| panic!("{action:?} is on the page")).rect.centre()
+        frame
+            .hits
+            .iter()
+            .find(|h| h.action == action)
+            .unwrap_or_else(|| panic!("{action:?} is on the page"))
+            .rect
+            .centre()
     }
 
     /// A quick tap on the control doing `action`.
@@ -340,7 +382,10 @@ fn info() -> DeviceInfo {
         model: "Xiaomi 13 Ultra".into(),
         codename: "ishtar".into(),
         soc: None,
-        cpu: Cpu { cores: 8, max_khz: Some(3_187_200) },
+        cpu: Cpu {
+            cores: 8,
+            max_khz: Some(3_187_200),
+        },
         ram_kib: 15_556_972,
         panel: Some((W, H)),
         screen: Some(6.73),
@@ -350,7 +395,10 @@ fn info() -> DeviceInfo {
         time_zone: None,
         security_patch: None,
         kernel: "5.15.178".into(),
-        storage: Storage { total: 496_550_785_024, free: None },
+        storage: Storage {
+            total: 496_550_785_024,
+            free: None,
+        },
         // A battery with a temperature and an A/B phone, as the status bar
         // shows them on every frame.
         battery: Some(Battery {
@@ -367,6 +415,9 @@ fn info() -> DeviceInfo {
         }),
         slot: Some(Slot::B),
         snapshot: SnapshotState::None,
-        boot: Boot { unlocked: None, verified: None },
+        boot: Boot {
+            unlocked: None,
+            verified: None,
+        },
     }
 }

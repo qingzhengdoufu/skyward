@@ -4,7 +4,7 @@
 //! and the blocklist; and the vendor ramdisk's modules loaded as Android's
 //! first stage loads them.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
@@ -86,7 +86,11 @@ fn config(path: &str) -> Result<Vec<Vec<String>>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).with_context(|| format!("read {path}")),
     };
-    Ok(text.split('\n').filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| l.split(' ').map(str::to_string).collect()).collect())
+    Ok(text
+        .split('\n')
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.split(' ').map(str::to_string).collect())
+        .collect())
 }
 
 /// Whether `name` matches the shell pattern `pattern`.
@@ -170,7 +174,13 @@ impl Modprobe {
         let Some(module) = canonical(name) else {
             return;
         };
-        let path = |arg: &str| if arg.starts_with('/') { arg.to_string() } else { format!("{base}/{arg}") };
+        let path = |arg: &str| {
+            if arg.starts_with('/') {
+                arg.to_string()
+            } else {
+                format!("{base}/{arg}")
+            }
+        };
         let mut files = vec![path(name)];
         files.extend(args[1..].iter().map(|a| path(a.as_str())));
         self.deps.insert(module, files);
@@ -202,7 +212,10 @@ impl Modprobe {
     /// The first `options` line for a module gives its settings.
     fn options_line(&mut self, args: &[String]) -> Result<()> {
         match args[0].as_str() {
-            "dyn_options" => bail!("modules.options has {}'s settings made by a program, which only Android's init runs", args.get(1).map_or("a module", String::as_str)),
+            "dyn_options" => bail!(
+                "modules.options has {}'s settings made by a program, which only Android's init runs",
+                args.get(1).map_or("a module", String::as_str)
+            ),
             "options" if args.len() >= 2 => {
                 if let Some(module) = canonical(&args[1]) {
                     self.options.entry(module).or_insert_with(|| args[2..].join(" "));
@@ -311,7 +324,11 @@ impl Modprobe {
     }
 
     fn insmod_with_deps(&mut self, module: &str) -> Result<()> {
-        let files = self.deps.get(module).cloned().with_context(|| format!("{module} is not in modules.dep"))?;
+        let files = self
+            .deps
+            .get(module)
+            .cloned()
+            .with_context(|| format!("{module} is not in modules.dep"))?;
         for dep in files[1..].iter().rev() {
             self.load(dep).with_context(|| format!("{module} depends on it"))?;
         }
@@ -330,7 +347,11 @@ impl Modprobe {
     fn insmod(&mut self, path: &str) -> Result<()> {
         let module = canonical(path).unwrap_or_default();
         let options = self.options.get(&module).cloned().unwrap_or_default();
-        let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).with_context(|| format!("open {path}"))?;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .with_context(|| format!("open {path}"))?;
         match crate::finit_module(&file, std::path::Path::new(path), &options) {
             Ok(()) => self.count += 1,
             Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {}
@@ -421,7 +442,13 @@ fn load_file(dir: &str, charger: bool) -> &'static str {
 pub fn first_stage(cmdline: &str, bootconfig: &str, skip: &[String]) -> Result<Loaded> {
     let entries = match fs::read_dir(FIRST_STAGE) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Loaded { dir: PathBuf::from(FIRST_STAGE), count: 0, failed: Vec::new() }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Loaded {
+                dir: PathBuf::from(FIRST_STAGE),
+                count: 0,
+                failed: Vec::new(),
+            });
+        }
         Err(e) => return Err(e).with_context(|| format!("read {FIRST_STAGE}")),
     };
     let mut names = Vec::new();
@@ -439,13 +466,21 @@ pub fn first_stage(cmdline: &str, bootconfig: &str, skip: &[String]) -> Result<L
         let mut m = Modprobe::new(std::slice::from_ref(&dir), load_file(&dir, charger), cmdline)?.skipping(skip);
         let failed = m.load_listed();
         if m.count() > 0 {
-            return Ok(Loaded { dir: PathBuf::from(dir), count: m.count(), failed });
+            return Ok(Loaded {
+                dir: PathBuf::from(dir),
+                count: m.count(),
+                failed,
+            });
         }
     }
     let base = FIRST_STAGE.to_string();
     let mut m = Modprobe::new(std::slice::from_ref(&base), load_file(&base, charger), cmdline)?.skipping(skip);
     let failed = m.load_listed();
-    Ok(Loaded { dir: PathBuf::from(base), count: m.count(), failed })
+    Ok(Loaded {
+        dir: PathBuf::from(base),
+        count: m.count(),
+        failed,
+    })
 }
 
 #[cfg(test)]
@@ -475,23 +510,53 @@ mod tests {
     #[test]
     fn the_command_line_gives_the_first_stages_modules_their_settings() {
         let options = cmdline_options(ISHTAR);
-        let of = |module: &str| options.iter().filter(|(m, _)| m == module).map(|(_, o)| o.as_str()).collect::<Vec<_>>();
-        assert_eq!(of("hwid"), ["hwid_value=589824", "project=5", "build_adc=65616", "project_adc=20488"]);
+        let of = |module: &str| {
+            options
+                .iter()
+                .filter(|(m, _)| m == module)
+                .map(|(_, o)| o.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of("hwid"),
+            ["hwid_value=589824", "project=5", "build_adc=65616", "project_adc=20488"]
+        );
         assert_eq!(of("bootinfo"), ["pureason=0x40001", "pdreason=0x2"]);
         assert_eq!(of("debug_ext"), ["initrd_size=78178"]);
-        assert_eq!(of("swinfo"), ["fingerprint=ishtar:13/OS3.0.308.0.WMACNXM:user"], "dots in a value stay in it");
-        assert_eq!(of("msm_drm"), ["dsi_display0=qcom,mdss_dsi_m1_42_02_0a_dsc_cmd:", "oled_wp=01f2030002030104", "debugpolicy=0x20"]);
+        assert_eq!(
+            of("swinfo"),
+            ["fingerprint=ishtar:13/OS3.0.308.0.WMACNXM:user"],
+            "dots in a value stay in it"
+        );
+        assert_eq!(
+            of("msm_drm"),
+            [
+                "dsi_display0=qcom,mdss_dsi_m1_42_02_0a_dsc_cmd:",
+                "oled_wp=01f2030002030104",
+                "debugpolicy=0x20"
+            ]
+        );
         assert_eq!(of("block2mtd"), ["block2mtd=/dev/block/sda19,2097152"]);
         assert_eq!(of("silent_boot"), ["mode=nonsilent"], "the last setting ends at the line's end");
-        assert_eq!(of("sysctl"), ["kernel.sched_pelt_multiplier=4"], "the module is what comes before the first dot");
-        assert!(of("video").is_empty() && of("console").is_empty(), "a setting with no dot names no module");
+        assert_eq!(
+            of("sysctl"),
+            ["kernel.sched_pelt_multiplier=4"],
+            "the module is what comes before the first dot"
+        );
+        assert!(
+            of("video").is_empty() && of("console").is_empty(),
+            "a setting with no dot names no module"
+        );
     }
 
     #[test]
     fn a_quoted_value_keeps_its_spaces_and_quotes() {
         assert_eq!(
             cmdline_options("foo.bar=\"a b.c\" baz.q=1 tail.x=\"open"),
-            [("foo".to_string(), "bar=\"a b.c\"".to_string()), ("baz".to_string(), "q=1".to_string())],
+            [
+                ("foo".to_string(), "bar=\"a b.c\"".to_string()),
+                ("baz".to_string(), "q=1".to_string())
+            ],
             "a quote left open drops its setting"
         );
     }
@@ -500,22 +565,45 @@ mod tests {
     fn the_module_files_are_read_as_libmodprobe_reads_them() {
         let dir = tempfile::tempdir().unwrap();
         let base = folder(dir.path());
-        write(dir.path(), "modules.dep", "/lib/modules/ufs_qcom.ko: /lib/modules/qcom-scm.ko\nkernel/hwid.ko:\nbroken line\n");
-        write(dir.path(), "modules.alias", "# Aliases\nalias of:N*T*Cqcom,pdc qcom_pdc\nalias lonely\n");
-        write(dir.path(), "modules.softdep", "softdep dwc3_msm pre: phy-generic eud post: late\nsoftdep pinctrl_msm pre: qcom-pdc\nsoftdep bad x y\n");
+        write(
+            dir.path(),
+            "modules.dep",
+            "/lib/modules/ufs_qcom.ko: /lib/modules/qcom-scm.ko\nkernel/hwid.ko:\nbroken line\n",
+        );
+        write(
+            dir.path(),
+            "modules.alias",
+            "# Aliases\nalias of:N*T*Cqcom,pdc qcom_pdc\nalias lonely\n",
+        );
+        write(
+            dir.path(),
+            "modules.softdep",
+            "softdep dwc3_msm pre: phy-generic eud post: late\nsoftdep pinctrl_msm pre: qcom-pdc\nsoftdep bad x y\n",
+        );
         write(dir.path(), "modules.load", "miev.ko\nqrng_dlkm.ko\nqrng_dlkm.ko\n\n");
-        write(dir.path(), "modules.options", "options hwid build_adc=1\noptions hwid ignored=1\noptions qcom-pdc a=1 b=2\n");
+        write(
+            dir.path(),
+            "modules.options",
+            "options hwid build_adc=1\noptions hwid ignored=1\noptions qcom-pdc a=1 b=2\n",
+        );
         write(dir.path(), "modules.blocklist", "blocklist 8250_of\nblocklist two words here\n");
         let m = Modprobe::new(std::slice::from_ref(&base), "modules.load", "hwid.project=5 qcom-pdc.c=3").unwrap();
         assert_eq!(m.deps["ufs_qcom"], ["/lib/modules/ufs_qcom.ko", "/lib/modules/qcom-scm.ko"]);
-        assert_eq!(m.deps["hwid"], [format!("{base}/kernel/hwid.ko")], "a relative file is in the folder");
+        assert_eq!(
+            m.deps["hwid"],
+            [format!("{base}/kernel/hwid.ko")],
+            "a relative file is in the folder"
+        );
         assert_eq!(m.deps.len(), 2, "a line with no colon is left out");
         assert_eq!(m.aliases, [("of:N*T*Cqcom,pdc".to_string(), "qcom_pdc".to_string())]);
         let pairs = |v: &[(String, String)]| v.iter().map(|(a, b)| format!("{a}>{b}")).collect::<Vec<_>>();
         assert_eq!(pairs(&m.pre), ["dwc3_msm>phy-generic", "dwc3_msm>eud", "pinctrl_msm>qcom-pdc"]);
         assert_eq!(pairs(&m.post), ["dwc3_msm>late"]);
         assert_eq!(m.listed, ["miev", "qrng_dlkm", "qrng_dlkm"]);
-        assert_eq!(m.options["hwid"], "build_adc=1 project=5", "the file's settings first, then the command line's");
+        assert_eq!(
+            m.options["hwid"], "build_adc=1 project=5",
+            "the file's settings first, then the command line's"
+        );
         assert_eq!(m.options["qcom_pdc"], "a=1 b=2 c=3");
         assert_eq!(m.blocklist, BTreeSet::from(["8250_of".to_string()]));
     }
@@ -534,7 +622,11 @@ mod tests {
         let base = folder(dir.path());
         write(dir.path(), "a_mod.ko", "");
         fs::create_dir(dir.path().join("folder.ko")).unwrap();
-        write(dir.path(), "modules.dep", "a_mod.ko:\nb_mod.ko: 8250_of.ko\nc_mod.ko:\nfolder.ko:\n8250_of.ko:\n");
+        write(
+            dir.path(),
+            "modules.dep",
+            "a_mod.ko:\nb_mod.ko: 8250_of.ko\nc_mod.ko:\nfolder.ko:\n8250_of.ko:\n",
+        );
         write(dir.path(), "modules.blocklist", "blocklist 8250_of\n");
         let m = Modprobe::new(std::slice::from_ref(&base), "modules.load", "").unwrap();
         assert!(m.is_blocklisted("8250_of.ko") && m.is_blocklisted("b_mod"), "b_mod needs 8250_of");
@@ -542,7 +634,10 @@ mod tests {
         assert_eq!(m.absent("a_mod"), None);
         assert_eq!(m.absent("8250_of").as_deref(), Some("8250_of is on the blocklist"));
         assert_eq!(m.absent("d_mod").as_deref(), Some("d_mod is not in modules.dep"));
-        assert!(m.absent("c_mod").is_some_and(|why| why.starts_with(&format!("{base}/c_mod.ko: "))), "its file is missing");
+        assert!(
+            m.absent("c_mod").is_some_and(|why| why.starts_with(&format!("{base}/c_mod.ko: "))),
+            "its file is missing"
+        );
         assert_eq!(m.absent("folder").unwrap(), format!("{base}/folder.ko is no file"));
     }
 
@@ -553,7 +648,11 @@ mod tests {
         write(dir.path(), "modules.alias", "alias pci:v*d1234* y_mod\n");
         let mut m = Modprobe::new(&[folder(dir.path())], "modules.load", "").unwrap();
         let e = m.load("pci:v00d1234sv").unwrap_err();
-        assert_eq!(format!("{e:#}"), "pci:v00d1234sv was not loaded: pci:v00d1234sv is not in modules.dep; y_mod is not in modules.dep", "the alias's module is tried too");
+        assert_eq!(
+            format!("{e:#}"),
+            "pci:v00d1234sv was not loaded: pci:v00d1234sv is not in modules.dep; y_mod is not in modules.dep",
+            "the alias's module is tried too"
+        );
         assert_eq!(m.count(), 0);
     }
 
@@ -565,7 +664,14 @@ mod tests {
         let mut m = Modprobe::new(&[folder(dir.path())], "modules.load", "").unwrap();
         let failed = m.load_listed();
         let told: Vec<(&str, String)> = failed.iter().map(|(n, e)| (n.as_str(), format!("{e:#}"))).collect();
-        assert_eq!(told, [("gone_a", "gone_a was not loaded: gone_a is not in modules.dep".to_string()), ("gone_b", "gone_b was not loaded: gone_b is not in modules.dep".to_string())], "the one after a failure is tried too, and a blocklisted one is not told");
+        assert_eq!(
+            told,
+            [
+                ("gone_a", "gone_a was not loaded: gone_a is not in modules.dep".to_string()),
+                ("gone_b", "gone_b was not loaded: gone_b is not in modules.dep".to_string())
+            ],
+            "the one after a failure is tried too, and a blocklisted one is not told"
+        );
     }
 
     #[test]
@@ -575,7 +681,9 @@ mod tests {
             write(dir.path(), file, "");
         }
         write(dir.path(), "modules.dep", "a_mod.ko: stuck.ko\nstuck.ko:\n");
-        let mut m = Modprobe::new(&[folder(dir.path())], "modules.load", "").unwrap().skipping(&["stuck.ko".to_string()]);
+        let mut m = Modprobe::new(&[folder(dir.path())], "modules.load", "")
+            .unwrap()
+            .skipping(&["stuck.ko".to_string()]);
         assert_eq!(m.absent("stuck").as_deref(), Some("stuck is still loading from before"));
         let e = m.load("a_mod").unwrap_err();
         assert!(format!("{e:#}").contains("stuck is still loading from before"), "{e:#}");
@@ -587,10 +695,18 @@ mod tests {
         let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let release = "5.15.194-android13-8-00019-gf4321180a397-ab15212794";
         let found = names(&["5.15-gki", "5.10", "5.15", "foo", "5.15.1_16k", "6.1"]);
-        assert_eq!(version_dirs(&found, release, 4096).unwrap(), ["5.15", "5.15-gki"], "sorted, and a folder for 16K pages left out");
+        assert_eq!(
+            version_dirs(&found, release, 4096).unwrap(),
+            ["5.15", "5.15-gki"],
+            "sorted, and a folder for 16K pages left out"
+        );
         assert_eq!(version_dirs(&found, release, 16384).unwrap(), ["5.15", "5.15-gki", "5.15.1_16k"]);
         let own = names(&["5.15", &format!("{release}_16k"), "5.15-gki"]);
-        assert_eq!(version_dirs(&own, release, 16384).unwrap(), [format!("{release}_16k")], "the release's own folder alone");
+        assert_eq!(
+            version_dirs(&own, release, 16384).unwrap(),
+            [format!("{release}_16k")],
+            "the release's own folder alone"
+        );
         assert!(version_dirs(&found, "unknown", 4096).is_err());
         assert!(version_dirs(&[], release, 4096).unwrap().is_empty());
     }

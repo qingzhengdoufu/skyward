@@ -1,6 +1,4 @@
 use crate::app::RESTART_AFTER_INSTALL;
-use crate::app::{Region, UTC, listed};
-use crate::texts;
 use crate::app::{
     ADDABLE, Action, BACKUP_PARTS, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, DATA_ERASED, DATA_PARTITION, DOWNLOADS,
     Damage, Data, Dock, DownloadEnd, EraseStop, FASTBOOT_CHOICES, Field, FileKind, FileOp, FileRow, FileTask, Fold, Folder, Found, Frame,
@@ -8,6 +6,7 @@ use crate::app::{
     SkywardJob, SkywardStage, Slider, SortKey, Source, State, Switch, SystemsWork, TARGETS, TIME_ZONES, Target, USB_DRIVE_UNREADABLE,
     USB_DRIVE_WANTED, UsbDrive, UsbLink, WIPES, Wipe, installs, starting,
 };
+use crate::app::{Region, UTC, listed};
 use crate::canvas::Canvas;
 use crate::color::Rgba;
 use crate::editor;
@@ -19,6 +18,7 @@ use crate::icons::{self, Icon};
 use crate::lang::{Lang, Text};
 use crate::search;
 use crate::term::{self, Term};
+use crate::texts;
 use crate::theme::Theme;
 use crate::tr;
 use crate::widgets::{self, Caption, Detail, Fact, Outline, Row, Spec, SystemCard, SystemMark, Tone, Trail};
@@ -139,7 +139,10 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
 pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
     const INSTALL: Text = crate::texts::confirm::INSTALL;
     let (label, danger) = match which {
-        Confirm::Avb => (crate::lang::legacy(["滑动以修改 vbmeta", "滑動以變更 vbmeta", "Slide to change vbmeta"]), true),
+        Confirm::Avb => (
+            crate::lang::legacy(["滑动以修改 vbmeta", "滑動以變更 vbmeta", "Slide to change vbmeta"]),
+            true,
+        ),
         Confirm::Filesystem => match s.fs_action {
             FsAction::Repair => (crate::texts::confirm::REPAIR, true),
             FsAction::Remake(_) => (crate::texts::confirm::CHANGE, true),
@@ -148,8 +151,14 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::Wipe => (crate::texts::confirm::WIPE, true),
         Confirm::Flash => (crate::texts::confirm::FLASH, true),
         Confirm::Backup => (crate::texts::confirm::BACK_UP, false),
-        Confirm::SkywardUpdate => (crate::lang::legacy(["滑动以更新 Recovery", "滑動以更新 Recovery", "Slide to update recovery"]), true),
-        Confirm::ImageBackup => (crate::lang::legacy(["滑动以导出镜像", "滑動以匯出映像檔", "Slide to export image"]), false),
+        Confirm::SkywardUpdate => (
+            crate::lang::legacy(["滑动以更新 Recovery", "滑動以更新 Recovery", "Slide to update recovery"]),
+            true,
+        ),
+        Confirm::ImageBackup => (
+            crate::lang::legacy(["滑动以导出镜像", "滑動以匯出映像檔", "Slide to export image"]),
+            false,
+        ),
         Confirm::Restore => (crate::texts::confirm::RESTORE, true),
         Confirm::Slot => (crate::texts::confirm::SWITCH, true),
         Confirm::FactoryReset => (crate::texts::confirm::FACTORY_RESET, true),
@@ -162,10 +171,22 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::SwitchSystem => (crate::texts::confirm::SWITCH_AND_REBOOT, false),
         Confirm::RemoveSystem => (crate::texts::confirm::REMOVE, true),
         Confirm::InstallSystem => (INSTALL, false),
-        Confirm::AvbDisable => (crate::lang::legacy(["滑动以关闭校验", "滑動以關閉驗證", "Slide to turn the check off"]), true),
-        Confirm::VbmetaRestore => (crate::lang::legacy(["滑动以写回备份", "滑動以寫回備份", "Slide to write the copy back"]), true),
-        Confirm::ForgetNetwork => (crate::lang::legacy(["滑动以忘记网络", "滑動以忘記網路", "Slide to forget the network"]), true),
-        Confirm::DeleteDownload => (crate::lang::legacy(["滑动以删除安装包", "滑動以刪除安裝檔", "Slide to delete the package"]), true),
+        Confirm::AvbDisable => (
+            crate::lang::legacy(["滑动以关闭校验", "滑動以關閉驗證", "Slide to turn the check off"]),
+            true,
+        ),
+        Confirm::VbmetaRestore => (
+            crate::lang::legacy(["滑动以写回备份", "滑動以寫回備份", "Slide to write the copy back"]),
+            true,
+        ),
+        Confirm::ForgetNetwork => (
+            crate::lang::legacy(["滑动以忘记网络", "滑動以忘記網路", "Slide to forget the network"]),
+            true,
+        ),
+        Confirm::DeleteDownload => (
+            crate::lang::legacy(["滑动以删除安装包", "滑動以刪除安裝檔", "Slide to delete the package"]),
+            true,
+        ),
         Confirm::PowerOff => (crate::lang::legacy(["滑动以关机", "滑動以關機", "Slide to power off"]), false),
     };
     (s.lang.pick(label), danger)
@@ -183,15 +204,9 @@ const FREE_SPACE: Text = crate::lang::legacy(["可用空间", "可用空間", "F
 const REBOOT_TARGETS: [(Text, Option<Text>); 6] = [
     (crate::texts::reboot::target::SYSTEM, None),
     (crate::texts::reboot::target::RECOVERY, None),
-    (
-        crate::lang::same("Fastboot"),
-        Some(crate::texts::reboot::target::FASTBOOT_NOTE),
-    ),
+    (crate::lang::same("Fastboot"), Some(crate::texts::reboot::target::FASTBOOT_NOTE)),
     (crate::lang::same("Bootloader"), None),
-    (
-        crate::lang::same("EDL"),
-        Some(crate::texts::reboot::target::EDL_NOTE),
-    ),
+    (crate::lang::same("EDL"), Some(crate::texts::reboot::target::EDL_NOTE)),
     (crate::texts::reboot::target::POWER_OFF, None),
 ];
 
@@ -524,7 +539,9 @@ pub fn settings(cx: &Ctx) -> Frame {
     let mut rows = vec![Row::new(l.pick(SCREEN_TIMEOUT)).trail(Trail::Value(&off))];
     let mut actions = vec![Action::Open(Screen::ScreenOff)];
     if s.double_tap_supported {
-        rows.push(Row::new(l.pick(crate::lang::legacy(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"]))).trail(Trail::Switch(s.double_tap)));
+        rows.push(
+            Row::new(l.pick(crate::lang::legacy(["双击亮屏", "點兩下喚醒螢幕", "Double-tap to wake"]))).trail(Trail::Switch(s.double_tap)),
+        );
         actions.push(Action::Toggle(Switch::DoubleTap));
     }
     let slider = widgets::slider_rows(
@@ -572,7 +589,13 @@ pub fn settings(cx: &Ctx) -> Frame {
     // them.
     let mut y = vibration.bottom;
     if s.panel_dozes {
-        y = widgets::section(&mut c, t, f, y, l.pick(crate::lang::legacy(["息屏显示", "螢幕關閉顯示", "Always-on display"])));
+        y = widgets::section(
+            &mut c,
+            t,
+            f,
+            y,
+            l.pick(crate::lang::legacy(["息屏显示", "螢幕關閉顯示", "Always-on display"])),
+        );
         let on = Row::new(l.pick(ALWAYS_ON)).switch(s.always_on);
         let aod = widgets::list(&mut c, t, f, y, &[on]);
         out.extend(hits(&aod.rows, &[Action::Toggle(Switch::AlwaysOn)]));
@@ -725,14 +748,7 @@ pub fn mount(cx: &Ctx) -> Frame {
             widgets::footnote(&mut c, t, f, y, why)
         }
         Ok(mounts) if mounts.is_empty() => {
-            widgets::list(
-                &mut c,
-                t,
-                f,
-                y,
-                &[Row::new(l.pick(crate::texts::mount::NONE)).trail(Trail::None)],
-            )
-            .bottom
+            widgets::list(&mut c, t, f, y, &[Row::new(l.pick(crate::texts::mount::NONE)).trail(Trail::None)]).bottom
         }
         Ok(mounts) => {
             let subs: Vec<String> = mounts
@@ -781,9 +797,7 @@ pub fn mount(cx: &Ctx) -> Frame {
                     "僅顯示目前槽位 {slot} 在 super 中的分割區，掛載後均為唯讀。",
                     "Only the current slot {slot}'s partitions in super show here, all mounted read-only."
                 ),
-                None => l
-                    .pick(crate::texts::mount::SHOWS)
-                    .into(),
+                None => l.pick(crate::texts::mount::SHOWS).into(),
             };
             widgets::footnote(&mut c, t, f, y, &about)
         }
@@ -975,10 +989,7 @@ pub fn specs(cx: &Ctx) -> Frame {
         f,
         y + gap,
         &[
-            (
-                l.pick(crate::texts::specs::RECOVERY_VERSION),
-                format!("Skyward {VERSION}"),
-            ),
+            (l.pick(crate::texts::specs::RECOVERY_VERSION), format!("Skyward {VERSION}")),
             (l.pick(crate::texts::specs::KERNEL_VERSION), i.kernel.clone()),
         ],
     );
@@ -1034,13 +1045,7 @@ pub fn specs(cx: &Ctx) -> Frame {
             "{total} in all · data partition not mounted"
         ),
     };
-    y = widgets::info_card(
-        &mut c,
-        t,
-        f,
-        y + gap,
-        &[(l.pick(crate::texts::specs::INTERNAL_STORAGE), storage)],
-    );
+    y = widgets::info_card(&mut c, t, f, y + gap, &[(l.pick(crate::texts::specs::INTERNAL_STORAGE), storage)]);
     let links = widgets::list(
         &mut c,
         t,
@@ -1075,14 +1080,7 @@ pub fn decrypt(cx: &Ctx) -> Frame {
             None,
         ),
         Data::Open => open_with_others(cx, c),
-        Data::Failed(why) => data_status(
-            cx,
-            c,
-            Icon::Lock,
-            l.pick(crate::texts::decrypt::FAILED),
-            None,
-            Some(why),
-        ),
+        Data::Failed(why) => data_status(cx, c, Icon::Lock, l.pick(crate::texts::decrypt::FAILED), None, Some(why)),
         Data::Erased => data_status(
             cx,
             c,
@@ -1144,7 +1142,9 @@ fn open_with_others(cx: &Ctx, mut c: Canvas) -> Frame {
     let names: Vec<String> = others
         .iter()
         .map(|(user, _)| match *user {
-            0 => l.pick(crate::lang::legacy(["本机用户", "本機使用者", "This phone's user"])).to_string(),
+            0 => l
+                .pick(crate::lang::legacy(["本机用户", "本機使用者", "This phone's user"]))
+                .to_string(),
             user => tr!(l, "用户 {user}", "使用者 {user}", "User {user}"),
         })
         .collect();
@@ -1248,9 +1248,7 @@ fn code(cx: &Ctx, mut c: Canvas, user: u32, keys: Keys, checking: bool) -> Frame
     let x = m.w as f32 / 2.0;
     let mut out = Vec::new();
     let title = match (keys == Keys::Pattern, user) {
-        (true, 0) => l
-            .pick(crate::texts::decrypt::DRAW_PATTERN)
-            .to_string(),
+        (true, 0) => l.pick(crate::texts::decrypt::DRAW_PATTERN).to_string(),
         (true, user) => tr!(
             l,
             "绘制用户 {user} 的锁屏图案",
@@ -1495,7 +1493,12 @@ pub fn install(cx: &Ctx) -> Frame {
     // built without this phone's keys will not start on a bootloader that
     // still checks signatures, and an install script is an arbitrary
     // program that may or may not disable them for itself.
-    let avb = Row::new(l.pick(crate::lang::legacy(["刷入后禁用 AVB", "刷入後停用 AVB", "Disable AVB after installation"]))).switch(cx.state.disable_avb);
+    let avb = Row::new(l.pick(crate::lang::legacy([
+        "刷入后禁用 AVB",
+        "刷入後停用 AVB",
+        "Disable AVB after installation",
+    ])))
+    .switch(cx.state.disable_avb);
     let rows = widgets::list(&mut c, t, f, y + t.m.card_gap, &[avb]);
     out.extend(hits(&rows.rows, &[Action::Toggle(Switch::DisableAvb)]));
     let note = l.pick(crate::lang::legacy([
@@ -1571,14 +1574,11 @@ pub(crate) fn update_stage(l: Lang, stage: Option<&Stage>) -> (String, Option<f3
             );
             (said, Some(*index as f32 / *count as f32))
         }
-        Some(Stage::Finishing) => (
-            l.pick(crate::texts::installing::UPDATE_FINISHING)
-                .into(),
-            None,
-        ),
+        Some(Stage::Finishing) => (l.pick(crate::texts::installing::UPDATE_FINISHING).into(), None),
         Some(Stage::Reflashing { done, total }) => (l.pick(REFLASHING).into(), Some(*done as f32 / *total as f32)),
         Some(
-            Stage::Resizing | Stage::Flashing { .. }
+            Stage::Resizing
+            | Stage::Flashing { .. }
             | Stage::Script { .. }
             | Stage::Signature { .. }
             | Stage::Allocating { .. }
@@ -1625,11 +1625,7 @@ pub(crate) fn system_stage(l: Lang, stage: Option<&Stage>) -> (String, Option<f3
             };
             (said, Some(s))
         }
-        Some(Stage::Storing) => (
-            l.pick(crate::texts::installing::SYSTEM_STORING)
-            .into(),
-            None,
-        ),
+        Some(Stage::Storing) => (l.pick(crate::texts::installing::SYSTEM_STORING).into(), None),
         _ => (l.pick(GETTING_READY).into(), None),
     }
 }
@@ -1719,13 +1715,7 @@ fn script_output(c: &mut Canvas, cx: &Ctx, y: f32, rows: &mut Option<Rows>) -> f
     if lines.is_empty() {
         return y;
     }
-    let y = widgets::section(
-        c,
-        cx.t,
-        cx.f,
-        y,
-        cx.state.lang.pick(crate::texts::installing::SCRIPT_OUTPUT),
-    );
+    let y = widgets::section(c, cx.t, cx.f, y, cx.state.lang.pick(crate::texts::installing::SCRIPT_OUTPUT));
     *rows = Some(Rows {
         edges: widgets::output_edges(c, cx.t, cx.f, y, lines),
         action: None,
@@ -1791,12 +1781,7 @@ pub fn installing(cx: &Ctx) -> Frame {
             widgets::list(&mut c, t, f, top, &[row]).bottom
         }
         Install::Idle | Install::Starting | Install::Ending if s.source == Source::Rescue => {
-            let row = standing(
-                l.pick(SWITCHING_USB),
-                GREEN,
-                Icon::Usb,
-                l.pick(crate::texts::installing::TO_RESCUE),
-            );
+            let row = standing(l.pick(SWITCHING_USB), GREEN, Icon::Usb, l.pick(crate::texts::installing::TO_RESCUE));
             widgets::list(&mut c, t, f, top, &[row]).bottom
         }
         Install::Idle | Install::Starting | Install::Ending => {
@@ -1826,13 +1811,7 @@ pub fn installing(cx: &Ctx) -> Frame {
             let y = widgets::list(&mut c, t, f, top, &[row]).bottom;
             let open = widgets::list(&mut c, t, f, y + t.m.card_gap, &[Row::new(l.pick(DECRYPT))]);
             out.extend(hits(&open.rows, &[Action::Open(Screen::Decrypt)]));
-            let y = widgets::footnote(
-                &mut c,
-                t,
-                f,
-                open.bottom,
-                l.pick(crate::texts::installing::INSTALLS_ONCE_DECRYPTED),
-            );
+            let y = widgets::footnote(&mut c, t, f, open.bottom, l.pick(crate::texts::installing::INSTALLS_ONCE_DECRYPTED));
             asked_package(&mut c, cx, y)
         }
         Install::Waiting if s.source == Source::Rescue => {
@@ -1847,18 +1826,12 @@ pub fn installing(cx: &Ctx) -> Frame {
                 &[
                     (
                         l.pick(crate::texts::installing::RESCUE_INSTALL),
-                        l.pick(crate::texts::installing::RESCUE_INSTALL_NOTE)
-                        .into(),
+                        l.pick(crate::texts::installing::RESCUE_INSTALL_NOTE).into(),
                     ),
-                    (
-                        "adb rescue getprop",
-                        l.pick(crate::texts::installing::RESCUE_GETPROP_NOTE)
-                        .into(),
-                    ),
+                    ("adb rescue getprop", l.pick(crate::texts::installing::RESCUE_GETPROP_NOTE).into()),
                     (
                         "adb rescue wipe userdata",
-                        l.pick(crate::texts::installing::RESCUE_WIPE_NOTE)
-                            .into(),
+                        l.pick(crate::texts::installing::RESCUE_WIPE_NOTE).into(),
                     ),
                 ],
             );
@@ -1876,8 +1849,7 @@ pub fn installing(cx: &Ctx) -> Frame {
                 y,
                 &[(
                     l.pick(crate::texts::installing::SIDELOAD),
-                    l.pick(crate::texts::installing::SIDELOAD_FILE_NOTE)
-                    .into(),
+                    l.pick(crate::texts::installing::SIDELOAD_FILE_NOTE).into(),
                 )],
             );
             let note = l.pick(crate::texts::installing::SIDELOAD_NOTE);
@@ -1902,9 +1874,7 @@ pub fn installing(cx: &Ctx) -> Frame {
             let note = l.pick(match s.source {
                 Source::Computer => crate::texts::installing::CANCEL_ENDS_SIDELOAD,
                 Source::Rescue => crate::texts::installing::CANCEL_LEAVES_RESCUE,
-                Source::File(Place::Storage) | Source::Opened { drive: false } | Source::Asked { .. } => {
-                    crate::texts::installing::CANCEL
-                }
+                Source::File(Place::Storage) | Source::Opened { drive: false } | Source::Asked { .. } => crate::texts::installing::CANCEL,
                 Source::File(Place::UsbDrive) | Source::Opened { drive: true } => crate::texts::installing::CANCEL_KEEP_USB_DRIVE,
             });
             widgets::footnote(&mut c, t, f, y, note)
@@ -1928,7 +1898,11 @@ pub fn installing(cx: &Ctx) -> Frame {
                 .partitions
                 .iter()
                 .enumerate()
-                .map(|(k, p)| Row::new(&p.name).subtitle(fmt::partition_role(l, p)).trail(Trail::Check(k == choice.partition)))
+                .map(|(k, p)| {
+                    Row::new(&p.name)
+                        .subtitle(fmt::partition_role(l, p))
+                        .trail(Trail::Check(k == choice.partition))
+                })
                 .collect();
             let parts = widgets::list(&mut c, t, f, y, &rows);
             let choose: Vec<Action> = (0..choice.partitions.len()).map(Action::FlashPartition).collect();
@@ -1940,8 +1914,11 @@ pub fn installing(cx: &Ctx) -> Frame {
                 FlashPlace::Slotted => {
                     let y = widgets::section(&mut c, t, f, parts.bottom, l.pick(texts::slot::TITLE));
                     let titles = Pick::ALL.map(|p| pick_title(l, p, i.slot));
-                    let rows: Vec<Row> =
-                        Pick::ALL.iter().zip(&titles).map(|(p, title)| Row::new(title).trail(Trail::Check(*p == choice.pick))).collect();
+                    let rows: Vec<Row> = Pick::ALL
+                        .iter()
+                        .zip(&titles)
+                        .map(|(p, title)| Row::new(title).trail(Trail::Check(*p == choice.pick)))
+                        .collect();
                     let picks = widgets::list(&mut c, t, f, y, &rows);
                     out.extend(hits(&picks.rows, &Pick::ALL.map(Action::FlashSlots)));
                     picks.bottom
@@ -1955,7 +1932,10 @@ pub fn installing(cx: &Ctx) -> Frame {
             };
             let (label, danger) = confirm_label(Confirm::Flash, cx.state);
             let track = widgets::confirm(&mut c, t, f, bottom + t.m.dp(28.0), label, danger, s.confirm);
-            out.push(Hit { rect: track, action: Action::Confirm(Confirm::Flash) });
+            out.push(Hit {
+                rect: track,
+                action: Action::Confirm(Confirm::Flash),
+            });
             let note_top = if choice.partitions[choice.partition].place == FlashPlace::Single {
                 widgets::footnote(&mut c, t, f, track.y + track.h, l.pick(SUPER_NOTE))
             } else {
@@ -2004,9 +1984,7 @@ pub fn installing(cx: &Ctx) -> Frame {
                         "新系統將安裝到槽位 {slot}，重新啟動後將從該槽位啟動。",
                         "The new system installs to slot {slot}, which starts after a reboot."
                     ),
-                    None => l
-                        .pick(crate::texts::installing::confirm::STARTS_AFTER_REBOOT)
-                        .into(),
+                    None => l.pick(crate::texts::installing::confirm::STARTS_AFTER_REBOOT).into(),
                 };
                 (title, GREEN, Icon::Install, detail, Confirm::Install)
             };
@@ -2027,9 +2005,7 @@ pub fn installing(cx: &Ctx) -> Frame {
         } => {
             let title = match version {
                 Some(v) => tr!(l, "正在安装 {v}", "正在安裝 {v}", "Installing {v}"),
-                None => l
-                    .pick(crate::texts::installing::UPDATE)
-                    .into(),
+                None => l.pick(crate::texts::installing::UPDATE).into(),
             };
             let (detail, done) = update_stage(l, stage.as_ref());
             let y = widgets::progress_card(&mut c, t, f, top, &title, &detail, done);
@@ -2252,9 +2228,11 @@ fn finished(
             t,
             f,
             top,
-            &[Row::new(l.pick(crate::lang::legacy(["请重启 recovery", "請重新啟動 recovery", "Reboot recovery"])))
-                .icon(ORANGE, Icon::Power)
-                .subtitle(l.pick(RESTART_AFTER_INSTALL))],
+            &[
+                Row::new(l.pick(crate::lang::legacy(["请重启 recovery", "請重新啟動 recovery", "Reboot recovery"])))
+                    .icon(ORANGE, Icon::Power)
+                    .subtitle(l.pick(RESTART_AFTER_INSTALL)),
+            ],
         );
         out.extend(hits(&notice.rows, &[Action::RebootTo(Target::Recovery)]));
         notice.bottom + gap
@@ -2321,7 +2299,11 @@ fn finished(
             let ran = l.pick(crate::texts::installed::SCRIPT_RAN);
             let warned = !cx.state.script_warnings.is_empty();
             let title = if warned {
-                l.pick(crate::lang::legacy(["脚本完成，存在警告", "指令碼完成，有警告", "Script completed with warnings"]))
+                l.pick(crate::lang::legacy([
+                    "脚本完成，存在警告",
+                    "指令碼完成，有警告",
+                    "Script completed with warnings",
+                ]))
             } else {
                 installed
             };
@@ -2403,22 +2385,21 @@ fn finished(
                 t,
                 f,
                 top,
-                &[standing(
-                    l.pick(crate::texts::installed::FAILED),
-                    RED,
-                    Icon::Install,
-                    &what,
-                )],
+                &[standing(l.pick(crate::texts::installed::FAILED), RED, Icon::Install, &what)],
             )
             .bottom;
             let next = widgets::list(c, t, f, y + gap, &[again, restart]);
             out.extend(hits(&next.rows, &[another, Action::RebootTo(Target::System)]));
             // The package is sent again, or installed or flashed again.
             let (install, flash) = match source {
-                Source::Computer | Source::Rescue => (crate::lang::legacy(["重新发送", "重新傳送", "Send"]), crate::lang::legacy(["重新发送", "重新傳送", "Send"])),
-                Source::File(_) | Source::Opened { .. } | Source::Asked { .. } => {
-                    (crate::lang::legacy(["重新安装", "重新安裝", "Install"]), crate::lang::legacy(["重新刷入", "重新刷入", "Flash"]))
-                }
+                Source::Computer | Source::Rescue => (
+                    crate::lang::legacy(["重新发送", "重新傳送", "Send"]),
+                    crate::lang::legacy(["重新发送", "重新傳送", "Send"]),
+                ),
+                Source::File(_) | Source::Opened { .. } | Source::Asked { .. } => (
+                    crate::lang::legacy(["重新安装", "重新安裝", "Install"]),
+                    crate::lang::legacy(["重新刷入", "重新刷入", "Flash"]),
+                ),
             };
             let (install, flash) = (l.pick(install), l.pick(flash));
             let warning = match damage {
@@ -2440,9 +2421,7 @@ fn finished(
                     "本機的分割區可能已被部分改寫，重新啟動後可能無法正常啟動。請{install}這個刷機包，安裝完成後再重新啟動。",
                     "This phone's partitions may have been partly rewritten, so it may not start properly after a reboot. {install} the zip again, and reboot once it's installed."
                 ),
-                None => l
-                    .pick(crate::texts::installed::damage::NONE)
-                    .into(),
+                None => l.pick(crate::texts::installed::damage::NONE).into(),
             };
             let mut y = widgets::footnote(c, t, f, next.bottom, &warning);
             if let Some(d) = detail {
@@ -2517,33 +2496,28 @@ fn wipe_row(w: Wipe, s: &State) -> (&'static str, String) {
         Wipe::All => (crate::texts::wipe::ALL, capitalized(l, &factory_reset(s))),
         Wipe::AppData => (
             crate::texts::wipe::part::APP_DATA,
-            l.pick(crate::texts::wipe::what::APP_DATA)
-            .into(),
+            l.pick(crate::texts::wipe::what::APP_DATA).into(),
         ),
-        Wipe::Media => (
-            crate::texts::wipe::part::MEDIA,
-            l.pick(crate::texts::wipe::what::MEDIA).into(),
-        ),
+        Wipe::Media => (crate::texts::wipe::part::MEDIA, l.pick(crate::texts::wipe::what::MEDIA).into()),
         Wipe::AppCaches => (
             crate::texts::wipe::part::APP_CACHES,
-            l.pick(crate::texts::wipe::what::APP_CACHES)
-            .into(),
+            l.pick(crate::texts::wipe::what::APP_CACHES).into(),
         ),
         Wipe::SystemCaches => (
             crate::texts::wipe::part::SYSTEM_CACHES,
-            l.pick(crate::texts::wipe::what::SYSTEM_CACHES)
-            .into(),
+            l.pick(crate::texts::wipe::what::SYSTEM_CACHES).into(),
         ),
-        Wipe::Art => (
-            crate::texts::wipe::part::ART,
-            l.pick(crate::texts::wipe::what::ART)
-            .into(),
-        ),
+        Wipe::Art => (crate::texts::wipe::part::ART, l.pick(crate::texts::wipe::what::ART).into()),
         Wipe::Logs => {
             let own = match (l, s.phone_logs) {
                 (_, 0) => String::new(),
                 (Lang::En, 1) => ", and this phone's own log folder".into(),
-                (_, n) => tr!(l, "，以及本机的 {n} 个日志文件夹", "，以及本機的 {n} 個記錄資料夾", ", and this phone's own {n} log folders"),
+                (_, n) => tr!(
+                    l,
+                    "，以及本机的 {n} 个日志文件夹",
+                    "，以及本機的 {n} 個記錄資料夾",
+                    ", and this phone's own {n} log folders"
+                ),
             };
             let what = tr!(
                 l,
@@ -2553,14 +2527,8 @@ fn wipe_row(w: Wipe, s: &State) -> (&'static str, String) {
             );
             (crate::texts::wipe::part::LOGS, what)
         }
-        Wipe::Updates => (
-            crate::texts::wipe::part::UPDATES,
-            l.pick(crate::texts::wipe::what::UPDATES).into(),
-        ),
-        Wipe::Cache => (
-            crate::texts::wipe::EVERYTHING,
-            l.pick(crate::texts::wipe::what::CACHE).into(),
-        ),
+        Wipe::Updates => (crate::texts::wipe::part::UPDATES, l.pick(crate::texts::wipe::what::UPDATES).into()),
+        Wipe::Cache => (crate::texts::wipe::EVERYTHING, l.pick(crate::texts::wipe::what::CACHE).into()),
     };
     (l.pick(title), what)
 }
@@ -2610,13 +2578,7 @@ pub fn wipe(cx: &Ctx) -> Frame {
         rect: track,
         action: Action::Confirm(Confirm::Wipe),
     });
-    Frame::new(
-        t,
-        fit(c, t, track.y + track.h),
-        out,
-        l.pick(crate::texts::page::WIPE),
-        top,
-    )
+    Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(crate::texts::page::WIPE), top)
 }
 
 /// A page laid out above the on-screen keyboard: where the keyboard's top
@@ -2698,13 +2660,15 @@ pub fn backup(cx: &Ctx) -> Frame {
         t,
         f,
         top,
-        &[Row::new(l.pick(crate::lang::legacy(["分区镜像备份", "分割區映像檔備份", "Partition image backup"])))
-            .icon(BLUE, Icon::Backup)
-            .subtitle(l.pick(crate::lang::legacy([
-                "单个分区或整个 super，raw .img",
-                "單個分割區或整個 super，raw .img",
-                "One partition or whole super, raw .img",
-            ])))],
+        &[
+            Row::new(l.pick(crate::lang::legacy(["分区镜像备份", "分割區映像檔備份", "Partition image backup"])))
+                .icon(BLUE, Icon::Backup)
+                .subtitle(l.pick(crate::lang::legacy([
+                    "单个分区或整个 super，raw .img",
+                    "單個分割區或整個 super，raw .img",
+                    "One partition or whole super, raw .img",
+                ]))),
+        ],
     );
     out.extend(hits(&images.rows, &[Action::Open(Screen::ImageBackup)]));
     let y = widgets::section(&mut c, t, f, images.bottom, l.pick(crate::texts::backup::CONTENTS));
@@ -2714,7 +2678,11 @@ pub fn backup(cx: &Ctx) -> Frame {
         false => crate::texts::backup::DATA_HOLDS_LOCKED,
     });
     let boot = l.pick(crate::texts::backup::BOOT_HOLDS);
-    let media = l.pick(if s.data == Data::Open { texts::backup::MEDIA_HOLDS } else { texts::backup::MEDIA_HOLDS_LOCKED });
+    let media = l.pick(if s.data == Data::Open {
+        texts::backup::MEDIA_HOLDS
+    } else {
+        texts::backup::MEDIA_HOLDS_LOCKED
+    });
     let modem = l.pick(crate::texts::backup::MODEM_HOLDS);
     let subs = [boot, system, data, media, modem];
     let available: Vec<_> = (0..BACKUP_PARTS.len()).filter(|&k| k != 4 || s.efs_backup_available).collect();
@@ -2797,7 +2765,13 @@ pub fn image_backup(cx: &Ctx) -> Frame {
     let top = t.m.content_top;
     let y = widgets::section_first(&mut c, t, f, top, l.pick(crate::texts::image::role::PARTITION));
     let y = match &s.image_partitions {
-        None => widgets::footnote(&mut c, t, f, y, l.pick(crate::lang::legacy(["正在读取分区", "正在讀取分割區", "Reading partitions"]))),
+        None => widgets::footnote(
+            &mut c,
+            t,
+            f,
+            y,
+            l.pick(crate::lang::legacy(["正在读取分区", "正在讀取分割區", "Reading partitions"])),
+        ),
         Some(Err(error)) => widgets::footnote(&mut c, t, f, y, error),
         Some(Ok(parts)) => {
             let details: Vec<_> = parts
@@ -2883,14 +2857,7 @@ pub fn restore(cx: &Ctx) -> Frame {
     let top = t.m.content_top;
     let y = widgets::section_first(&mut c, t, f, top, l.pick(crate::texts::restore::BACKUPS));
     let bottom = if s.backups.is_empty() {
-        widgets::list(
-            &mut c,
-            t,
-            f,
-            y,
-            &[Row::new(l.pick(crate::texts::restore::NONE)).trail(Trail::None)],
-        )
-        .bottom
+        widgets::list(&mut c, t, f, y, &[Row::new(l.pick(crate::texts::restore::NONE)).trail(Trail::None)]).bottom
     } else {
         let texts: Vec<(String, String)> = s
             .backups
@@ -2941,8 +2908,14 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
             f,
             top,
             &[
-                (l.pick(crate::lang::legacy(["镜像", "映像檔", "Image"])), format!("{}.img", image.partition)),
-                (l.pick(crate::lang::legacy(["目标分区", "目標分割區", "Target partition"])), image.partition.clone()),
+                (
+                    l.pick(crate::lang::legacy(["镜像", "映像檔", "Image"])),
+                    format!("{}.img", image.partition),
+                ),
+                (
+                    l.pick(crate::lang::legacy(["目标分区", "目標分割區", "Target partition"])),
+                    image.partition.clone(),
+                ),
                 (l.pick(crate::texts::common::SIZE), fmt::bytes(held.size)),
                 (location, format!("{}/Skyward/images/{}", place_name(l, entry.place), entry.name)),
             ],
@@ -3196,14 +3169,12 @@ pub fn backup_job(cx: &Ctx) -> Frame {
                 }
                 None if job.restore => (
                     l.pick(crate::texts::backup::job::READING).to_string(),
-                    l.pick(crate::texts::backup::job::CHECKING)
-                        .to_string(),
+                    l.pick(crate::texts::backup::job::CHECKING).to_string(),
                     0.0,
                 ),
                 None => (
                     l.pick(GETTING_READY).to_string(),
-                    l.pick(crate::texts::backup::job::SIZING)
-                        .to_string(),
+                    l.pick(crate::texts::backup::job::SIZING).to_string(),
                     0.0,
                 ),
             };
@@ -3242,8 +3213,7 @@ pub fn backup_job(cx: &Ctx) -> Frame {
                 BackupEnd::Restored { .. } => (
                     l.pick(RESTORE_COMPLETE),
                     GREEN,
-                    l.pick(crate::texts::backup::job::USES_RESTORED)
-                    .to_string(),
+                    l.pick(crate::texts::backup::job::USES_RESTORED).to_string(),
                 ),
                 BackupEnd::Stopped => (l.pick(crate::texts::common::STOPPED), SLATE, gone.to_string()),
                 BackupEnd::Refused(r) => {
@@ -3281,18 +3251,12 @@ pub fn backup_job(cx: &Ctx) -> Frame {
                     "{keep} until the backup is done. Stopping deletes the unfinished backup."
                 ),
                 (true, Some(a)) if !a.checking => tr!(l, "恢复完成前，{keep}", "還原完成前，{keep}", "{keep} until the restore is done."),
-                (true, _) => l
-                    .pick(crate::texts::backup::job::NOTHING_UNTIL_VERIFIED)
-                    .to_string(),
+                (true, _) => l.pick(crate::texts::backup::job::NOTHING_UNTIL_VERIFIED).to_string(),
             };
             y = widgets::footnote(&mut c, t, f, y, &note);
             // A restore that has begun writing goes on to its end.
             if !(job.restore && writing) {
-                let label = l.pick(if job.stopping {
-                    crate::texts::common::STOPPING
-                } else {
-                    STOP
-                });
+                let label = l.pick(if job.stopping { crate::texts::common::STOPPING } else { STOP });
                 let stop = widgets::list(&mut c, t, f, y + t.m.card_gap, &[Row::new(label).trail(Trail::None)]);
                 if !job.stopping {
                     out.extend(hits(&stop.rows, &[Action::StopBackup]));
@@ -3371,7 +3335,13 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
     let mut c = long_page(cx);
     let top = t.m.content_top;
-    let y = widgets::section_first(&mut c, t, f, top, l.pick(crate::lang::legacy(["文件与网络", "檔案與網路", "Files and network"])));
+    let y = widgets::section_first(
+        &mut c,
+        t,
+        f,
+        top,
+        l.pick(crate::lang::legacy(["文件与网络", "檔案與網路", "Files and network"])),
+    );
     let files = widgets::list(
         &mut c,
         t,
@@ -3421,7 +3391,13 @@ pub fn advanced(cx: &Ctx) -> Frame {
             Action::Open(Screen::Avb),
         ],
     ));
-    let y = widgets::section(&mut c, t, f, system.bottom, l.pick(crate::lang::legacy(["维护与诊断", "維護與診斷", "Maintenance"])));
+    let y = widgets::section(
+        &mut c,
+        t,
+        f,
+        system.bottom,
+        l.pick(crate::lang::legacy(["维护与诊断", "維護與診斷", "Maintenance"])),
+    );
     let maintenance = widgets::list(
         &mut c,
         t,
@@ -3471,7 +3447,13 @@ pub fn avb(cx: &Ctx) -> Frame {
             None
         }
         None => {
-            y = widgets::footnote(&mut c, t, f, y, l.pick(crate::lang::legacy(["正在读取 vbmeta", "正在讀取 vbmeta", "Reading vbmeta"])));
+            y = widgets::footnote(
+                &mut c,
+                t,
+                f,
+                y,
+                l.pick(crate::lang::legacy(["正在读取 vbmeta", "正在讀取 vbmeta", "Reading vbmeta"])),
+            );
             None
         }
     };
@@ -3518,7 +3500,13 @@ pub fn avb(cx: &Ctx) -> Frame {
             action: Action::Confirm(Confirm::AvbDisable),
         });
         y = track.y + track.h;
-        let back = widgets::button(&mut c, t, f, y + t.m.dp(12.0), l.pick(crate::lang::legacy(["返回", "返回", "Go back"])));
+        let back = widgets::button(
+            &mut c,
+            t,
+            f,
+            y + t.m.dp(12.0),
+            l.pick(crate::lang::legacy(["返回", "返回", "Go back"])),
+        );
         out.push(Hit {
             rect: back,
             action: Action::CancelAvb,
@@ -3598,7 +3586,12 @@ pub fn avb(cx: &Ctx) -> Frame {
             t,
             f,
             y + t.m.card_gap,
-            &[Row::new(l.pick(crate::lang::legacy(["vbmeta 备份与写回", "vbmeta 備份與寫回", "vbmeta copies and writing one back"]))).trail(Trail::None)],
+            &[Row::new(l.pick(crate::lang::legacy([
+                "vbmeta 备份与写回",
+                "vbmeta 備份與寫回",
+                "vbmeta copies and writing one back",
+            ])))
+            .trail(Trail::None)],
         );
         out.extend(hits(&keep.rows, &[Action::Open(Screen::Vbmeta)]));
         y = keep.bottom;
@@ -3704,9 +3697,7 @@ pub fn relabel(cx: &Ctx) -> Frame {
         Some(end) => {
             let changed = job.changed;
             let note = match end {
-                JobEnd::Done if changed == 0 => l
-                    .pick(crate::texts::relabel::NOTHING_NEEDED)
-                    .to_string(),
+                JobEnd::Done if changed == 0 => l.pick(crate::texts::relabel::NOTHING_NEEDED).to_string(),
                 JobEnd::Done => tr!(
                     l,
                     "已按规则重新设置 {changed} 项的 SELinux 上下文。",
@@ -3849,13 +3840,7 @@ pub fn filesystem(cx: &Ctx) -> Frame {
         y = widgets::footnote(&mut c, t, f, y, note);
     }
     if !row.others.is_empty() {
-        y = widgets::footnote(
-            &mut c,
-            t,
-            f,
-            y,
-            l.pick(crate::texts::filesystems::CANT_UNDO),
-        );
+        y = widgets::footnote(&mut c, t, f, y, l.pick(crate::texts::filesystems::CANT_UNDO));
     }
     let (label, danger) = confirm_label(Confirm::Filesystem, s);
     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
@@ -4052,15 +4037,7 @@ pub fn update(cx: &Ctx) -> Frame {
         let share = done as f32;
         let p = percent(share);
         let detail = tr!(l, "已完成 {p}%", "已完成 {p}%", "{p}% done");
-        let y = widgets::progress_card(
-            &mut c,
-            t,
-            f,
-            top,
-            l.pick(crate::texts::snapshot::MERGING),
-            &detail,
-            Some(share),
-        );
+        let y = widgets::progress_card(&mut c, t, f, top, l.pick(crate::texts::snapshot::MERGING), &detail, Some(share));
         let note = l.pick(crate::texts::update::MERGING_NOTE);
         let y = widgets::footnote(&mut c, t, f, y, note);
         return Frame::new(t, fit(c, t, y), out, l.pick(UPDATE), top);
@@ -4432,8 +4409,7 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         }
         (true, None) => (
             tr!(l, "新版本 {version}", "新版本 {version}", "New version {version}"),
-            l.pick(crate::texts::skyward_update::NO_PACKAGE)
-                .to_string(),
+            l.pick(crate::texts::skyward_update::NO_PACKAGE).to_string(),
         ),
         (false, _) => (
             l.pick(crate::texts::update::UP_TO_DATE).to_string(),
@@ -4493,13 +4469,7 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
             };
             let y = widgets::progress_card(c, t, f, y + gap, heading, &detail, share);
             if matches!(job.stage, Some(SkywardStage::Write { .. })) {
-                return widgets::footnote(
-                    c,
-                    t,
-                    f,
-                    y,
-                    l.pick(crate::texts::skyward_update::KEEP_POWER),
-                );
+                return widgets::footnote(c, t, f, y, l.pick(crate::texts::skyward_update::KEEP_POWER));
             }
             let stop = widgets::list(
                 c,
@@ -4532,7 +4502,12 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
                 t,
                 f,
                 y + gap,
-                &[standing(l.pick(crate::texts::skyward_update::SUCCEEDED), GREEN, Icon::Install, &detail)],
+                &[standing(
+                    l.pick(crate::texts::skyward_update::SUCCEEDED),
+                    GREEN,
+                    Icon::Install,
+                    &detail,
+                )],
             )
             .bottom;
             let restart = widgets::list(
@@ -4548,18 +4523,10 @@ fn skyward_online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         job => {
             let mut y = y;
             match job.as_ref().and_then(|j| j.outcome.as_ref()) {
-                Some(SkywardEnd::Stopped) => {
-                    y = widgets::footnote(c, t, f, y, l.pick(crate::texts::skyward_update::STOPPED))
-                }
+                Some(SkywardEnd::Stopped) => y = widgets::footnote(c, t, f, y, l.pick(crate::texts::skyward_update::STOPPED)),
                 Some(SkywardEnd::Download(why)) => y = widgets::footnote(c, t, f, y, &fmt::skyward_download_failure(l, why)),
                 Some(SkywardEnd::NotWritten(why)) => {
-                    y = widgets::footnote(
-                        c,
-                        t,
-                        f,
-                        y,
-                        l.pick(crate::texts::skyward_update::NOT_WRITTEN),
-                    );
+                    y = widgets::footnote(c, t, f, y, l.pick(crate::texts::skyward_update::NOT_WRITTEN));
                     y = widgets::footnote(c, t, f, y, why);
                 }
                 Some(SkywardEnd::WriteFailed(slots, why)) => {
@@ -4856,11 +4823,7 @@ pub fn wlan_network(cx: &Ctx) -> Frame {
     match &j.stage {
         Joining::Connected(link) => {
             if let Some(n) = link.generation {
-                items.push(detail(
-                    Outline::Wifi,
-                    l.pick(crate::texts::wlan::STANDARD),
-                    fmt::generation(l, n),
-                ));
+                items.push(detail(Outline::Wifi, l.pick(crate::texts::wlan::STANDARD), fmt::generation(l, n)));
             }
             if let Some(speed) = link.speed {
                 items.push(detail(
@@ -5004,14 +4967,7 @@ fn file_listing(cx: &Ctx) -> Frame {
         }
         Ok(_) if !s.files_query.trim().is_empty() => search_rows(cx, &mut c),
         Ok(entries) if entries.is_empty() => {
-            files::note(
-                &mut c,
-                t,
-                f,
-                files::SEARCHED_ROWS_TOP_DP,
-                l.pick(crate::texts::files::NONE),
-                None,
-            );
+            files::note(&mut c, t, f, files::SEARCHED_ROWS_TOP_DP, l.pick(crate::texts::files::NONE), None);
             None
         }
         Ok(_) => {
@@ -5050,7 +5006,14 @@ fn search_rows(cx: &Ctx, c: &mut Canvas) -> Option<Rows> {
     let top = files::SEARCHED_ROWS_TOP_DP;
     match &s.found {
         None => {
-            files::note(c, t, f, top, l.pick(crate::lang::legacy(["正在搜索…", "正在搜尋…", "Searching…"])), None);
+            files::note(
+                c,
+                t,
+                f,
+                top,
+                l.pick(crate::lang::legacy(["正在搜索…", "正在搜尋…", "Searching…"])),
+                None,
+            );
             None
         }
         Some(Err(why)) => {
@@ -5059,7 +5022,11 @@ fn search_rows(cx: &Ctx, c: &mut Canvas) -> Option<Rows> {
                 t,
                 f,
                 top,
-                l.pick(crate::lang::legacy(["无法搜索该文件夹", "無法搜尋這個資料夾", "This folder can't be searched"])),
+                l.pick(crate::lang::legacy([
+                    "无法搜索该文件夹",
+                    "無法搜尋這個資料夾",
+                    "This folder can't be searched",
+                ])),
                 Some(why),
             );
             None
@@ -5159,9 +5126,7 @@ fn listing(
                 t,
                 f,
                 files::ROWS_TOP_DP,
-                cx.state
-                    .lang
-                    .pick(crate::texts::files::UNREADABLE),
+                cx.state.lang.pick(crate::texts::files::UNREADABLE),
                 Some(why),
             );
             None
@@ -5255,10 +5220,7 @@ pub fn file_info(cx: &Ctx) -> Frame {
             ))
         }
     }
-    facts.push((
-        l.pick(crate::texts::files::MODIFIED),
-        fmt::datetime(l, e.modified, s.zone()),
-    ));
+    facts.push((l.pick(crate::texts::files::MODIFIED), fmt::datetime(l, e.modified, s.zone())));
     let (mode, uid, gid) = (fmt::mode(e.mode), e.uid, e.gid);
     facts.push((
         l.pick(PERMISSIONS),
@@ -5303,7 +5265,11 @@ pub fn file_info(cx: &Ctx) -> Frame {
         rows.push(Row::new(l.pick(CHANGE_PERMISSIONS)));
         acts.push(Action::OpenPermissions);
     }
-    rows.push(Row::new(l.pick(crate::texts::keyboard::DELETE)).tint(t.pal.danger).trail(Trail::None));
+    rows.push(
+        Row::new(l.pick(crate::texts::keyboard::DELETE))
+            .tint(t.pal.danger)
+            .trail(Trail::None),
+    );
     acts.push(Action::AskDelete);
     let actions = widgets::list(&mut c, t, f, y + t.m.card_gap, &rows);
     let mut out = hits(&actions.rows, &acts);
@@ -5378,7 +5344,11 @@ pub fn permissions(cx: &Ctx) -> Frame {
     let groups = classes.map(|(title, shift)| (l.pick(title), [(read, 4 << shift), (write, 2 << shift), (run, 1 << shift)]));
     let special = (
         l.pick(crate::texts::files::mode::SPECIAL),
-        [("SUID", 0o4000), ("SGID", 0o2000), (l.pick(crate::texts::files::mode::STICKY), 0o1000)],
+        [
+            ("SUID", 0o4000),
+            ("SGID", 0o2000),
+            (l.pick(crate::texts::files::mode::STICKY), 0o1000),
+        ],
     );
     for (title, bits) in groups.into_iter().chain([special]) {
         y = widgets::section(&mut c, t, f, y, title);
@@ -5397,13 +5367,7 @@ pub fn rename(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = t.m.content_top;
     let (y, caret) = widgets::text_field(&mut c, t, f, top, &s.new_name);
-    widgets::footnote(
-        &mut c,
-        t,
-        f,
-        y,
-        l.pick(crate::texts::files::RENAME_NOTE),
-    );
+    widgets::footnote(&mut c, t, f, y, l.pick(crate::texts::files::RENAME_NOTE));
     keyboard_hits(&mut c, t, f, s, l.pick(DONE), &mut out);
     Frame {
         caret: Some(caret),
@@ -5491,10 +5455,7 @@ fn file_words(task: &FileTask) -> FileWords {
             verb: ["删除", "刪除"],
             done: "deleted",
             base: "delete",
-            titles: (
-                crate::texts::files::job::DELETING,
-                crate::texts::files::job::DELETE_INCOMPLETE,
-            ),
+            titles: (crate::texts::files::job::DELETING, crate::texts::files::job::DELETE_INCOMPLETE),
             stopped: crate::texts::files::job::DELETE_STOPPED,
         },
     }
@@ -5647,7 +5608,9 @@ pub fn time_zone(cx: &Ctx) -> Frame {
         Some(zone) => {
             let name = listed(&zone.name).map_or(zone.name.as_str(), |at| l.pick(TIME_ZONES[at].name));
             let system = format!("{} · {name}", fmt::utc_offset(s.now, &zone.rules));
-            let follow = Row::new(l.pick(texts::time_zone::FOLLOW_SYSTEM)).subtitle(&system).trail(Trail::Switch(s.follow_system_zone));
+            let follow = Row::new(l.pick(texts::time_zone::FOLLOW_SYSTEM))
+                .subtitle(&system)
+                .trail(Trail::Switch(s.follow_system_zone));
             let follow = widgets::list(&mut c, t, f, top, &[follow]);
             out.extend(hits(&follow.rows, &[Action::Toggle(Switch::SystemTimeZone)]));
             widgets::section(&mut c, t, f, follow.bottom, l.pick(texts::time_zone::CHOOSE))
@@ -5663,10 +5626,15 @@ pub fn time_zone(cx: &Ctx) -> Frame {
         }
     });
     let regions = widgets::list(&mut c, t, f, y, &rows);
-    out.extend(hits(&regions.rows, &Region::ALL.map(|region| Action::Open(Screen::TimeZones(region)))));
+    out.extend(hits(
+        &regions.rows,
+        &Region::ALL.map(|region| Action::Open(Screen::TimeZones(region))),
+    ));
     let utc = listed(UTC).expect("UTC is a zone listed");
     let offset = fmt::utc_offset(s.now, fmt::rules(utc));
-    let universal = Row::new(l.pick(TIME_ZONES[utc].name)).subtitle(&offset).trail(Trail::Check(kept == Some(utc)));
+    let universal = Row::new(l.pick(TIME_ZONES[utc].name))
+        .subtitle(&offset)
+        .trail(Trail::Check(kept == Some(utc)));
     let universal = widgets::list(&mut c, t, f, regions.bottom + t.m.card_gap, &[universal]);
     out.extend(hits(&universal.rows, &[Action::TimeZone(utc)]));
     let bottom = widgets::footnote(&mut c, t, f, universal.bottom, l.pick(texts::time_zone::NOTE));
@@ -5799,11 +5767,7 @@ pub fn font_license(cx: &Ctx) -> Frame {
             (typeface, f.mono_info.family.clone()),
             (version, f.mono_info.version.clone()),
             (copyright, holders.join("\n")),
-            (
-                l.pick(LICENSE_TERMS),
-                l.pick(crate::texts::fonts::OFL)
-                .to_string(),
-            ),
+            (l.pick(LICENSE_TERMS), l.pick(crate::texts::fonts::OFL).to_string()),
         ],
     );
     let mono = l.pick(crate::texts::fonts::MONO);
@@ -5933,25 +5897,15 @@ pub fn systems(cx: &Ctx) -> Frame {
                     Some(name) => tr!(l, "正在切换到 {name}", "正在切換到 {name}", "Switching to {name}"),
                     None => l.pick(crate::texts::systems::SWITCHING).to_string(),
                 };
-                (
-                    heading,
-                    l.pick(crate::texts::systems::WRITING_BOOT_IMAGES),
-                )
+                (heading, l.pick(crate::texts::systems::WRITING_BOOT_IMAGES))
             }
             SystemsWork::Removing => (
-                l.pick(crate::texts::systems::REMOVING)
-                    .to_string(),
+                l.pick(crate::texts::systems::REMOVING).to_string(),
                 l.pick(crate::texts::systems::GIVING_ROOM_BACK),
             ),
         };
         let y = widgets::progress_card(&mut c, t, f, top, &heading, detail, None);
-        let y = widgets::footnote(
-            &mut c,
-            t,
-            f,
-            y,
-            l.pick(crate::texts::systems::KEEP_POWER),
-        );
+        let y = widgets::footnote(&mut c, t, f, y, l.pick(crate::texts::systems::KEEP_POWER));
         return Frame::new(t, fit(c, t, y), out, title, top);
     }
     let systems = match &s.systems {
@@ -6117,13 +6071,7 @@ pub fn fastboot(cx: &Ctx) -> Frame {
     let choices = widgets::list(&mut c, t, f, y, &rows);
     let actions: Vec<Action> = FASTBOOT_CHOICES.iter().map(|&(_, action)| action).collect();
     let out = hits(&choices.rows, &actions);
-    widgets::footnote(
-        &mut c,
-        t,
-        f,
-        choices.bottom,
-        l.pick(crate::texts::fastboot::KEYS),
-    );
+    widgets::footnote(&mut c, t, f, choices.bottom, l.pick(crate::texts::fastboot::KEYS));
     Frame {
         back: false,
         ..Frame::new(t, c, out, "Fastboot", top)
@@ -6133,10 +6081,7 @@ pub fn fastboot(cx: &Ctx) -> Frame {
 /// Where to go once what the system asked for has stopped or cannot be
 /// done, in the order the pages list them.
 const AFTERWARDS: [(Text, Action); 3] = [
-    (
-        crate::texts::installed::REBOOT_TO_SYSTEM,
-        Action::RebootTo(Target::System),
-    ),
+    (crate::texts::installed::REBOOT_TO_SYSTEM, Action::RebootTo(Target::System)),
     (crate::texts::afterwards::ENTER_RECOVERY, Action::Dismiss),
     (crate::texts::reboot::target::POWER_OFF, Action::RebootTo(Target::PowerOff)),
 ];
@@ -6287,13 +6232,7 @@ pub fn cant_start(cx: &Ctx) -> Frame {
     ];
     let choices = widgets::list(&mut c, t, f, y, &rows);
     out.extend(hits(&choices.rows, &[Action::RebootTo(Target::System), Action::Dismiss]));
-    let y = widgets::footnote(
-        &mut c,
-        t,
-        f,
-        choices.bottom,
-        l.pick(crate::texts::cant_start::CANT_UNDO),
-    );
+    let y = widgets::footnote(&mut c, t, f, choices.bottom, l.pick(crate::texts::cant_start::CANT_UNDO));
     let (label, danger) = confirm_label(Confirm::FactoryReset, cx.state);
     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
     out.push(Hit {
@@ -6318,24 +6257,12 @@ pub fn unhandled(cx: &Ctx) -> Frame {
         items.push((l.pick(REASON), reason.clone()));
     }
     let y = widgets::info_card(&mut c, t, f, top, &items);
-    let y = widgets::footnote(
-        &mut c,
-        t,
-        f,
-        y,
-        l.pick(crate::texts::unhandled::NOTE),
-    );
+    let y = widgets::footnote(&mut c, t, f, y, l.pick(crate::texts::unhandled::NOTE));
     let y = widgets::section(&mut c, t, f, y, l.pick(ACTIONS));
     afterwards(&mut c, t, f, l, y, true, &mut out);
     Frame {
         back: false,
-        ..Frame::new(
-            t,
-            c,
-            out,
-            l.pick(crate::texts::unhandled::TITLE),
-            top,
-        )
+        ..Frame::new(t, c, out, l.pick(crate::texts::unhandled::TITLE), top)
     }
 }
 
@@ -6394,7 +6321,13 @@ pub fn vbmeta(cx: &Ctx) -> Frame {
     let mut c = long_page(cx);
     let mut out = Vec::new();
     let top = t.m.content_top;
-    let mut y = widgets::section_first(&mut c, t, f, top, l.pick(crate::lang::legacy(["当前 vbmeta", "目前 vbmeta", "This slot's vbmeta"])));
+    let mut y = widgets::section_first(
+        &mut c,
+        t,
+        f,
+        top,
+        l.pick(crate::lang::legacy(["当前 vbmeta", "目前 vbmeta", "This slot's vbmeta"])),
+    );
     match &s.avb {
         Some(Ok(state)) => {
             let target = if state.suffix.is_empty() {
@@ -6415,7 +6348,15 @@ pub fn vbmeta(cx: &Ctx) -> Frame {
             );
         }
         Some(Err(why)) => y = widgets::footnote(&mut c, t, f, y, why),
-        None => y = widgets::footnote(&mut c, t, f, y, l.pick(crate::lang::legacy(["正在读取 vbmeta", "正在讀取 vbmeta", "Reading vbmeta"]))),
+        None => {
+            y = widgets::footnote(
+                &mut c,
+                t,
+                f,
+                y,
+                l.pick(crate::lang::legacy(["正在读取 vbmeta", "正在讀取 vbmeta", "Reading vbmeta"])),
+            )
+        }
     }
     // A copy is the only way back from a vbmeta write, so it comes first.
     y = widgets::section(&mut c, t, f, y, l.pick(crate::lang::legacy(["备份", "備份", "Copies kept"])));
@@ -6505,7 +6446,13 @@ pub fn vbmeta(cx: &Ctx) -> Frame {
     }
     // Keeping a copy is offered for each place the phone has open; a place that
     // is not there has no row, rather than a row that could only fail.
-    y = widgets::section(&mut c, t, f, y, l.pick(crate::lang::legacy(["留一份副本", "留一份副本", "Keep a copy"])));
+    y = widgets::section(
+        &mut c,
+        t,
+        f,
+        y,
+        l.pick(crate::lang::legacy(["留一份副本", "留一份副本", "Keep a copy"])),
+    );
     let mut keeping: Vec<Row> = Vec::new();
     let mut keeping_hits: Vec<Action> = Vec::new();
     if s.data.storage_open() {
@@ -6591,6 +6538,34 @@ pub fn vbmeta(cx: &Ctx) -> Frame {
 
 const VBMETA: Text = crate::lang::legacy(["vbmeta 备份", "vbmeta 備份", "vbmeta copies"]);
 
+/// The time zones of one part of the world, from the one furthest behind
+/// UTC now to the one furthest ahead, each with how far that is and the
+/// cities it is known by.
+pub fn time_zones(cx: &Ctx, region: Region) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let mut zones: Vec<usize> = (0..TIME_ZONES.len()).filter(|&at| TIME_ZONES[at].region == Some(region)).collect();
+    zones.sort_by_key(|&at| fmt::utc_offset_seconds(s.now, fmt::rules(at)));
+    let lines: Vec<String> = zones
+        .iter()
+        .map(|&at| format!("{} · {}", fmt::utc_offset(s.now, fmt::rules(at)), l.pick(TIME_ZONES[at].cities)))
+        .collect();
+    let kept = s.zone_listed();
+    let rows: Vec<Row> = zones
+        .iter()
+        .zip(&lines)
+        .map(|(&at, line)| {
+            Row::new(l.pick(TIME_ZONES[at].name))
+                .subtitle(line)
+                .trail(Trail::Check(kept == Some(at)))
+        })
+        .collect();
+    let list = widgets::list(&mut c, t, f, top, &rows);
+    let picks: Vec<Action> = zones.iter().map(|&at| Action::TimeZone(at)).collect();
+    Frame::new(t, fit(c, t, list.bottom), hits(&list.rows, &picks), l.pick(region.name()), top)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6674,7 +6649,10 @@ mod tests {
         r.outcome = Some(BackupEnd::Failed("write /dev/block/by-name/boot_b".into()));
         assert_eq!(states(&r), ["未完成", "未恢复"]);
         r.at = None;
-        r.outcome = Some(BackupEnd::Refused(BackupRefusal::OlderAndroid { was: "17".into(), now: "16".into() }));
+        r.outcome = Some(BackupEnd::Refused(BackupRefusal::OlderAndroid {
+            was: "17".into(),
+            now: "16".into(),
+        }));
         assert_eq!(states(&r), ["未开始", "未开始"]);
     }
 
@@ -6728,21 +6706,4 @@ mod tests {
             "Flashed to boot in slots A and B."
         );
     }
-}
-
-/// The time zones of one part of the world, from the one furthest behind
-/// UTC now to the one furthest ahead, each with how far that is and the
-/// cities it is known by.
-pub fn time_zones(cx: &Ctx, region: Region) -> Frame {
-    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
-    let mut c = long_page(cx);
-    let top = t.m.content_top;
-    let mut zones: Vec<usize> = (0..TIME_ZONES.len()).filter(|&at| TIME_ZONES[at].region == Some(region)).collect();
-    zones.sort_by_key(|&at| fmt::utc_offset_seconds(s.now, fmt::rules(at)));
-    let lines: Vec<String> = zones.iter().map(|&at| format!("{} · {}", fmt::utc_offset(s.now, fmt::rules(at)), l.pick(TIME_ZONES[at].cities))).collect();
-    let kept = s.zone_listed();
-    let rows: Vec<Row> = zones.iter().zip(&lines).map(|(&at, line)| Row::new(l.pick(TIME_ZONES[at].name)).subtitle(line).trail(Trail::Check(kept == Some(at)))).collect();
-    let list = widgets::list(&mut c, t, f, top, &rows);
-    let picks: Vec<Action> = zones.iter().map(|&at| Action::TimeZone(at)).collect();
-    Frame::new(t, fit(c, t, list.bottom), hits(&list.rows, &picks), l.pick(region.name()), top)
 }

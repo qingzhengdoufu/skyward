@@ -82,9 +82,15 @@ fn main() {
     let known: BTreeSet<String> = LANGUAGES.iter().map(|l| format!("{}.toml", l.tag)).collect();
     for entry in fs::read_dir(&folder).unwrap() {
         let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-        assert!(known.contains(&name), "locales/{name} is not the file of a language the pages speak");
+        assert!(
+            known.contains(&name),
+            "locales/{name} is not the file of a language the pages speak"
+        );
     }
-    let catalogs: Vec<Catalog> = LANGUAGES.iter().map(|l| read(&folder.join(format!("{}.toml", l.tag)), l.tag)).collect();
+    let catalogs: Vec<Catalog> = LANGUAGES
+        .iter()
+        .map(|l| read(&folder.join(format!("{}.toml", l.tag)), l.tag))
+        .collect();
     let reference = &catalogs[LANGUAGES.iter().position(|l| l.tag == REFERENCE).unwrap()];
     for (language, catalog) in LANGUAGES.iter().zip(&catalogs) {
         check(language, catalog, reference);
@@ -115,14 +121,20 @@ fn read(path: &Path, tag: &str) -> Catalog {
 /// Whether a table gives one text in the forms numbers take, and not texts
 /// under their names.
 fn is_plural(table: &Table) -> bool {
-    table.contains_key("other") && table.iter().all(|(key, value)| FORMS.iter().any(|(form, _)| *form == key.as_str()) && value.is_str())
+    table.contains_key("other")
+        && table
+            .iter()
+            .all(|(key, value)| FORMS.iter().any(|(form, _)| *form == key.as_str()) && value.is_str())
 }
 
 fn flatten(tag: &str, path: &mut Vec<String>, table: &Table, out: &mut BTreeMap<Vec<String>, Message>) {
     for (key, value) in table {
         path.push(key.clone());
         let at = path.join(".");
-        assert!(syn::parse_str::<syn::Ident>(key).is_ok(), "{tag}.toml: `{at}` is not a name the code can call it by");
+        assert!(
+            syn::parse_str::<syn::Ident>(key).is_ok(),
+            "{tag}.toml: `{at}` is not a name the code can call it by"
+        );
         assert!(*key == key.to_lowercase(), "{tag}.toml: `{at}` is to be written in small letters");
         match value {
             Value::String(text) => {
@@ -132,7 +144,10 @@ fn flatten(tag: &str, path: &mut Vec<String>, table: &Table, out: &mut BTreeMap<
                 out.insert(path.clone(), Message::Flag(*flag));
             }
             Value::Table(inner) if is_plural(inner) => {
-                let forms = inner.iter().map(|(form, text)| (form.clone(), text.as_str().unwrap().to_string())).collect();
+                let forms = inner
+                    .iter()
+                    .map(|(form, text)| (form.clone(), text.as_str().unwrap().to_string()))
+                    .collect();
                 out.insert(path.clone(), Message::Plural(forms));
             }
             Value::Table(inner) => flatten(tag, path, inner, out),
@@ -157,7 +172,10 @@ fn values(tag: &str, at: &str, text: &str) -> Vec<String> {
             }
             '{' => {
                 let name: String = chars.by_ref().take_while(|&c| c != '}').collect();
-                assert!(syn::parse_str::<syn::Ident>(&name).is_ok(), "{tag}.toml: `{at}` names {{{name}}}, which is not a value's name");
+                assert!(
+                    syn::parse_str::<syn::Ident>(&name).is_ok(),
+                    "{tag}.toml: `{at}` names {{{name}}}, which is not a value's name"
+                );
                 if !names.contains(&name) {
                     names.push(name);
                 }
@@ -194,7 +212,10 @@ fn message_values(tag: &str, at: &str, message: &Message) -> Vec<String> {
 fn forms_of(tag: &str) -> BTreeSet<String> {
     let locale = Locale::try_from_str(tag).unwrap_or_else(|e| panic!("{tag} is not a locale: {e}"));
     let rules = PluralRules::try_new_cardinal(locale.into()).unwrap_or_else(|e| panic!("the plural rules of {tag}: {e}"));
-    rules.categories().map(|c| FORMS.iter().find(|(_, form)| *form == c).unwrap().0.to_string()).collect()
+    rules
+        .categories()
+        .map(|c| FORMS.iter().find(|(_, form)| *form == c).unwrap().0.to_string())
+        .collect()
 }
 
 /// Hold a language's file to the reference's: the same messages, each of
@@ -203,9 +224,23 @@ fn forms_of(tag: &str) -> BTreeSet<String> {
 fn check(language: &Language, catalog: &Catalog, reference: &Catalog) {
     let tag = language.tag;
     let name = |path: &Vec<String>| path.join(".");
-    let missing: Vec<String> = reference.messages.keys().filter(|k| !catalog.messages.contains_key(*k)).map(name).collect();
-    assert!(missing.is_empty(), "{tag}.toml lacks what {REFERENCE}.toml has: {}", missing.join(", "));
-    let extra: Vec<String> = catalog.messages.keys().filter(|k| !reference.messages.contains_key(*k)).map(name).collect();
+    let missing: Vec<String> = reference
+        .messages
+        .keys()
+        .filter(|k| !catalog.messages.contains_key(*k))
+        .map(name)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{tag}.toml lacks what {REFERENCE}.toml has: {}",
+        missing.join(", ")
+    );
+    let extra: Vec<String> = catalog
+        .messages
+        .keys()
+        .filter(|k| !reference.messages.contains_key(*k))
+        .map(name)
+        .collect();
     assert!(extra.is_empty(), "{tag}.toml has what {REFERENCE}.toml lacks: {}", extra.join(", "));
     let forms = forms_of(tag);
     for (path, message) in &catalog.messages {
@@ -217,10 +252,16 @@ fn check(language: &Language, catalog: &Catalog, reference: &Catalog) {
         );
         let sorted = |m: &Message, tag: &str| message_values(tag, &at, m).into_iter().collect::<BTreeSet<String>>();
         let (named, wanted) = (sorted(message, tag), sorted(theirs, REFERENCE));
-        assert!(named == wanted, "{tag}.toml: `{at}` names {named:?}, and in {REFERENCE}.toml it names {wanted:?}");
+        assert!(
+            named == wanted,
+            "{tag}.toml: `{at}` names {named:?}, and in {REFERENCE}.toml it names {wanted:?}"
+        );
         if let Message::Plural(written) = message {
             let written: BTreeSet<String> = written.keys().cloned().collect();
-            assert!(written == forms, "{tag}.toml: `{at}` is written for {written:?}, and the language's numbers take the forms {forms:?}");
+            assert!(
+                written == forms,
+                "{tag}.toml: `{at}` is written for {written:?}, and the language's numbers take the forms {forms:?}"
+            );
         }
     }
 }
@@ -290,7 +331,9 @@ fn texts(catalogs: &[Catalog], reference: &Catalog) -> TokenStream {
     let mut root = Module::default();
     for (path, theirs) in &reference.messages {
         let (key, tables) = path.split_last().unwrap();
-        let module = tables.iter().fold(&mut root, |module, table| module.modules.entry(table.clone()).or_default());
+        let module = tables
+            .iter()
+            .fold(&mut root, |module, table| module.modules.entry(table.clone()).or_default());
         let at = path.join(".");
         let each: Vec<&Message> = catalogs.iter().map(|c| &c.messages[path]).collect();
         module.messages.push(match theirs {
@@ -315,7 +358,9 @@ fn texts(catalogs: &[Catalog], reference: &Catalog) -> TokenStream {
                 let given = values(REFERENCE, &at, text).into_iter().map(|v| format_ident!("{v}"));
                 let arms = LANGUAGES.iter().zip(&each).map(|(l, m)| {
                     let variant = format_ident!("{}", l.variant);
-                    let Message::Text(text) = m else { unreachable!("checked to be a text") };
+                    let Message::Text(text) = m else {
+                        unreachable!("checked to be a text")
+                    };
                     quote! { crate::lang::Lang::#variant => format!(#text) }
                 });
                 quote! {
@@ -331,17 +376,31 @@ fn texts(catalogs: &[Catalog], reference: &Catalog) -> TokenStream {
                 let name = format_ident!("{key}");
                 let doc = &forms["other"];
                 let count = format_ident!("{COUNT}");
-                let given = message_values(REFERENCE, &at, theirs).into_iter().skip(1).map(|v| format_ident!("{v}"));
+                let given = message_values(REFERENCE, &at, theirs)
+                    .into_iter()
+                    .skip(1)
+                    .map(|v| format_ident!("{v}"));
                 let arms = LANGUAGES.iter().zip(&each).flat_map(|(l, m)| {
                     let variant = format_ident!("{}", l.variant);
-                    let Message::Plural(forms) = m else { unreachable!("checked to differ by number") };
+                    let Message::Plural(forms) = m else {
+                        unreachable!("checked to differ by number")
+                    };
                     let special = forms.iter().filter(|(form, _)| *form != "other").map(|(form, text)| {
-                        let form = format_ident!("{}", FORMS.iter().find(|(name, _)| *name == form.as_str()).map(|(_, c)| format!("{c:?}")).unwrap());
+                        let form = format_ident!(
+                            "{}",
+                            FORMS
+                                .iter()
+                                .find(|(name, _)| *name == form.as_str())
+                                .map(|(_, c)| format!("{c:?}"))
+                                .unwrap()
+                        );
                         let written = written(l.tag, &at, text);
                         quote! { (crate::lang::Lang::#variant, ::icu_plurals::PluralCategory::#form) => #written }
                     });
                     let other = written(l.tag, &at, &forms["other"]);
-                    special.chain(std::iter::once(quote! { (crate::lang::Lang::#variant, _) => #other })).collect::<Vec<_>>()
+                    special
+                        .chain(std::iter::once(quote! { (crate::lang::Lang::#variant, _) => #other }))
+                        .collect::<Vec<_>>()
                 });
                 quote! {
                     #[doc = #doc]
@@ -438,7 +497,11 @@ fn pinyin() {
     build.compile("skyward_pinyin");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
         let compiler = cc::Build::new().cpp(true).get_compiler();
-        let location = compiler.to_command().arg("-print-file-name=libc++_static.a").output().expect("locate NDK C++ runtime");
+        let location = compiler
+            .to_command()
+            .arg("-print-file-name=libc++_static.a")
+            .output()
+            .expect("locate NDK C++ runtime");
         assert!(location.status.success());
         let library = std::path::PathBuf::from(String::from_utf8(location.stdout).unwrap().trim());
         assert!(library.is_file(), "NDK static C++ runtime not found: {}", library.display());

@@ -74,7 +74,13 @@ pub enum Region {
 
 impl Region {
     /// The regions, in the order the time zone page lists them.
-    pub const ALL: [Region; 5] = [Region::Americas, Region::EuropeAfrica, Region::Russia, Region::Asia, Region::Oceania];
+    pub const ALL: [Region; 5] = [
+        Region::Americas,
+        Region::EuropeAfrica,
+        Region::Russia,
+        Region::Asia,
+        Region::Oceania,
+    ];
 
     pub fn name(self) -> Text {
         match self {
@@ -105,42 +111,92 @@ pub struct Zone {
 }
 
 const fn zone(region: Region, name: Text, cities: Text, tz: &'static str, also: &'static [&'static str]) -> Zone {
-    Zone { name, cities, tz, also, region: Some(region) }
+    Zone {
+        name,
+        cities,
+        tz,
+        also,
+        region: Some(region),
+    }
 }
 
 /// The time zones the clock and the times on the pages can keep, each
 /// region's from west to east.
 pub static TIME_ZONES: [Zone; 62] = {
-    use texts::time_zone::{cities as c, name as n};
     use Region::{Americas, Asia, EuropeAfrica, Oceania, Russia};
+    use texts::time_zone::{cities as c, name as n};
     [
         zone(Americas, n::HAWAII, c::HAWAII, "Pacific/Honolulu", &[]),
-        zone(Americas, n::ALASKA, c::ALASKA, "America/Anchorage", &["America/Juneau", "America/Sitka", "America/Nome"]),
+        zone(
+            Americas,
+            n::ALASKA,
+            c::ALASKA,
+            "America/Anchorage",
+            &["America/Juneau", "America/Sitka", "America/Nome"],
+        ),
         zone(Americas, n::US_PACIFIC, c::US_PACIFIC, "America/Los_Angeles", &["America/Tijuana"]),
         zone(Americas, n::US_MOUNTAIN, c::US_MOUNTAIN, "America/Denver", &["America/Boise"]),
         zone(Americas, n::US_CENTRAL, c::US_CENTRAL, "America/Chicago", &["America/Menominee"]),
-        zone(Americas, n::MEXICO, c::MEXICO, "America/Mexico_City", &["America/Monterrey", "America/Merida"]),
-        zone(Americas, n::US_EASTERN, c::US_EASTERN, "America/New_York", &["America/Toronto", "America/Detroit"]),
+        zone(
+            Americas,
+            n::MEXICO,
+            c::MEXICO,
+            "America/Mexico_City",
+            &["America/Monterrey", "America/Merida"],
+        ),
+        zone(
+            Americas,
+            n::US_EASTERN,
+            c::US_EASTERN,
+            "America/New_York",
+            &["America/Toronto", "America/Detroit"],
+        ),
         zone(Americas, n::COLOMBIA, c::COLOMBIA, "America/Bogota", &[]),
         zone(Americas, n::PERU, c::PERU, "America/Lima", &[]),
         zone(Americas, n::VENEZUELA, c::VENEZUELA, "America/Caracas", &[]),
-        zone(Americas, n::AMAZON, c::AMAZON, "America/Manaus", &["America/Porto_Velho", "America/Boa_Vista", "America/Cuiaba", "America/Campo_Grande"]),
+        zone(
+            Americas,
+            n::AMAZON,
+            c::AMAZON,
+            "America/Manaus",
+            &["America/Porto_Velho", "America/Boa_Vista", "America/Cuiaba", "America/Campo_Grande"],
+        ),
         zone(Americas, n::CHILE, c::CHILE, "America/Santiago", &[]),
         zone(
             Americas,
             n::BRASILIA,
             c::BRASILIA,
             "America/Sao_Paulo",
-            &["America/Bahia", "America/Fortaleza", "America/Recife", "America/Belem", "America/Maceio", "America/Araguaina", "America/Santarem"],
+            &[
+                "America/Bahia",
+                "America/Fortaleza",
+                "America/Recife",
+                "America/Belem",
+                "America/Maceio",
+                "America/Araguaina",
+                "America/Santarem",
+            ],
         ),
         zone(
             Americas,
             n::ARGENTINA,
             c::ARGENTINA,
             "America/Argentina/Buenos_Aires",
-            &["America/Buenos_Aires", "America/Argentina/Cordoba", "America/Cordoba", "America/Argentina/Mendoza", "America/Mendoza"],
+            &[
+                "America/Buenos_Aires",
+                "America/Argentina/Cordoba",
+                "America/Cordoba",
+                "America/Argentina/Mendoza",
+                "America/Mendoza",
+            ],
         ),
-        zone(EuropeAfrica, n::BRITAIN, c::BRITAIN, "Europe/London", &["Europe/Belfast", "Europe/Jersey", "Europe/Guernsey", "Europe/Isle_of_Man"]),
+        zone(
+            EuropeAfrica,
+            n::BRITAIN,
+            c::BRITAIN,
+            "Europe/London",
+            &["Europe/Belfast", "Europe/Jersey", "Europe/Guernsey", "Europe/Isle_of_Man"],
+        ),
         zone(
             EuropeAfrica,
             n::CENTRAL_EUROPE,
@@ -219,28 +275,71 @@ pub static TIME_ZONES: [Zone; 62] = {
             ],
         ),
         zone(EuropeAfrica, n::EGYPT, c::EGYPT, "Africa/Cairo", &[]),
-        zone(EuropeAfrica, n::SOUTH_AFRICA, c::SOUTH_AFRICA, "Africa/Johannesburg", &["Africa/Maseru", "Africa/Mbabane"]),
+        zone(
+            EuropeAfrica,
+            n::SOUTH_AFRICA,
+            c::SOUTH_AFRICA,
+            "Africa/Johannesburg",
+            &["Africa/Maseru", "Africa/Mbabane"],
+        ),
         zone(EuropeAfrica, n::TURKEY, c::TURKEY, "Europe/Istanbul", &["Asia/Istanbul", "Turkey"]),
         zone(
             EuropeAfrica,
             n::EAST_AFRICA,
             c::EAST_AFRICA,
             "Africa/Nairobi",
-            &["Africa/Addis_Ababa", "Africa/Dar_es_Salaam", "Africa/Kampala", "Africa/Mogadishu", "Africa/Djibouti", "Africa/Asmara"],
+            &[
+                "Africa/Addis_Ababa",
+                "Africa/Dar_es_Salaam",
+                "Africa/Kampala",
+                "Africa/Mogadishu",
+                "Africa/Djibouti",
+                "Africa/Asmara",
+            ],
         ),
         zone(Russia, n::KALININGRAD, c::KALININGRAD, "Europe/Kaliningrad", &[]),
-        zone(Russia, n::MOSCOW, c::MOSCOW, "Europe/Moscow", &["Europe/Kirov", "Europe/Volgograd", "W-SU"]),
-        zone(Russia, n::SAMARA, c::SAMARA, "Europe/Samara", &["Europe/Astrakhan", "Europe/Saratov", "Europe/Ulyanovsk"]),
+        zone(
+            Russia,
+            n::MOSCOW,
+            c::MOSCOW,
+            "Europe/Moscow",
+            &["Europe/Kirov", "Europe/Volgograd", "W-SU"],
+        ),
+        zone(
+            Russia,
+            n::SAMARA,
+            c::SAMARA,
+            "Europe/Samara",
+            &["Europe/Astrakhan", "Europe/Saratov", "Europe/Ulyanovsk"],
+        ),
         zone(Russia, n::YEKATERINBURG, c::YEKATERINBURG, "Asia/Yekaterinburg", &[]),
         zone(Russia, n::OMSK, c::OMSK, "Asia/Omsk", &[]),
-        zone(Russia, n::KRASNOYARSK, c::KRASNOYARSK, "Asia/Krasnoyarsk", &["Asia/Novosibirsk", "Asia/Novokuznetsk", "Asia/Barnaul", "Asia/Tomsk"]),
+        zone(
+            Russia,
+            n::KRASNOYARSK,
+            c::KRASNOYARSK,
+            "Asia/Krasnoyarsk",
+            &["Asia/Novosibirsk", "Asia/Novokuznetsk", "Asia/Barnaul", "Asia/Tomsk"],
+        ),
         zone(Russia, n::IRKUTSK, c::IRKUTSK, "Asia/Irkutsk", &[]),
         zone(Russia, n::YAKUTSK, c::YAKUTSK, "Asia/Yakutsk", &["Asia/Chita", "Asia/Khandyga"]),
         zone(Russia, n::VLADIVOSTOK, c::VLADIVOSTOK, "Asia/Vladivostok", &["Asia/Ust-Nera"]),
-        zone(Russia, n::MAGADAN, c::MAGADAN, "Asia/Magadan", &["Asia/Sakhalin", "Asia/Srednekolymsk"]),
+        zone(
+            Russia,
+            n::MAGADAN,
+            c::MAGADAN,
+            "Asia/Magadan",
+            &["Asia/Sakhalin", "Asia/Srednekolymsk"],
+        ),
         zone(Russia, n::KAMCHATKA, c::KAMCHATKA, "Asia/Kamchatka", &["Asia/Anadyr"]),
         zone(Asia, n::ISRAEL, c::ISRAEL, "Asia/Jerusalem", &["Asia/Tel_Aviv", "Israel"]),
-        zone(Asia, n::ARABIA, c::ARABIA, "Asia/Riyadh", &["Asia/Kuwait", "Asia/Qatar", "Asia/Bahrain", "Asia/Baghdad", "Asia/Aden"]),
+        zone(
+            Asia,
+            n::ARABIA,
+            c::ARABIA,
+            "Asia/Riyadh",
+            &["Asia/Kuwait", "Asia/Qatar", "Asia/Bahrain", "Asia/Baghdad", "Asia/Aden"],
+        ),
         zone(Asia, n::IRAN, c::IRAN, "Asia/Tehran", &["Iran"]),
         zone(Asia, n::GULF, c::GULF, "Asia/Dubai", &["Asia/Muscat"]),
         zone(Asia, n::PAKISTAN, c::PAKISTAN, "Asia/Karachi", &[]),
@@ -250,40 +349,121 @@ pub static TIME_ZONES: [Zone; 62] = {
             n::KAZAKHSTAN,
             c::KAZAKHSTAN,
             "Asia/Almaty",
-            &["Asia/Qyzylorda", "Asia/Aqtobe", "Asia/Aqtau", "Asia/Atyrau", "Asia/Oral", "Asia/Qostanay"],
+            &[
+                "Asia/Qyzylorda",
+                "Asia/Aqtobe",
+                "Asia/Aqtau",
+                "Asia/Atyrau",
+                "Asia/Oral",
+                "Asia/Qostanay",
+            ],
         ),
         zone(Asia, n::INDIA, c::INDIA, "Asia/Kolkata", &["Asia/Calcutta"]),
         zone(Asia, n::NEPAL, c::NEPAL, "Asia/Kathmandu", &["Asia/Katmandu"]),
         zone(Asia, n::BANGLADESH, c::BANGLADESH, "Asia/Dhaka", &["Asia/Dacca"]),
         zone(Asia, n::MYANMAR, c::MYANMAR, "Asia/Yangon", &["Asia/Rangoon"]),
-        zone(Asia, n::INDOCHINA, c::INDOCHINA, "Asia/Bangkok", &["Asia/Ho_Chi_Minh", "Asia/Saigon", "Asia/Phnom_Penh", "Asia/Vientiane"]),
-        zone(Asia, n::INDONESIA_WESTERN, c::INDONESIA_WESTERN, "Asia/Jakarta", &["Asia/Pontianak"]),
-        zone(Asia, n::CHINA, c::CHINA, "Asia/Shanghai", &["Asia/Chongqing", "Asia/Chungking", "Asia/Harbin", "PRC"]),
+        zone(
+            Asia,
+            n::INDOCHINA,
+            c::INDOCHINA,
+            "Asia/Bangkok",
+            &["Asia/Ho_Chi_Minh", "Asia/Saigon", "Asia/Phnom_Penh", "Asia/Vientiane"],
+        ),
+        zone(
+            Asia,
+            n::INDONESIA_WESTERN,
+            c::INDONESIA_WESTERN,
+            "Asia/Jakarta",
+            &["Asia/Pontianak"],
+        ),
+        zone(
+            Asia,
+            n::CHINA,
+            c::CHINA,
+            "Asia/Shanghai",
+            &["Asia/Chongqing", "Asia/Chungking", "Asia/Harbin", "PRC"],
+        ),
         zone(Asia, n::HONG_KONG, c::HONG_KONG, "Asia/Hong_Kong", &["Hongkong"]),
         zone(Asia, n::TAIPEI, c::TAIPEI, "Asia/Taipei", &["ROC"]),
-        zone(Asia, n::SINGAPORE, c::SINGAPORE, "Asia/Singapore", &["Asia/Kuala_Lumpur", "Asia/Kuching", "Singapore"]),
+        zone(
+            Asia,
+            n::SINGAPORE,
+            c::SINGAPORE,
+            "Asia/Singapore",
+            &["Asia/Kuala_Lumpur", "Asia/Kuching", "Singapore"],
+        ),
         zone(Asia, n::PHILIPPINES, c::PHILIPPINES, "Asia/Manila", &[]),
-        zone(Asia, n::INDONESIA_CENTRAL, c::INDONESIA_CENTRAL, "Asia/Makassar", &["Asia/Ujung_Pandang"]),
+        zone(
+            Asia,
+            n::INDONESIA_CENTRAL,
+            c::INDONESIA_CENTRAL,
+            "Asia/Makassar",
+            &["Asia/Ujung_Pandang"],
+        ),
         zone(Asia, n::JAPAN, c::JAPAN, "Asia/Tokyo", &["Japan"]),
         zone(Asia, n::KOREA, c::KOREA, "Asia/Seoul", &["ROK"]),
         zone(Asia, n::INDONESIA_EASTERN, c::INDONESIA_EASTERN, "Asia/Jayapura", &[]),
-        zone(Oceania, n::AUSTRALIA_WESTERN, c::AUSTRALIA_WESTERN, "Australia/Perth", &["Australia/West"]),
-        zone(Oceania, n::AUSTRALIA_CENTRAL_STANDARD, c::AUSTRALIA_CENTRAL_STANDARD, "Australia/Darwin", &["Australia/North"]),
-        zone(Oceania, n::AUSTRALIA_CENTRAL, c::AUSTRALIA_CENTRAL, "Australia/Adelaide", &["Australia/South", "Australia/Broken_Hill"]),
-        zone(Oceania, n::AUSTRALIA_EASTERN_STANDARD, c::AUSTRALIA_EASTERN_STANDARD, "Australia/Brisbane", &["Australia/Queensland", "Australia/Lindeman"]),
+        zone(
+            Oceania,
+            n::AUSTRALIA_WESTERN,
+            c::AUSTRALIA_WESTERN,
+            "Australia/Perth",
+            &["Australia/West"],
+        ),
+        zone(
+            Oceania,
+            n::AUSTRALIA_CENTRAL_STANDARD,
+            c::AUSTRALIA_CENTRAL_STANDARD,
+            "Australia/Darwin",
+            &["Australia/North"],
+        ),
+        zone(
+            Oceania,
+            n::AUSTRALIA_CENTRAL,
+            c::AUSTRALIA_CENTRAL,
+            "Australia/Adelaide",
+            &["Australia/South", "Australia/Broken_Hill"],
+        ),
+        zone(
+            Oceania,
+            n::AUSTRALIA_EASTERN_STANDARD,
+            c::AUSTRALIA_EASTERN_STANDARD,
+            "Australia/Brisbane",
+            &["Australia/Queensland", "Australia/Lindeman"],
+        ),
         zone(
             Oceania,
             n::AUSTRALIA_EASTERN,
             c::AUSTRALIA_EASTERN,
             "Australia/Sydney",
-            &["Australia/Melbourne", "Australia/Canberra", "Australia/Hobart", "Australia/ACT", "Australia/NSW", "Australia/Victoria", "Australia/Tasmania"],
+            &[
+                "Australia/Melbourne",
+                "Australia/Canberra",
+                "Australia/Hobart",
+                "Australia/ACT",
+                "Australia/NSW",
+                "Australia/Victoria",
+                "Australia/Tasmania",
+            ],
         ),
         zone(Oceania, n::NEW_ZEALAND, c::NEW_ZEALAND, "Pacific/Auckland", &["NZ"]),
         Zone {
             name: n::UTC,
             cities: same("UTC"),
             tz: UTC,
-            also: &["Etc/UTC", "Etc/UCT", "UCT", "Etc/Universal", "Universal", "Etc/Zulu", "Zulu", "Etc/GMT", "GMT", "Etc/Greenwich", "Greenwich"],
+            also: &[
+                "Etc/UTC",
+                "Etc/UCT",
+                "UCT",
+                "Etc/Universal",
+                "Universal",
+                "Etc/Zulu",
+                "Zulu",
+                "Etc/GMT",
+                "GMT",
+                "Etc/Greenwich",
+                "Greenwich",
+            ],
             region: None,
         },
     ]
@@ -315,7 +495,10 @@ impl SystemZone {
     /// carries for it.
     pub fn named(name: &str) -> Result<SystemZone> {
         let rules = TimeZone::get(name).with_context(|| format!("the recovery carries no rules for the time zone {name:?}"))?;
-        Ok(SystemZone { name: name.to_string(), rules })
+        Ok(SystemZone {
+            name: name.to_string(),
+            rules,
+        })
     }
 }
 
@@ -386,7 +569,14 @@ impl App {
     fn offsets(&self) -> Vec<i32> {
         let now = self.state.now;
         let listed = (0..TIME_ZONES.len()).map(|at| fmt::utc_offset_seconds(now, fmt::rules(at)));
-        listed.chain(self.state.system_zone.iter().map(|system| fmt::utc_offset_seconds(now, &system.rules))).collect()
+        listed
+            .chain(
+                self.state
+                    .system_zone
+                    .iter()
+                    .map(|system| fmt::utc_offset_seconds(now, &system.rules)),
+            )
+            .collect()
     }
 
     pub(super) fn set_slider(&mut self, t: &Theme, which: Slider, track: Rect, x: f32) {

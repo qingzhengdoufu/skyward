@@ -1,11 +1,11 @@
 //! Backing up and restoring on a thread of its own, telling the screen how
 //! far it has come.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use skyward_backup::archive::{self, Others, Skipped};
 use skyward_backup::store::{self, Reader, Stored, Writer};
-use skyward_backup::{Item, Manifest, Part, FOLDER, FORMAT, FORMAT_WITHOUT_STORAGE};
-use skyward_block::{mount, BY_NAME};
+use skyward_backup::{FOLDER, FORMAT, FORMAT_WITHOUT_STORAGE, Item, Manifest, Part};
+use skyward_block::{BY_NAME, mount};
 use skyward_crypto::data::SHARED_STORAGE;
 use skyward_files::{Cancelled, Ownership};
 use skyward_vab::{Slot, SnapshotState};
@@ -114,7 +114,12 @@ const DATA_SKIPPED: [&str; 20] = [
 /// world keeps in step, which `phone` lists, and internal storage; all of
 /// it in the layout before, all but the apps' folders since.
 fn data_skipped(phone: &[String], format: u32) -> Skipped {
-    let paths: Vec<String> = DATA_SKIPPED.iter().map(|s| s.to_string()).chain([STORAGE.to_string()]).chain(phone.iter().cloned()).collect();
+    let paths: Vec<String> = DATA_SKIPPED
+        .iter()
+        .map(|s| s.to_string())
+        .chain([STORAGE.to_string()])
+        .chain(phone.iter().cloned())
+        .collect();
     let skipped = Skipped::new(&paths);
     match format {
         FORMAT_WITHOUT_STORAGE => skipped,
@@ -126,7 +131,11 @@ fn data_skipped(phone: &[String], format: u32) -> Skipped {
 /// the apps' folders, which go with the data partition's files, and the
 /// backups kept there, this one among them.
 fn storage_skipped() -> Skipped {
-    let paths: Vec<String> = APPS_FOLDERS_IN_STORAGE.iter().map(|s| s.to_string()).chain([format!("*/{FOLDER}")]).collect();
+    let paths: Vec<String> = APPS_FOLDERS_IN_STORAGE
+        .iter()
+        .map(|s| s.to_string())
+        .chain([format!("*/{FOLDER}")])
+        .collect();
     Skipped::new(&paths)
 }
 
@@ -218,7 +227,10 @@ impl std::fmt::Display for Refusal {
             Refusal::Update(state) => write!(f, "an update is in flight ({state:?})"),
             Refusal::OtherPhone(device) => write!(f, "the backup was made on {device}"),
             Refusal::Resized(name) => write!(f, "{name} is not the size it was backed up at"),
-            Refusal::OlderAndroid { was, now } => write!(f, "the data partition was backed up on Android {was}, and the phone runs Android {now}"),
+            Refusal::OlderAndroid { was, now } => write!(
+                f,
+                "the data partition was backed up on Android {was}, and the phone runs Android {now}"
+            ),
         }
     }
 }
@@ -249,7 +261,9 @@ pub enum End {
     /// A backup restored, but for the folders a key of their own began in
     /// that are gone, which only the system makes, with what the backup
     /// held in them: those of users the phone has not got.
-    Restored { unmade: Vec<PathBuf> },
+    Restored {
+        unmade: Vec<PathBuf>,
+    },
     /// Stopped as asked, with nothing of the backup left, or nothing of
     /// the restore written.
     Stopped,
@@ -606,7 +620,8 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
         needed += entries * ENTRY_BYTES;
     }
     if media {
-        let (bytes, entries) = archive::measure(Path::new(SHARED_STORAGE), &storage_skipped, cancel).context("measure internal storage's files")?;
+        let (bytes, entries) =
+            archive::measure(Path::new(SHARED_STORAGE), &storage_skipped, cancel).context("measure internal storage's files")?;
         plan.push((Part::Media, "media".into(), Source::Media, bytes));
         needed += entries * ENTRY_BYTES;
     }
@@ -661,8 +676,10 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
                         .context("back up the data partition's files")?;
                 }
                 Source::Media => {
-                    archive::pack(Path::new(SHARED_STORAGE), &storage_skipped, &mut writer, cancel, &mut |done| telling.done(done))
-                        .context("back up internal storage's files")?;
+                    archive::pack(Path::new(SHARED_STORAGE), &storage_skipped, &mut writer, cancel, &mut |done| {
+                        telling.done(done)
+                    })
+                    .context("back up internal storage's files")?;
                 }
             }
             items.push(Item {
@@ -780,7 +797,11 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
                     && let (Some(backed_up), Some(running)) = (release(was), release(now))
                     && running < backed_up
                 {
-                    return Err(Refusal::OlderAndroid { was: was.clone(), now: now.clone() }.into());
+                    return Err(Refusal::OlderAndroid {
+                        was: was.clone(),
+                        now: now.clone(),
+                    }
+                    .into());
                 }
             }
             Part::Media => {}
@@ -834,19 +855,23 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
                 let mut telling = Telling::new(tell, k, item.stored.size, false);
                 let read = Cell::new(0);
                 let mut reader = Reader::open(&t.folder, &item.stored);
-                let from = Counted { inner: &mut reader, read: &read };
+                let from = Counted {
+                    inner: &mut reader,
+                    read: &read,
+                };
                 let mut progress = |_: u64| telling.done(read.get());
                 let mut gone = match item.part {
                     Part::Data => restore_data(from, Path::new(DATA), &t.skipped, manifest.format, afresh, &go_on, &mut progress)
                         .context("restore the data partition's files")?,
-                    _ => restore_storage(from, Path::new(SHARED_STORAGE), &go_on, &mut progress).context("restore internal storage's files")?,
+                    _ => restore_storage(from, Path::new(SHARED_STORAGE), &go_on, &mut progress)
+                        .context("restore internal storage's files")?,
                 };
                 io::copy(&mut reader, &mut io::sink()).context("read the rest of the backup")?;
                 reader.check(&item.stored)?;
                 unmade.append(&mut gone);
             }
         }
-        skyward_sys::kmsg(&format!("restored {}", item.name))?;
+        let _ = skyward_sys::kmsg(&format!("restored {}", item.name));
     }
     unsafe { libc::sync() };
     Ok(unmade)
@@ -1004,7 +1029,9 @@ mod tests {
     /// The `n`th key of a test, let into the filesystem `root` is on, as
     /// the kernel names it.
     fn key(root: &Path, n: u8) -> [u8; NAME_BYTES] {
-        let raw: Vec<u8> = (0..64u8).map(|b| b.wrapping_mul(7) ^ n.wrapping_mul(31) ^ std::process::id() as u8).collect();
+        let raw: Vec<u8> = (0..64u8)
+            .map(|b| b.wrapping_mul(7) ^ n.wrapping_mul(31) ^ std::process::id() as u8)
+            .collect();
         fscrypt::add_key(root, &raw, false).unwrap()
     }
 
@@ -1076,11 +1103,20 @@ mod tests {
             put(&was.join("system/users").join(format!("{user}.xml.reservecopy")), b"a copy of it");
             put(&was.join("system/users").join(user).join("settings_secure.xml"), b"settings then");
             put(&was.join("misc/user").join(user).join("cacerts-added/1.0"), b"a certificate");
-            put(&was.join("misc/profiles/cur").join(user).join("com.example/primary.prof"), b"a profile");
+            put(
+                &was.join("misc/profiles/cur").join(user).join("com.example/primary.prof"),
+                b"a profile",
+            );
             put(&was.join(USERS).join(user).join("com.example/files/alarm"), b"7:00");
             put(&was.join(STORAGE).join(user).join("DCIM/Camera/IMG_0001.jpg"), b"a photo");
-            put(&was.join(STORAGE).join(user).join("Android/data/com.example/files/export.txt"), b"exported");
-            put(&was.join(STORAGE).join(user).join("Skyward/backups/20261021-200110/data.tar.000"), b"an older backup");
+            put(
+                &was.join(STORAGE).join(user).join("Android/data/com.example/files/export.txt"),
+                b"exported",
+            );
+            put(
+                &was.join(STORAGE).join(user).join("Skyward/backups/20261021-200110/data.tar.000"),
+                b"an older backup",
+            );
         }
         put(&was.join(STORAGE).join("obb/com.example/main.obb"), b"expansion");
         let never = AtomicBool::new(false);
@@ -1104,11 +1140,18 @@ mod tests {
         put(&now.join("misc/vold/user_keys/de/0/encrypted_key"), b"wrapped now");
         put(&now.join(USERS).join("0/com.fresh/files/first"), b"made as it started");
         put(&now.join(STORAGE).join("0/DCIM/Camera/IMG_0002.jpg"), b"a photo since");
-        put(&now.join(STORAGE).join("0/Android/data/com.fresh/files/first"), b"made as it started");
+        put(
+            &now.join(STORAGE).join("0/Android/data/com.fresh/files/first"),
+            b"made as it started",
+        );
         assert_eq!(users(&now).unwrap(), BTreeSet::from([0]));
 
         let unmade = restore_data(data.as_slice(), &now, &[], FORMAT, true, &never, &mut quiet).unwrap();
-        assert_eq!(unmade, [now.join(STORAGE).join("10"), now.join(USERS).join("10")], "the second user's own folders are not made");
+        assert_eq!(
+            unmade,
+            [now.join(STORAGE).join("10"), now.join(USERS).join("10")],
+            "the second user's own folders are not made"
+        );
         let read = |rel: &str| fs::read(now.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
         assert_eq!(read("system/users/userlist.xml"), b"the users then");
         assert_eq!(read("system/users/0.xml"), b"a user then");
@@ -1118,22 +1161,49 @@ mod tests {
         assert_eq!(read("user_de/0/com.example/files/alarm"), b"7:00");
         assert_eq!(read("media/0/Android/data/com.example/files/export.txt"), b"exported");
         assert_eq!(read("media/obb/com.example/main.obb"), b"expansion");
-        for kept in [("unencrypted/ref", &b"the key it has now"[..]), ("system/locksettings.db", b"the screen lock now"), ("misc/vold/user_keys/de/0/encrypted_key", b"wrapped now")] {
+        for kept in [
+            ("unencrypted/ref", &b"the key it has now"[..]),
+            ("system/locksettings.db", b"the screen lock now"),
+            ("misc/vold/user_keys/de/0/encrypted_key", b"wrapped now"),
+        ] {
             assert_eq!(read(kept.0), kept.1, "the phone's own keys and screen lock stay");
         }
-        for gone in ["system/users/10.xml", "system/users/10.xml.reservecopy", "system/users/10", "misc/user/10", "misc/profiles/cur/10"] {
-            assert!(!now.join(gone).exists(), "{gone}: the system finds no record of a user whose folders it cannot open");
+        for gone in [
+            "system/users/10.xml",
+            "system/users/10.xml.reservecopy",
+            "system/users/10",
+            "misc/user/10",
+            "misc/profiles/cur/10",
+        ] {
+            assert!(
+                !now.join(gone).exists(),
+                "{gone}: the system finds no record of a user whose folders it cannot open"
+            );
         }
         for swept in ["user_de/0/com.fresh", "media/0/Android/data/com.fresh"] {
-            assert!(!now.join(swept).exists(), "{swept}: an app the backup does not hold goes, with its folder in internal storage");
+            assert!(
+                !now.join(swept).exists(),
+                "{swept}: an app the backup does not hold goes, with its folder in internal storage"
+            );
         }
-        assert_eq!(read("media/0/DCIM/Camera/IMG_0002.jpg"), b"a photo since", "the user's own files stay");
-        assert!(!now.join("media/0/DCIM/Camera/IMG_0001.jpg").exists(), "and are a part of their own");
+        assert_eq!(
+            read("media/0/DCIM/Camera/IMG_0002.jpg"),
+            b"a photo since",
+            "the user's own files stay"
+        );
+        assert!(
+            !now.join("media/0/DCIM/Camera/IMG_0001.jpg").exists(),
+            "and are a part of their own"
+        );
 
         let unmade = restore_storage(storage.as_slice(), &now.join(STORAGE), &never, &mut quiet).unwrap();
         assert_eq!(unmade, [now.join(STORAGE).join("10")]);
         assert_eq!(read("media/0/DCIM/Camera/IMG_0001.jpg"), b"a photo");
-        assert_eq!(read("media/0/DCIM/Camera/IMG_0002.jpg"), b"a photo since", "what the backup does not hold stays");
+        assert_eq!(
+            read("media/0/DCIM/Camera/IMG_0002.jpg"),
+            b"a photo since",
+            "what the backup does not hold stays"
+        );
         assert!(!now.join("media/0/Skyward/backups").exists(), "a backup holds none of the backups");
         assert_eq!(read("media/0/Android/data/com.example/files/export.txt"), b"exported");
 
@@ -1153,7 +1223,10 @@ mod tests {
             put(&data.join(USERS).join("0/com.example/files/alarm"), b"7:00");
             put(&data.join(STORAGE).join("0/DCIM/Camera/IMG_0001.jpg"), b"a photo");
             for kind in APPS_KINDS {
-                put(&data.join(STORAGE).join("0").join(APPS_FOLDER).join(kind).join("com.example/kept"), b"the app's own");
+                put(
+                    &data.join(STORAGE).join("0").join(APPS_FOLDER).join(kind).join("com.example/kept"),
+                    b"the app's own",
+                );
             }
             put(&data.join(STORAGE).join("0/Android/data/.nomedia"), b"");
         }
@@ -1164,20 +1237,34 @@ mod tests {
 
         // The data partition the backup was made on leaves internal
         // storage as it is.
-        assert!(restore_data(data.as_slice(), &same, &[], FORMAT_WITHOUT_STORAGE, false, &never, &mut quiet).unwrap().is_empty());
+        assert!(
+            restore_data(data.as_slice(), &same, &[], FORMAT_WITHOUT_STORAGE, false, &never, &mut quiet)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(fs::read(same.join(USERS).join("0/com.example/files/alarm")).unwrap(), b"7:00");
         for kind in APPS_KINDS {
-            assert_eq!(fs::read(same.join(STORAGE).join("0/Android").join(kind).join("com.example/kept")).unwrap(), b"the app's own");
+            assert_eq!(
+                fs::read(same.join(STORAGE).join("0/Android").join(kind).join("com.example/kept")).unwrap(),
+                b"the app's own"
+            );
         }
 
         // One made afresh has the apps' folders emptied, the folders that
         // hold them and the user's own files staying.
-        assert!(restore_data(data.as_slice(), &afresh, &[], FORMAT_WITHOUT_STORAGE, true, &never, &mut quiet).unwrap().is_empty());
+        assert!(
+            restore_data(data.as_slice(), &afresh, &[], FORMAT_WITHOUT_STORAGE, true, &never, &mut quiet)
+                .unwrap()
+                .is_empty()
+        );
         for kind in APPS_KINDS {
             let folder = afresh.join(STORAGE).join("0/Android").join(kind);
             assert_eq!(fs::read_dir(&folder).unwrap().count(), 0, "{}", folder.display());
         }
-        assert_eq!(fs::read(afresh.join(STORAGE).join("0/DCIM/Camera/IMG_0001.jpg")).unwrap(), b"a photo");
+        assert_eq!(
+            fs::read(afresh.join(STORAGE).join("0/DCIM/Camera/IMG_0001.jpg")).unwrap(),
+            b"a photo"
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 

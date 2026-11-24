@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use skyward_config::Service;
 use skyward_programs::naming::{self, Does};
-use skyward_programs::phone::{self, Partition, Phone, PARTITIONS};
+use skyward_programs::phone::{self, PARTITIONS, Partition, Phone};
 use skyward_programs::secure::{self, Driver, Step};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -41,7 +41,10 @@ pub fn found(slot: skyward_vab::Slot, libraries: Option<&Path>) -> Result<Found>
         name(&unnamed)?;
         phone = read(slot, libraries)?;
     }
-    Ok(Found { described: phone.told_of(), steps: secure::steps(&phone) })
+    Ok(Found {
+        described: phone.told_of(),
+        steps: secure::steps(&phone),
+    })
 }
 
 /// The phone as the partitions of the slot's installed system describe it,
@@ -55,7 +58,10 @@ fn read(slot: skyward_vab::Slot, libraries: Option<&Path>) -> Result<Phone> {
     let mut partitions = Vec::new();
     for name in PARTITIONS {
         let named = format!("{name}{}", slot.suffix());
-        let partition = mounted.iter().find(|m| m.partition == named).with_context(|| format!("{named} is not mounted"))?;
+        let partition = mounted
+            .iter()
+            .find(|m| m.partition == named)
+            .with_context(|| format!("{named} is not mounted"))?;
         partitions.push(Partition::mounted(name, &partition.mount_point));
     }
     Phone::read(partitions, properties, libraries)
@@ -71,14 +77,22 @@ fn name(does: &[Does]) -> Result<()> {
         match one {
             Does::Run(program) => {
                 let status = crate::services::once(program)?;
-                skyward_sys::kmsg(&format!("ran {} {}, which ended: {status}", program.service.path, program.service.args.join(" ")))?;
+                let _ = skyward_sys::kmsg(&format!(
+                    "ran {} {}, which ended: {status}",
+                    program.service.path,
+                    program.service.args.join(" ")
+                ));
             }
             Does::Set { name, value } => match phone::expand(value, skyward_sys::prop) {
                 Some(value) => {
                     skyward_sys::set_prop(name, &value)?;
-                    skyward_sys::kmsg(&format!("{name} is {value}, as the phone's init sets it"))?;
+                    let _ = skyward_sys::kmsg(&format!("{name} is {value}, as the phone's init sets it"));
                 }
-                None => skyward_sys::kmsg(&format!("{name} stays unset, as the phone's init leaves it: nothing has set what {value} names"))?,
+                None => {
+                    let _ = skyward_sys::kmsg(&format!(
+                        "{name} stays unset, as the phone's init leaves it: nothing has set what {value} names"
+                    ));
+                }
             },
         }
     }
@@ -106,11 +120,12 @@ const NODE_MADE: Duration = Duration::from_secs(5);
 /// element's service opens it by.
 fn drive(driver: &Driver, modules: &[PathBuf]) -> Result<()> {
     for path in skyward_modules::load(modules, &[driver.module.to_string()])? {
-        skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
+        let _ = skyward_sys::kmsg(&format!("loaded {}", path.display()));
     }
     skyward_sys::wait_file(Path::new(driver.node), NODE_MADE).with_context(|| format!("wait for the node {} makes", driver.module))?;
     skyward_sys::ueventd::apply_to(driver.node)?;
-    skyward_sys::kmsg(&format!("{} is given the owner its phone describes", driver.node))
+    let _ = skyward_sys::kmsg(&format!("{} is given the owner its phone describes", driver.node));
+    Ok(())
 }
 
 /// Do `steps` in order: start each program and wait until it is ready,
@@ -127,7 +142,12 @@ pub fn start(steps: &[Step], modules: &[PathBuf]) -> Result<()> {
             Step::Drive(driver) => drive(driver, modules)?,
             Step::ServeElements => {
                 let readers = skyward_omapi::start()?;
-                skyward_sys::kmsg(&format!("{} is served, with a reader for each of {} secure elements: {}", skyward_omapi::SERVICE, readers.len(), readers.join(", ")))?;
+                let _ = skyward_sys::kmsg(&format!(
+                    "{} is served, with a reader for each of {} secure elements: {}",
+                    skyward_omapi::SERVICE,
+                    readers.len(),
+                    readers.join(", ")
+                ));
             }
         }
     }
@@ -154,13 +174,28 @@ pub fn describe(steps: &[Step]) -> Vec<String> {
         for word in &s.args {
             line.push_str(&format!(" {word}"));
         }
-        line.push_str(&format!("\n  as {} in {}", s.user.as_deref().unwrap_or("root"), if s.groups.is_empty() { "root".to_string() } else { s.groups.join(" ") }));
+        line.push_str(&format!(
+            "\n  as {} in {}",
+            s.user.as_deref().unwrap_or("root"),
+            if s.groups.is_empty() {
+                "root".to_string()
+            } else {
+                s.groups.join(" ")
+            }
+        ));
         if !s.capabilities.is_empty() {
             line.push_str(&format!(", keeping {}", s.capabilities.join(" ")));
         }
         for socket in &program.sockets {
-            let owner = format!("{}:{}", socket.user.as_deref().unwrap_or("root"), socket.group.as_deref().unwrap_or("root"));
-            line.push_str(&format!("\n  with the socket {} ({:?}, {:o}, {owner})", socket.name, socket.kind, socket.mode));
+            let owner = format!(
+                "{}:{}",
+                socket.user.as_deref().unwrap_or("root"),
+                socket.group.as_deref().unwrap_or("root")
+            );
+            line.push_str(&format!(
+                "\n  with the socket {} ({:?}, {:o}, {owner})",
+                socket.name, socket.kind, socket.mode
+            ));
         }
         for (name, value) in &program.environment {
             line.push_str(&format!("\n  with {name}={value}"));

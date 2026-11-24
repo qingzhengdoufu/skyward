@@ -1,7 +1,9 @@
 use anyhow::{Result, anyhow};
 use skyward_config::DeviceConfig;
 use skyward_info::{Battery, Boot, Charge, Cpu, DeviceInfo, PatchLevel, Storage};
-use skyward_install::{Failure, Filesystem, ImageKind, Outcome, Place as FlashPlace, Ramdisk, Reflash, Refusal, Stage, Target as FlashTarget};
+use skyward_install::{
+    Failure, Filesystem, ImageKind, Outcome, Place as FlashPlace, Ramdisk, Reflash, Refusal, Stage, Target as FlashTarget,
+};
 use skyward_net::download::{Failure as DownloadFailure, Progress};
 use skyward_net::github::{Build, Newest};
 use skyward_net::reach::Reach;
@@ -11,9 +13,9 @@ use skyward_net::wlan::{Bands, Joined, Link, Network, Power, Stage as Joining, T
 use skyward_systems::{Named, Other, Overview, Who};
 use skyward_ui::app::{
     Action, Adding, App, Asked, BackupAt, BackupEnd, BackupEntry, BackupJob, BackupRefusal, BrowserDownload, BrowserSave, BrowserView,
-    Region, State, listed, Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have,
-    Held, Install, ItemEnd, JobEnd, Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, SCREEN_OFF, Screen,
-    SkywardEnd, SkywardJob, SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
+    Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have,
+    Held, Install, ItemEnd, JobEnd, Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, Region, SCREEN_OFF, Screen,
+    SkywardEnd, SkywardJob, SkywardStage, Source, State, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink, listed,
 };
 use skyward_ui::canvas::Drawn;
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
@@ -468,13 +470,31 @@ fn main() -> Result<()> {
     println!("wrote {}", path.display());
 
     // The sideload page through an install, as the installer tells it.
-    let recovery = ImageKind::Boot { kernel: false, ramdisk: Ramdisk::Recovery };
-    let slotted = |name: &str| FlashTarget { name: name.into(), place: FlashPlace::Slotted };
+    let recovery = ImageKind::Boot {
+        kernel: false,
+        ramdisk: Ramdisk::Recovery,
+    };
+    let slotted = |name: &str| FlashTarget {
+        name: name.into(),
+        place: FlashPlace::Slotted,
+    };
     // A filesystem image named for vendor, which fits every logical
     // partition of a Xiaomi 13 Ultra.
-    let logical: Vec<FlashTarget> = ["vendor", "odm", "product", "system", "system_dlkm", "system_ext", "vendor_dlkm", "mi_ext"]
-        .map(|name| FlashTarget { name: name.into(), place: FlashPlace::Logical })
-        .to_vec();
+    let logical: Vec<FlashTarget> = [
+        "vendor",
+        "odm",
+        "product",
+        "system",
+        "system_dlkm",
+        "system_ext",
+        "vendor_dlkm",
+        "mi_ext",
+    ]
+    .map(|name| FlashTarget {
+        name: name.into(),
+        place: FlashPlace::Logical,
+    })
+    .to_vec();
     let installing: [(&str, bool, Install); 22] = [
         ("30-sideload-waiting", false, Install::Waiting),
         (
@@ -499,7 +519,13 @@ fn main() -> Result<()> {
         (
             "32-sideload-choosing",
             false,
-            Install::Choosing(Choice { kind: recovery, size: 43_257_856, partitions: vec![slotted("recovery")], partition: 0, pick: Pick::Current }),
+            Install::Choosing(Choice {
+                kind: recovery,
+                size: 43_257_856,
+                partitions: vec![slotted("recovery")],
+                partition: 0,
+                pick: Pick::Current,
+            }),
         ),
         (
             "204-flash-choosing-logical",
@@ -518,7 +544,10 @@ fn main() -> Result<()> {
             Install::Choosing(Choice {
                 kind: ImageKind::Super,
                 size: 9_663_676_416,
-                partitions: vec![FlashTarget { name: "super".into(), place: FlashPlace::Single }],
+                partitions: vec![FlashTarget {
+                    name: "super".into(),
+                    place: FlashPlace::Single,
+                }],
                 partition: 0,
                 pick: Pick::Current,
             }),
@@ -526,13 +555,32 @@ fn main() -> Result<()> {
         (
             "204-flash-choosing-named",
             false,
-            Install::Choosing(Choice { kind: ImageKind::Other, size: 314_572_800, partitions: vec![slotted("modem")], partition: 0, pick: Pick::Both }),
+            Install::Choosing(Choice {
+                kind: ImageKind::Other,
+                size: 314_572_800,
+                partitions: vec![slotted("modem")],
+                partition: 0,
+                pick: Pick::Both,
+            }),
         ),
-        ("204-flash-resizing-dark", true, Install::Flashing { partition: "vendor".into(), stage: Some(Stage::Resizing) }),
+        (
+            "204-flash-resizing-dark",
+            true,
+            Install::Flashing {
+                partition: "vendor".into(),
+                stage: Some(Stage::Resizing),
+            },
+        ),
         (
             "204-flash-flashed-super",
             false,
-            Install::Finished { outcome: Outcome::Flashed { partition: "super".into(), slots: Vec::new() }, damage: None },
+            Install::Finished {
+                outcome: Outcome::Flashed {
+                    partition: "super".into(),
+                    slots: Vec::new(),
+                },
+                damage: None,
+            },
         ),
         (
             "33-sideload-writing-dark",
@@ -559,14 +607,51 @@ fn main() -> Result<()> {
                 overwriting: false,
             },
         ),
-        ("35-sideload-flashing", false, Install::Flashing { partition: "boot".into(), stage: Some(Stage::Flashing { done: 300, total: 800 }) }),
-        ("36-sideload-installed", false, Install::Finished { outcome: Outcome::Installed { slot: Slot::A, wipe: false }, damage: None }),
-        ("96-sideload-light-wipes", false, Install::Confirming { version: Some("OS3.0.306.0.WMACNXM".into()), wipe: true }),
-        ("18-install-ready", false, Install::Confirming { version: Some("OS3.0.306.0.WMACNXM".into()), wipe: false }),
+        (
+            "35-sideload-flashing",
+            false,
+            Install::Flashing {
+                partition: "boot".into(),
+                stage: Some(Stage::Flashing { done: 300, total: 800 }),
+            },
+        ),
+        (
+            "36-sideload-installed",
+            false,
+            Install::Finished {
+                outcome: Outcome::Installed {
+                    slot: Slot::A,
+                    wipe: false,
+                },
+                damage: None,
+            },
+        ),
+        (
+            "96-sideload-light-wipes",
+            false,
+            Install::Confirming {
+                version: Some("OS3.0.306.0.WMACNXM".into()),
+                wipe: true,
+            },
+        ),
+        (
+            "18-install-ready",
+            false,
+            Install::Confirming {
+                version: Some("OS3.0.306.0.WMACNXM".into()),
+                wipe: false,
+            },
+        ),
         (
             "37-sideload-flashed-recovery-dark",
             true,
-            Install::Finished { outcome: Outcome::Flashed { partition: "recovery".into(), slots: vec![Slot::A, Slot::B] }, damage: None },
+            Install::Finished {
+                outcome: Outcome::Flashed {
+                    partition: "recovery".into(),
+                    slots: vec![Slot::A, Slot::B],
+                },
+                damage: None,
+            },
         ),
         (
             "38-sideload-refused",
@@ -696,7 +781,13 @@ fn main() -> Result<()> {
     };
     let backups = vec![
         made(Place::Storage, 1_792_348_260, 58_214_000_000, [true; 5], "OS4.0.4.0.XPACNXM"),
-        made(Place::UsbDrive, 1_791_830_000, 141_000_000, [true, false, false, false, false], "OS4.0.3.0.XPACNXM"),
+        made(
+            Place::UsbDrive,
+            1_791_830_000,
+            141_000_000,
+            [true, false, false, false, false],
+            "OS4.0.3.0.XPACNXM",
+        ),
         BackupEntry {
             place: Place::Storage,
             name: "20261020-221500".into(),
@@ -1105,7 +1196,10 @@ fn main() -> Result<()> {
             )
         }),
         ("109-restore-job-dark-refused", Screen::BackupJob, true, &|app| {
-            let older = BackupRefusal::OlderAndroid { was: "17".into(), now: "16".into() };
+            let older = BackupRefusal::OlderAndroid {
+                was: "17".into(),
+                now: "16".into(),
+            };
             app.state.backup_job = job(true, Vec::new(), None, Some(BackupEnd::Refused(older)))
         }),
         ("49-advanced-light", Screen::Advanced, false, &|_| {}),
@@ -1570,8 +1664,12 @@ fn main() -> Result<()> {
             app.term_ended(TermEnd::Exited(0));
         }),
         ("55-language-light", Screen::Language, false, &|_| {}),
-        ("56-time-zone-light-system", Screen::TimeZone, false, &|app| app.set_system_zone("Asia/Shanghai").expect("a zone the recovery carries")),
-        ("56-time-zone-light-system-unlisted", Screen::TimeZone, false, &|app| app.set_system_zone("Asia/Kabul").expect("a zone the recovery carries")),
+        ("56-time-zone-light-system", Screen::TimeZone, false, &|app| {
+            app.set_system_zone("Asia/Shanghai").expect("a zone the recovery carries")
+        }),
+        ("56-time-zone-light-system-unlisted", Screen::TimeZone, false, &|app| {
+            app.set_system_zone("Asia/Kabul").expect("a zone the recovery carries")
+        }),
         ("56-time-zone-dark-chosen", Screen::TimeZone, true, &|app| {
             app.set_system_zone("Europe/Rome").expect("a zone the recovery carries");
             app.state.follow_system_zone = false;
@@ -1579,9 +1677,14 @@ fn main() -> Result<()> {
         }),
         ("56-time-zone-light-no-system", Screen::TimeZone, false, &|_| {}),
         ("56-time-zones-light-americas", Screen::TimeZones(Region::Americas), false, &|_| {}),
-        ("56-time-zones-dark-europe-africa", Screen::TimeZones(Region::EuropeAfrica), true, &|app| {
-            app.state.time_zone = listed("Europe/London").expect("London is listed");
-        }),
+        (
+            "56-time-zones-dark-europe-africa",
+            Screen::TimeZones(Region::EuropeAfrica),
+            true,
+            &|app| {
+                app.state.time_zone = listed("Europe/London").expect("London is listed");
+            },
+        ),
         ("56-time-zones-light-russia", Screen::TimeZones(Region::Russia), false, &|_| {}),
         ("56-time-zones-light-asia", Screen::TimeZones(Region::Asia), false, &|_| {}),
         ("56-time-zones-light-oceania", Screen::TimeZones(Region::Oceania), false, &|_| {}),
@@ -2763,7 +2866,11 @@ fn write_png(path: &Path, canvas: &Canvas) -> Result<()> {
     // Of what was drawn for this picture, only what was drawn on a canvas
     // of its size lies where the picture shows it; a text drawn again in
     // the same place, as a page drawn twice draws it, is one text.
-    let runs: Vec<&Drawn> = watched.drawn.iter().filter(|run| run.canvas == (canvas.w, canvas.h) && !run.text.trim().is_empty()).collect();
+    let runs: Vec<&Drawn> = watched
+        .drawn
+        .iter()
+        .filter(|run| run.canvas == (canvas.w, canvas.h) && !run.text.trim().is_empty())
+        .collect();
     let mut said = BTreeSet::new();
     for (k, run) in runs.iter().enumerate() {
         if (run.left < -EDGE || run.right > canvas.w as f32 + EDGE) && said.insert(run.text.clone()) {

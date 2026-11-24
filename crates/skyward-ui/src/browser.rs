@@ -89,10 +89,12 @@ pub fn screen(cx: &Ctx) -> Frame {
                 y - cx.t.m.card_gap,
                 cx.state.lang.pick(crate::lang::legacy(["文件", "檔案", "File"])),
             );
-            let size = file
-                .size
-                .map(fmt::file_size)
-                .unwrap_or_else(|| cx.state.lang.pick(crate::lang::legacy(["大小未知", "大小未知", "Size unknown"])).to_string());
+            let size = file.size.map(fmt::file_size).unwrap_or_else(|| {
+                cx.state
+                    .lang
+                    .pick(crate::lang::legacy(["大小未知", "大小未知", "Size unknown"]))
+                    .to_string()
+            });
             let kind = &file.kind;
             let rows = [
                 Row::new(&file.name).icon(GREEN, Icon::Install).trail(Trail::None),
@@ -183,9 +185,11 @@ fn home(cx: &Ctx) -> Frame {
         t,
         f,
         y,
-        &[Row::new(l.pick(crate::lang::legacy(["编辑快捷访问", "編輯快速存取", "Edit shortcuts"])))
-            .icon(BLUE, Icon::More)
-            .trail(Trail::Arrow)],
+        &[
+            Row::new(l.pick(crate::lang::legacy(["编辑快捷访问", "編輯快速存取", "Edit shortcuts"])))
+                .icon(BLUE, Icon::More)
+                .trail(Trail::Arrow),
+        ],
     );
     out.extend(hits(&edit.rows, &[Action::BrowserQuick]));
     y = edit.bottom;
@@ -258,12 +262,18 @@ fn home(cx: &Ctx) -> Frame {
         y = widgets::section(&mut c, t, f, y, l.pick(crate::lang::legacy(["网络", "網路", "Network"])));
         let (title, sub) = match s.wlan.is_some() {
             true => (
-                l.pick(crate::lang::legacy(["未连接 WLAN", "未連接 Wi-Fi", "Not on Wi-Fi"])).to_string(),
-                l.pick(crate::lang::legacy(["点按连接网络", "點按連線網路", "Tap to join a network"])).to_string(),
+                l.pick(crate::lang::legacy(["未连接 WLAN", "未連接 Wi-Fi", "Not on Wi-Fi"]))
+                    .to_string(),
+                l.pick(crate::lang::legacy(["点按连接网络", "點按連線網路", "Tap to join a network"]))
+                    .to_string(),
             ),
             false => (
-                l.pick(crate::lang::legacy(["本机未配置 WLAN", "本機未設定 Wi-Fi", "No Wi-Fi on this phone"]))
-                    .to_string(),
+                l.pick(crate::lang::legacy([
+                    "本机未配置 WLAN",
+                    "本機未設定 Wi-Fi",
+                    "No Wi-Fi on this phone",
+                ]))
+                .to_string(),
                 String::new(),
             ),
         };
@@ -430,7 +440,13 @@ fn failed(cx: &Ctx, url: &str, why: &str) -> Frame {
         rect: rect_bar(cx, top),
         action: Action::BrowserAddress,
     });
-    let y = widgets::section(&mut c, t, f, bar + m.card_gap, l.pick(crate::lang::legacy(["无法打开", "無法開啟", "Couldn't open it"])));
+    let y = widgets::section(
+        &mut c,
+        t,
+        f,
+        bar + m.card_gap,
+        l.pick(crate::lang::legacy(["无法打开", "無法開啟", "Couldn't open it"])),
+    );
     let url_text = url.to_string();
     let row = Row::new(&url_text).icon(RED, Icon::Globe).subtitle(why).trail(Trail::None);
     let list = widgets::list(&mut c, t, f, y, &[row]);
@@ -630,10 +646,18 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     let mut out = Vec::new();
     let header = article_head(&mut c, cx, article, top);
     let header = if article.scripts && article.blocks.is_empty() {
-        let row = Row::new(l.pick(crate::lang::legacy(["此页面含 JavaScript", "此頁面含 JavaScript", "This page uses JavaScript"])))
-            .subtitle(l.pick(crate::lang::legacy(["使用完整模式加载脚本页面", "使用完整模式載入指令碼頁面", "Open it in full mode"])))
-            .icon(PURPLE, Icon::Layers)
-            .trail(Trail::Arrow);
+        let row = Row::new(l.pick(crate::lang::legacy([
+            "此页面含 JavaScript",
+            "此頁面含 JavaScript",
+            "This page uses JavaScript",
+        ])))
+        .subtitle(l.pick(crate::lang::legacy([
+            "使用完整模式加载脚本页面",
+            "使用完整模式載入指令碼頁面",
+            "Open it in full mode",
+        ])))
+        .icon(PURPLE, Icon::Layers)
+        .trail(Trail::Arrow);
         let list = widgets::list(&mut c, t, cx.f, header, &[row]);
         out.extend(hits(&list.rows, &[Action::BrowserFullLoad]));
         list.bottom
@@ -1004,7 +1028,13 @@ pub fn address(cx: &Ctx) -> Frame {
     });
     let clear = widgets::list(&mut c, t, f, below + m.card_gap, &[Row::new(l.pick(CLEAR)).trail(Trail::None)]);
     out.extend(hits(&clear.rows, &[Action::BrowserClearAddress]));
-    let y = widgets::section(&mut c, t, f, clear.bottom, l.pick(crate::lang::legacy(["快捷访问", "快速存取", "Shortcuts"])));
+    let y = widgets::section(
+        &mut c,
+        t,
+        f,
+        clear.bottom,
+        l.pick(crate::lang::legacy(["快捷访问", "快速存取", "Shortcuts"])),
+    );
     let rows: Vec<Row> = s
         .browser
         .quick
@@ -1099,9 +1129,13 @@ pub fn downloads(cx: &Ctx) -> Frame {
             f,
             y,
             &[
-                Row::new(l.pick(crate::lang::legacy(["删除任务和未完成文件", "刪除工作與未完成檔案", "Delete task and partial file"])))
-                    .icon(RED, Icon::Wipe)
-                    .trail(Trail::None),
+                Row::new(l.pick(crate::lang::legacy([
+                    "删除任务和未完成文件",
+                    "刪除工作與未完成檔案",
+                    "Delete task and partial file",
+                ])))
+                .icon(RED, Icon::Wipe)
+                .trail(Trail::None),
                 Row::new(l.pick(crate::texts::common::CANCEL)).trail(Trail::None),
             ],
         );
@@ -1117,7 +1151,11 @@ pub fn downloads(cx: &Ctx) -> Frame {
             t,
             f,
             y,
-            l.pick(crate::lang::legacy(["正在停止并删除任务", "正在停止並刪除工作", "Stopping and deleting task"])),
+            l.pick(crate::lang::legacy([
+                "正在停止并删除任务",
+                "正在停止並刪除工作",
+                "Stopping and deleting task",
+            ])),
         );
     }
     if let Some(i) = s.browser.saving
@@ -1326,16 +1364,34 @@ pub fn full(cx: &Ctx) -> Frame {
     let mut c = long_page(cx);
     let top = m.content_top;
     let mut out = Vec::new();
-    let mut y = widgets::section_first(&mut c, t, f, top, l.pick(crate::lang::legacy(["完整模式", "完整模式", "Full mode"])));
+    let mut y = widgets::section_first(
+        &mut c,
+        t,
+        f,
+        top,
+        l.pick(crate::lang::legacy(["完整模式", "完整模式", "Full mode"])),
+    );
     let status = match &s.browser.full {
-        BrowserFull::Unknown if cfg!(feature = "aera-browser") => l.pick(crate::lang::legacy(["正在检查引擎", "正在檢查引擎", "Checking engine"])),
+        BrowserFull::Unknown if cfg!(feature = "aera-browser") => {
+            l.pick(crate::lang::legacy(["正在检查引擎", "正在檢查引擎", "Checking engine"]))
+        }
         BrowserFull::Ready(_) if cfg!(feature = "aera-browser") => l.pick(crate::lang::legacy(["引擎就绪", "引擎就緒", "Engine ready"])),
-        BrowserFull::Installing { .. } if cfg!(feature = "aera-browser") => l.pick(crate::lang::legacy(["正在准备引擎", "正在準備引擎", "Preparing engine"])),
-        BrowserFull::Unknown => l.pick(crate::lang::legacy(["尚未检查插件", "尚未檢查外掛", "The plugin hasn't been checked"])),
+        BrowserFull::Installing { .. } if cfg!(feature = "aera-browser") => {
+            l.pick(crate::lang::legacy(["正在准备引擎", "正在準備引擎", "Preparing engine"]))
+        }
+        BrowserFull::Unknown => l.pick(crate::lang::legacy([
+            "尚未检查插件",
+            "尚未檢查外掛",
+            "The plugin hasn't been checked",
+        ])),
         BrowserFull::Absent(why) => why.as_str(),
         BrowserFull::Ready(_) => l.pick(crate::lang::legacy(["插件已安装", "外掛已安裝", "The plugin is installed"])),
         BrowserFull::Installing { .. } => l.pick(crate::lang::legacy(["正在安装插件", "正在安裝外掛", "Installing the plugin"])),
-        BrowserFull::Running(_) => l.pick(crate::lang::legacy(["完整模式正在运行", "完整模式正在執行", "Full mode is running"])),
+        BrowserFull::Running(_) => l.pick(crate::lang::legacy([
+            "完整模式正在运行",
+            "完整模式正在執行",
+            "Full mode is running",
+        ])),
         BrowserFull::Failed(why) => why.as_str(),
     };
     y = widgets::footnote(&mut c, t, f, y + m.dp(4.0), status);
@@ -1515,9 +1571,11 @@ pub fn tabs(cx: &Ctx) -> Frame {
         t,
         f,
         list.bottom + m.card_gap,
-        &[Row::new(l.pick(crate::lang::legacy(["关闭当前标签", "關閉目前分頁", "Close this tab"])))
-            .icon(RED, Icon::Wipe)
-            .trail(Trail::None)],
+        &[
+            Row::new(l.pick(crate::lang::legacy(["关闭当前标签", "關閉目前分頁", "Close this tab"])))
+                .icon(RED, Icon::Wipe)
+                .trail(Trail::None),
+        ],
     );
     out.extend(hits(&close.rows, &[Action::BrowserCloseTab(s.browser.active)]));
     let new = widgets::list(
@@ -1530,7 +1588,13 @@ pub fn tabs(cx: &Ctx) -> Frame {
             .trail(Trail::None)],
     );
     out.extend(hits(&new.rows, &[Action::BrowserNewTab]));
-    Frame::new(t, fit(c, t, new.bottom), out, l.pick(crate::lang::legacy(["标签页", "分頁", "Tabs"])), top)
+    Frame::new(
+        t,
+        fit(c, t, new.bottom),
+        out,
+        l.pick(crate::lang::legacy(["标签页", "分頁", "Tabs"])),
+        top,
+    )
 }
 
 /// The start page's shortcuts, to remove one, add the page shown, or put
@@ -1540,7 +1604,13 @@ pub fn quick(cx: &Ctx) -> Frame {
     let m = &t.m;
     let mut c = page(cx);
     let top = m.content_top;
-    let y = widgets::section_first(&mut c, t, f, top, l.pick(crate::lang::legacy(["快捷访问", "快速存取", "Shortcuts"])));
+    let y = widgets::section_first(
+        &mut c,
+        t,
+        f,
+        top,
+        l.pick(crate::lang::legacy(["快捷访问", "快速存取", "Shortcuts"])),
+    );
     let rows: Vec<Row> = s
         .browser
         .quick
@@ -1561,9 +1631,11 @@ pub fn quick(cx: &Ctx) -> Frame {
         t,
         f,
         list.bottom + m.card_gap,
-        &[Row::new(l.pick(crate::lang::legacy(["添加当前页面", "加入目前頁面", "Add the page shown"])))
-            .icon(GREEN, Icon::Install)
-            .trail(Trail::None)],
+        &[
+            Row::new(l.pick(crate::lang::legacy(["添加当前页面", "加入目前頁面", "Add the page shown"])))
+                .icon(GREEN, Icon::Install)
+                .trail(Trail::None),
+        ],
     );
     out.extend(hits(&add.rows, &[Action::BrowserQuickAdd]));
     let reset = widgets::list(
@@ -1571,12 +1643,20 @@ pub fn quick(cx: &Ctx) -> Frame {
         t,
         f,
         add.bottom + m.card_gap,
-        &[Row::new(l.pick(crate::lang::legacy(["恢复默认", "回復預設", "Restore the defaults"])))
-            .icon(BLUE, Icon::Restore)
-            .trail(Trail::None)],
+        &[
+            Row::new(l.pick(crate::lang::legacy(["恢复默认", "回復預設", "Restore the defaults"])))
+                .icon(BLUE, Icon::Restore)
+                .trail(Trail::None),
+        ],
     );
     out.extend(hits(&reset.rows, &[Action::BrowserQuickReset]));
-    Frame::new(t, fit(c, t, reset.bottom), out, l.pick(crate::lang::legacy(["快捷访问", "快速存取", "Shortcuts"])), top)
+    Frame::new(
+        t,
+        fit(c, t, reset.bottom),
+        out,
+        l.pick(crate::lang::legacy(["快捷访问", "快速存取", "Shortcuts"])),
+        top,
+    )
 }
 
 pub fn menu(cx: &Ctx) -> Frame {
@@ -1585,7 +1665,13 @@ pub fn menu(cx: &Ctx) -> Frame {
     let mut c = long_page(cx);
     let top = m.content_top;
     let mut out = Vec::new();
-    let y = widgets::section_first(&mut c, t, f, top, l.pick(crate::lang::legacy(["浏览器菜单", "瀏覽器選單", "Browser menu"])));
+    let y = widgets::section_first(
+        &mut c,
+        t,
+        f,
+        top,
+        l.pick(crate::lang::legacy(["浏览器菜单", "瀏覽器選單", "Browser menu"])),
+    );
     let bookmarked = cx.state.browser.bookmarks.iter().any(|b| b.url == cx.state.browser.url);
     let mut rows = vec![
         Row::new(if bookmarked {
@@ -1635,7 +1721,9 @@ pub fn menu(cx: &Ctx) -> Frame {
             Action::BrowserBasic,
         ]);
     } else {
-        rows.push(Row::new(l.pick(crate::lang::legacy(["在完整模式中打开", "在完整模式中開啟", "Open in full mode"]))).icon(PURPLE, Icon::Layers));
+        rows.push(
+            Row::new(l.pick(crate::lang::legacy(["在完整模式中打开", "在完整模式中開啟", "Open in full mode"]))).icon(PURPLE, Icon::Layers),
+        );
         actions.push(Action::BrowserFullLoad);
     }
     let list = widgets::list(&mut c, t, f, y, &rows);
@@ -1821,7 +1909,11 @@ fn draw_picture(c: &mut Canvas, cx: &Ctx, block: &WebBlock) {
             let row = Row::new(l.pick(crate::lang::legacy(["图片", "圖片", "Picture"])))
                 .icon(PURPLE, Icon::Layers)
                 .subtitle(if alt.is_empty() {
-                    l.pick(crate::lang::legacy(["无法显示这张图片", "無法顯示這張圖片", "This picture can't be shown"]))
+                    l.pick(crate::lang::legacy([
+                        "无法显示这张图片",
+                        "無法顯示這張圖片",
+                        "This picture can't be shown",
+                    ]))
                 } else {
                     alt
                 })

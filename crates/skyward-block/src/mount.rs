@@ -86,7 +86,13 @@ impl Kept {
     /// it: the filesystem's own, read-only where either says so.
     pub fn options(&self) -> Vec<String> {
         let read_only = self.read_only() || self.shared.iter().any(|w| w == "ro");
-        let mut options: Vec<String> = self.own.iter().chain(&self.shared).filter(|w| *w != "ro" && *w != "rw").cloned().collect();
+        let mut options: Vec<String> = self
+            .own
+            .iter()
+            .chain(&self.shared)
+            .filter(|w| *w != "ro" && *w != "rw")
+            .cloned()
+            .collect();
         options.push(if read_only { "ro" } else { "rw" }.to_string());
         options
     }
@@ -119,8 +125,17 @@ pub fn space(path: &Path) -> io::Result<Space> {
     let s = statvfs(path)?;
     // The counts are 32 bits on some hosts and 64 on the phone.
     #[allow(clippy::useless_conversion)]
-    let (blocks, free, available, size) = (u64::from(s.f_blocks), u64::from(s.f_bfree), u64::from(s.f_bavail), u64::from(s.f_frsize));
-    Ok(Space { total: blocks * size, free: free * size, available: available * size })
+    let (blocks, free, available, size) = (
+        u64::from(s.f_blocks),
+        u64::from(s.f_bfree),
+        u64::from(s.f_bavail),
+        u64::from(s.f_frsize),
+    );
+    Ok(Space {
+        total: blocks * size,
+        free: free * size,
+        available: available * size,
+    })
 }
 
 /// What the kernel says of the filesystem that holds `path`.
@@ -135,9 +150,9 @@ fn statvfs(path: &Path) -> io::Result<libc::statvfs> {
 
 #[cfg(target_os = "android")]
 mod sys {
-    use super::{Kept, Visible, FILESYSTEMS};
-    use anyhow::{bail, Context, Result};
-    use procfs::process::{all_processes, MMapPath, MountInfo, MountOptFields, Process};
+    use super::{FILESYSTEMS, Kept, Visible};
+    use anyhow::{Context, Result, bail};
+    use procfs::process::{MMapPath, MountInfo, MountOptFields, Process, all_processes};
     use procfs::{ProcError, ProcResult};
     use std::collections::{BTreeSet, HashMap, HashSet};
     use std::ffi::CString;
@@ -174,12 +189,15 @@ mod sys {
             let e = os_error();
             match e.raw_os_error() {
                 Some(libc::EINVAL | libc::ENODEV) => refused.push(format!("{fs}: {e}")),
-                _ => {
-                    return Err(e).with_context(|| format!("mount {} on {} as {fs}", device.display(), target.display()))
-                }
+                _ => return Err(e).with_context(|| format!("mount {} on {} as {fs}", device.display(), target.display())),
             }
         }
-        bail!("{} holds none of {} ({})", device.display(), FILESYSTEMS.join(", "), refused.join("; "))
+        bail!(
+            "{} holds none of {} ({})",
+            device.display(),
+            FILESYSTEMS.join(", "),
+            refused.join("; ")
+        )
     }
 
     /// Mount `device` at `target` as `filesystem` with `options` as a
@@ -189,9 +207,24 @@ mod sys {
         let (src, dst) = (cstr(device)?, cstr(target)?);
         let ty = CString::new(filesystem).with_context(|| format!("{filesystem} holds a NUL"))?;
         let data = CString::new(own.as_str()).with_context(|| format!("{own} holds a NUL"))?;
-        if unsafe { libc::mount(src.as_ptr(), dst.as_ptr(), ty.as_ptr(), flags as libc::c_ulong, data.as_ptr().cast()) } != 0 {
-            return Err(os_error())
-                .with_context(|| format!("mount {} on {} as {filesystem} with {}", device.display(), target.display(), options.join(",")));
+        if unsafe {
+            libc::mount(
+                src.as_ptr(),
+                dst.as_ptr(),
+                ty.as_ptr(),
+                flags as libc::c_ulong,
+                data.as_ptr().cast(),
+            )
+        } != 0
+        {
+            return Err(os_error()).with_context(|| {
+                format!(
+                    "mount {} on {} as {filesystem} with {}",
+                    device.display(),
+                    target.display(),
+                    options.join(",")
+                )
+            });
         }
         Ok(())
     }
@@ -257,7 +290,9 @@ mod sys {
         for m in mounts()? {
             let (major, minor) = m.majmin.split_once(':').with_context(|| format!("device number {:?}", m.majmin))?;
             if (major.parse::<u32>()?, minor.parse::<u32>()?) == number {
-                let words = |options: &HashMap<String, Option<String>>| super::option_words(options.iter().map(|(k, v)| (k.as_str(), v.as_deref())));
+                let words = |options: &HashMap<String, Option<String>>| {
+                    super::option_words(options.iter().map(|(k, v)| (k.as_str(), v.as_deref())))
+                };
                 kept.push(Kept {
                     point: m.mount_point.clone(),
                     filesystem: m.fs_type.clone(),
@@ -270,7 +305,15 @@ mod sys {
         for (done, mount) in kept.iter().enumerate().rev() {
             if let Err(e) = umount(&mount.point) {
                 let holders: Vec<String> = holding(number)?.into_iter().map(|(pid, name)| format!("{name} ({pid})")).collect();
-                let e = e.context(format!("{} is held by {}", device.display(), if holders.is_empty() { "no program".to_string() } else { holders.join(", ") }));
+                let e = e.context(format!(
+                    "{} is held by {}",
+                    device.display(),
+                    if holders.is_empty() {
+                        "no program".to_string()
+                    } else {
+                        holders.join(", ")
+                    }
+                ));
                 return Err(match again(device, &kept[done + 1..], &kept[..=done]) {
                     Ok(()) => e,
                     Err(r) => e.context(format!("mounting it again where it had come off failed too: {r:#}")),
@@ -304,10 +347,18 @@ mod sys {
             }
         };
         for view in off.iter().filter(|m| !std::ptr::eq(*m, shown)) {
-            let from = shown.point.join(view.root.strip_prefix("/").with_context(|| format!("the folder {} of a filesystem", view.root.display()))?);
+            let from = shown.point.join(
+                view.root
+                    .strip_prefix("/")
+                    .with_context(|| format!("the folder {} of a filesystem", view.root.display()))?,
+            );
             bind(&from, &view.point)?;
             let (flags, _) = super::split_options(&view.own);
-            remount(&view.point, libc::MS_REMOUNT | libc::MS_BIND | flags as libc::c_ulong, "a view with its own flags")?;
+            remount(
+                &view.point,
+                libc::MS_REMOUNT | libc::MS_BIND | flags as libc::c_ulong,
+                "a view with its own flags",
+            )?;
         }
         Ok(())
     }
@@ -343,7 +394,10 @@ mod sys {
             return Ok(None);
         };
         let (major, minor) = m.majmin.split_once(':').with_context(|| format!("device number {:?}", m.majmin))?;
-        Ok(Some(Visible { device: (major.parse()?, minor.parse()?), filesystem: m.fs_type }))
+        Ok(Some(Visible {
+            device: (major.parse()?, minor.parse()?),
+            filesystem: m.fs_type,
+        }))
     }
 
     fn remount(target: &Path, flags: libc::c_ulong, what: &str) -> Result<()> {
@@ -480,7 +534,11 @@ mod sys {
     /// The processes that hold the filesystem on `device`, as [`holders`]
     /// finds them: each one's id and the program it runs.
     pub fn holding(device: (u32, u32)) -> Result<Vec<(i32, String)>> {
-        Ok(held()?.into_iter().filter(|h| h.devices.contains(&device)).map(|h| (h.pid, h.name)).collect())
+        Ok(held()?
+            .into_iter()
+            .filter(|h| h.devices.contains(&device))
+            .map(|h| (h.pid, h.name))
+            .collect())
     }
 
     /// A process and what it holds: the devices of the filesystems it has a
@@ -499,7 +557,11 @@ mod sys {
             let Some(p) = present(p)? else { continue };
             // Kernel threads have no executable and hold no files.
             let Some(exe) = present(p.exe())? else { continue };
-            let name = exe.file_name().with_context(|| format!("{} has no file name", exe.display()))?.to_string_lossy().into_owned();
+            let name = exe
+                .file_name()
+                .with_context(|| format!("{} has no file name", exe.display()))?
+                .to_string_lossy()
+                .into_owned();
             let proc_dir = Path::new("/proc").join(p.pid().to_string());
             let mut devices = Vec::new();
             if let Some(maps) = present(p.maps())? {
@@ -515,7 +577,11 @@ mod sys {
             for dir in ["cwd", "root"] {
                 devices.extend(device_of(&proc_dir.join(dir))?);
             }
-            out.push(Held { pid: p.pid(), name, devices });
+            out.push(Held {
+                pid: p.pid(),
+                name,
+                devices,
+            });
         }
         Ok(out)
     }
@@ -547,7 +613,7 @@ mod sys {
 #[cfg(not(target_os = "android"))]
 mod sys {
     use super::{Kept, Visible};
-    use anyhow::{bail, Result};
+    use anyhow::{Result, bail};
     use std::collections::{BTreeSet, HashMap};
     use std::path::Path;
 
@@ -631,13 +697,17 @@ mod tests {
 
     #[test]
     fn the_kernels_flags_are_taken_out_of_a_phones_mount_options() {
-        let data: Vec<String> = "noatime,nosuid,nodev,discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier,inlinecrypt,gc_merge,atgc"
-            .split(',')
-            .map(str::to_string)
-            .collect();
+        let data: Vec<String> =
+            "noatime,nosuid,nodev,discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier,inlinecrypt,gc_merge,atgc"
+                .split(',')
+                .map(str::to_string)
+                .collect();
         let (flags, own) = split_options(&data);
         assert_eq!(flags, (1 << 10) | (1 << 1) | (1 << 2), "noatime, nosuid and nodev");
-        assert_eq!(own, "discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier,inlinecrypt,gc_merge,atgc");
+        assert_eq!(
+            own,
+            "discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier,inlinecrypt,gc_merge,atgc"
+        );
         let (flags, own) = split_options(&["ro".into(), "defaults".into(), String::new()]);
         assert_eq!((flags, own.as_str()), (1, ""), "read-only, and nothing for the filesystem");
     }
@@ -679,11 +749,21 @@ mod tests {
             filesystem: "f2fs".into(),
             root: "/".into(),
             own: option_words([("rw", None), ("nosuid", None), ("nodev", None), ("noatime", None)]),
-            shared: option_words([("rw", None), ("lazytime", None), ("seclabel", None), ("discard", None), ("reserve_root", Some("32768"))]),
+            shared: option_words([
+                ("rw", None),
+                ("lazytime", None),
+                ("seclabel", None),
+                ("discard", None),
+                ("reserve_root", Some("32768")),
+            ]),
         };
         assert!(!data.read_only());
         let (flags, own) = split_options(&data.options());
-        assert_eq!(flags, (1 << 10) | (1 << 1) | (1 << 2) | (1 << 25), "noatime, nosuid, nodev and lazytime, writable");
+        assert_eq!(
+            flags,
+            (1 << 10) | (1 << 1) | (1 << 2) | (1 << 25),
+            "noatime, nosuid, nodev and lazytime, writable"
+        );
         assert_eq!(own, "discard,reserve_root=32768");
     }
 
@@ -710,7 +790,13 @@ mod tests {
         let device = std::path::PathBuf::from(run("/system/bin/losetup", &["-f", "--show", image.to_str().unwrap()]));
         crate::erase::make(&device, "ext4", &[], false).unwrap();
         let number = crate::devnum(&device).unwrap();
-        mount(&device, &whole, "ext4", &["noatime".into(), "nosuid".into(), "errors=remount-ro".into()]).unwrap();
+        mount(
+            &device,
+            &whole,
+            "ext4",
+            &["noatime".into(), "nosuid".into(), "errors=remount-ro".into()],
+        )
+        .unwrap();
         std::fs::create_dir(whole.join("folder")).unwrap();
         std::fs::write(whole.join("folder/file"), b"kept").unwrap();
         // A view of one of its folders, read-only though the filesystem
@@ -718,12 +804,18 @@ mod tests {
         bind(&whole.join("folder"), &view).unwrap();
         let at_view = std::ffi::CString::new(view.to_str().unwrap()).unwrap();
         let read_only = libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY;
-        assert_eq!(unsafe { libc::mount(std::ptr::null(), at_view.as_ptr(), std::ptr::null(), read_only, std::ptr::null()) }, 0);
+        assert_eq!(
+            unsafe { libc::mount(std::ptr::null(), at_view.as_ptr(), std::ptr::null(), read_only, std::ptr::null()) },
+            0
+        );
         assert!(std::fs::write(view.join("more"), b"x").is_err(), "the view is read-only");
         std::fs::write(whole.join("other"), b"x").unwrap();
 
         let kept = release(&device).unwrap();
-        assert_eq!(kept.iter().map(|m| m.point.clone()).collect::<Vec<_>>(), [whole.clone(), view.clone()]);
+        assert_eq!(
+            kept.iter().map(|m| m.point.clone()).collect::<Vec<_>>(),
+            [whole.clone(), view.clone()]
+        );
         assert_eq!(kept[1].root, Path::new("/folder"));
         assert!(!kept[0].read_only() && kept[1].read_only());
         assert!(points_of(number).unwrap().is_empty(), "it is mounted nowhere");

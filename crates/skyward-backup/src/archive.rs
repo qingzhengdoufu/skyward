@@ -5,7 +5,7 @@
 //! for a folder, whether a key of its own begins there. Only the system can
 //! make such a folder, so one gone is not made again.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use skyward_files::Cancelled;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -48,7 +48,11 @@ fn named(pattern: &[String], names: &[&str]) -> bool {
 
 impl Skipped {
     pub fn new(paths: &[String]) -> Skipped {
-        Skipped { paths: paths.iter().map(|p| names(p)).collect(), kept: Vec::new(), also: None }
+        Skipped {
+            paths: paths.iter().map(|p| names(p)).collect(),
+            kept: Vec::new(),
+            also: None,
+        }
     }
 
     /// Taking `kept` all the same, each a path inside what is skipped, with
@@ -121,7 +125,9 @@ pub fn measure(root: &Path, skipped: &Skipped, cancel: &AtomicBool) -> Result<(u
         }
         Ok(())
     }
-    let dev = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?.dev();
+    let dev = fs::symlink_metadata(root)
+        .with_context(|| format!("look at {}", root.display()))?
+        .dev();
     let mut sum = (0, 0);
     walk(root, Path::new(""), dev, skipped, cancel, &mut HashSet::new(), &mut sum)?;
     Ok(sum)
@@ -148,9 +154,17 @@ fn children(folder: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf, fs::Metad
 pub fn pack(root: &Path, skipped: &Skipped, out: impl Write, cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<()> {
     let mut b = Builder::new(out);
     let meta = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?;
-    let mut packing = Packing { links: HashMap::new(), done: 0, cancel, progress };
+    let mut packing = Packing {
+        links: HashMap::new(),
+        done: 0,
+        cancel,
+        progress,
+    };
     packing.folder(&mut b, root, Path::new(""), meta.dev(), skipped, key(root)?.as_deref())?;
-    b.into_inner().context("finish the archive")?.flush().context("finish the archive")?;
+    b.into_inner()
+        .context("finish the archive")?
+        .flush()
+        .context("finish the archive")?;
     Ok(())
 }
 
@@ -166,7 +180,15 @@ struct Packing<'a> {
 impl Packing<'_> {
     /// Archive what the folder at `path` holds; `rel` is where it is in the
     /// archive and `above` the key its own entries are encrypted with.
-    fn folder<W: Write>(&mut self, b: &mut Builder<W>, path: &Path, rel: &Path, dev: u64, skipped: &Skipped, above: Option<&[u8]>) -> Result<()> {
+    fn folder<W: Write>(
+        &mut self,
+        b: &mut Builder<W>,
+        path: &Path,
+        rel: &Path,
+        dev: u64,
+        skipped: &Skipped,
+        above: Option<&[u8]>,
+    ) -> Result<()> {
         for (name, path, meta) in children(path)? {
             let rel = rel.join(&name);
             if skipped.leaves(&rel) || meta.file_type().is_socket() || (meta.is_dir() && meta.dev() != dev) {
@@ -224,7 +246,13 @@ impl Packing<'_> {
             header.set_entry_type(EntryType::Regular);
             header.set_size(meta.len());
             let file = File::open(path)?;
-            let feed = Feed { file, left: meta.len(), done: &mut self.done, cancel: self.cancel, progress: &mut *self.progress };
+            let feed = Feed {
+                file,
+                left: meta.len(),
+                done: &mut self.done,
+                cancel: self.cancel,
+                progress: &mut *self.progress,
+            };
             b.append_data(&mut header, rel, feed)?;
         } else {
             header.set_entry_type(match kind {
@@ -262,7 +290,10 @@ impl Read for Feed<'_> {
         let want = buf.len().min(self.left as usize);
         let n = self.file.read(&mut buf[..want])?;
         if n == 0 {
-            return Err(io::Error::new(ErrorKind::UnexpectedEof, "the file got shorter while it was archived"));
+            return Err(io::Error::new(
+                ErrorKind::UnexpectedEof,
+                "the file got shorter while it was archived",
+            ));
         }
         self.left -= n as u64;
         *self.done += n as u64;
@@ -314,7 +345,11 @@ pub fn unpack(
         }
         let mut entry = entry.context("read the archive")?;
         let rel = entry.path().context("read the archive")?.into_owned();
-        ensure!(rel.components().all(|c| matches!(c, Component::Normal(_))), "the archive names {} outside its folder", rel.display());
+        ensure!(
+            rel.components().all(|c| matches!(c, Component::Normal(_))),
+            "the archive names {} outside its folder",
+            rel.display()
+        );
         if skipped.leaves(&rel) || unpacked.unmade.iter().any(|u| rel.starts_with(u)) {
             continue;
         }
@@ -345,7 +380,12 @@ pub fn unpack(
                     let temp = path.with_file_name(format!(".{name}.skyward-restore"));
                     // One a restore that stopped left behind goes first.
                     remove_any(&temp)?;
-                    let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp).context("make it")?;
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&temp)
+                        .context("make it")?;
                     let mut buf = vec![0u8; 1 << 20];
                     loop {
                         if cancel.load(Ordering::Relaxed) {
@@ -371,14 +411,22 @@ pub fn unpack(
                     fs::rename(&temp, &path).context("put it in place")?;
                 }
                 EntryType::Symlink => {
-                    let target = entry.link_name().context("read where it points")?.context("it points nowhere")?.into_owned();
+                    let target = entry
+                        .link_name()
+                        .context("read where it points")?
+                        .context("it points nowhere")?
+                        .into_owned();
                     remove_any(&path)?;
                     std::os::unix::fs::symlink(&target, &path).context("make it")?;
                     give(&path, &header, &records, true)?;
                     times(&path, mtime)?;
                 }
                 EntryType::Link => {
-                    let first = entry.link_name().context("read what it is another name of")?.context("it names no file")?.into_owned();
+                    let first = entry
+                        .link_name()
+                        .context("read what it is another name of")?
+                        .context("it names no file")?
+                        .into_owned();
                     remove_any(&path)?;
                     fs::hard_link(root.join(first), &path).context("make it")?;
                 }
@@ -412,7 +460,9 @@ pub fn unpack(
         held.insert(rel);
     }
     if others == Others::Removed {
-        let dev = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?.dev();
+        let dev = fs::symlink_metadata(root)
+            .with_context(|| format!("look at {}", root.display()))?
+            .dev();
         sweep(root, Path::new(""), dev, &held, skipped, key(root)?.as_deref())?;
     }
     // A folder's time goes last, its contents having changed it, the
@@ -491,7 +541,10 @@ fn records(entry: &mut tar::Entry<impl Read>) -> Result<Records> {
 fn time(text: &str) -> Result<(i64, u32)> {
     let (secs, frac) = text.split_once('.').unwrap_or((text, ""));
     let digits: String = frac.chars().chain(std::iter::repeat('0')).take(9).collect();
-    Ok((secs.parse().with_context(|| format!("read the time {text}"))?, digits.parse().with_context(|| format!("read the time {text}"))?))
+    Ok((
+        secs.parse().with_context(|| format!("read the time {text}"))?,
+        digits.parse().with_context(|| format!("read the time {text}"))?,
+    ))
 }
 
 /// Give an entry the owner, permissions and all else the archive held of
@@ -515,7 +568,10 @@ fn give(path: &Path, header: &Header, records: &Records, link: bool) -> Result<(
 /// same as the time it was read.
 fn times(path: &Path, (secs, nanos): (i64, u32)) -> Result<()> {
     let c = cstr(path)?;
-    let t = libc::timespec { tv_sec: secs as _, tv_nsec: nanos as _ };
+    let t = libc::timespec {
+        tv_sec: secs as _,
+        tv_nsec: nanos as _,
+    };
     if unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), [t, t].as_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
         return Err(io::Error::last_os_error()).with_context(|| format!("give {} its times", path.display()));
     }
@@ -636,7 +692,11 @@ fn set_project(path: &Path, project: u32, inherits: bool) -> Result<()> {
     let file = open_bare(path)?;
     let mut fsx = fs_attributes(path)?;
     fsx.projid = project;
-    fsx.xflags = if inherits { fsx.xflags | FS_XFLAG_PROJINHERIT } else { fsx.xflags & !FS_XFLAG_PROJINHERIT };
+    fsx.xflags = if inherits {
+        fsx.xflags | FS_XFLAG_PROJINHERIT
+    } else {
+        fsx.xflags & !FS_XFLAG_PROJINHERIT
+    };
     if unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_FSSETXATTR, &fsx) } != 0 {
         return Err(io::Error::last_os_error()).context("give it its project");
     }
@@ -724,7 +784,11 @@ mod tests {
         fs::set_permissions(at.join("data/com.example/files/notes.db"), fs::Permissions::from_mode(0o660)).unwrap();
         fs::set_permissions(at.join("data/com.example"), fs::Permissions::from_mode(0o751)).unwrap();
         fs::write(at.join("data/com.example/empty"), b"").unwrap();
-        fs::hard_link(at.join("data/com.example/files/notes.db"), at.join("data/com.example/notes-link.db")).unwrap();
+        fs::hard_link(
+            at.join("data/com.example/files/notes.db"),
+            at.join("data/com.example/notes-link.db"),
+        )
+        .unwrap();
         symlink("/data/user/0", at.join("data/self")).unwrap();
         fifo(&at.join("data/com.example/pipe"));
         fs::create_dir_all(at.join("system_de/0/spblob")).unwrap();
@@ -746,7 +810,11 @@ mod tests {
         #[cfg(target_os = "android")]
         set_xattr(&from.join("data/com.example/empty"), "user.skyward", b"kept").unwrap();
         let (bytes, entries) = measure(&from, &skipped(), &AtomicBool::new(false)).unwrap();
-        assert_eq!((bytes, entries), (300_000 + 11, 11), "what is left out is not counted, nor a second name");
+        assert_eq!(
+            (bytes, entries),
+            (300_000 + 11, 11),
+            "what is left out is not counted, nor a second name"
+        );
         let mut archived = Vec::new();
         let mut told = 0;
         pack(&from, &skipped(), &mut archived, &AtomicBool::new(false), &mut |n| told = n).unwrap();
@@ -760,32 +828,74 @@ mod tests {
         fs::write(to.join("system_de/0/spblob/current"), b"the secure world's own").unwrap();
         fs::create_dir_all(to.join("media/0")).unwrap();
         fs::write(to.join("media/0/kept.jpg"), b"jpeg").unwrap();
-        let unpacked = unpack(archived.as_slice(), &to, &skipped(), Others::Removed, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        let unpacked = unpack(
+            archived.as_slice(),
+            &to,
+            &skipped(),
+            Others::Removed,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(unpacked, Unpacked::default());
         assert_eq!(fs::read(to.join("data/com.example/files/notes.db")).unwrap(), vec![7u8; 300_000]);
-        assert_eq!(fs::metadata(to.join("data/com.example/files/notes.db")).unwrap().mode() & 0o7777, 0o660);
+        assert_eq!(
+            fs::metadata(to.join("data/com.example/files/notes.db")).unwrap().mode() & 0o7777,
+            0o660
+        );
         assert_eq!(fs::metadata(to.join("data/com.example")).unwrap().mode() & 0o7777, 0o751);
-        let (a, b) = (fs::metadata(to.join("data/com.example/files/notes.db")).unwrap(), fs::metadata(to.join("data/com.example/notes-link.db")).unwrap());
+        let (a, b) = (
+            fs::metadata(to.join("data/com.example/files/notes.db")).unwrap(),
+            fs::metadata(to.join("data/com.example/notes-link.db")).unwrap(),
+        );
         assert_eq!(a.ino(), b.ino(), "two names of one file stay so");
         assert_eq!(fs::read_link(to.join("data/self")).unwrap(), Path::new("/data/user/0"));
-        assert!(fs::symlink_metadata(to.join("data/com.example/pipe")).unwrap().file_type().is_fifo());
+        assert!(
+            fs::symlink_metadata(to.join("data/com.example/pipe"))
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
         assert_eq!(fs::read(to.join("data/com.example/empty")).unwrap(), b"");
         assert_eq!(fs::read(to.join("system_de/0/settings.xml")).unwrap(), b"<settings/>");
-        assert!(!to.join("data/com.removed").exists(), "an app's folder the backup does not hold goes");
+        assert!(
+            !to.join("data/com.removed").exists(),
+            "an app's folder the backup does not hold goes"
+        );
         assert!(!to.join("data/com.example/stale").exists());
-        assert_eq!(fs::read(to.join("system_de/0/spblob/current")).unwrap(), b"the secure world's own", "what is left out stays");
+        assert_eq!(
+            fs::read(to.join("system_de/0/spblob/current")).unwrap(),
+            b"the secure world's own",
+            "what is left out stays"
+        );
         assert!(!to.join("system_de/0/spblob/secret").exists(), "and none of the backup's goes in");
         assert!(to.join("media/0/kept.jpg").exists());
         for rel in ["data/com.example/files/notes.db", "data/com.example", "data/self"] {
-            let (was, now) = (fs::symlink_metadata(from.join(rel)).unwrap(), fs::symlink_metadata(to.join(rel)).unwrap());
-            assert_eq!((was.mtime(), was.mtime_nsec()), (now.mtime(), now.mtime_nsec()), "{rel} keeps its time");
+            let (was, now) = (
+                fs::symlink_metadata(from.join(rel)).unwrap(),
+                fs::symlink_metadata(to.join(rel)).unwrap(),
+            );
+            assert_eq!(
+                (was.mtime(), was.mtime_nsec()),
+                (now.mtime(), now.mtime_nsec()),
+                "{rel} keeps its time"
+            );
         }
         #[cfg(target_os = "android")]
-        for rel in ["data/com.example/files/notes.db", "data/com.example/empty", "data/com.example", "data/self", "data/com.example/pipe"] {
+        for rel in [
+            "data/com.example/files/notes.db",
+            "data/com.example/empty",
+            "data/com.example",
+            "data/self",
+            "data/com.example/pipe",
+        ] {
             let (was, now) = (from.join(rel), to.join(rel));
             let held = |p: &Path| beyond(p, &fs::symlink_metadata(p).unwrap()).unwrap();
             assert_eq!(held(&was), held(&now), "{rel} keeps its label and all else beyond its contents");
-            assert!(held(&now).iter().any(|(k, _)| k == "SCHILY.xattr.security.selinux"), "{rel} has a label");
+            assert!(
+                held(&now).iter().any(|(k, _)| k == "SCHILY.xattr.security.selinux"),
+                "{rel} has a label"
+            );
         }
         fs::remove_dir_all(&at).unwrap();
     }
@@ -800,7 +910,10 @@ mod tests {
         let e = pack(&at.join("from"), &skipped(), io::sink(), &stop, &mut |_| {}).unwrap_err();
         assert!(e.is::<Cancelled>(), "{e:#}");
         let partway = AtomicBool::new(false);
-        let e = pack(&at.join("from"), &skipped(), io::sink(), &partway, &mut |n| partway.store(n > 0, Ordering::Relaxed)).unwrap_err();
+        let e = pack(&at.join("from"), &skipped(), io::sink(), &partway, &mut |n| {
+            partway.store(n > 0, Ordering::Relaxed)
+        })
+        .unwrap_err();
         assert!(e.is::<Cancelled>(), "stopped in the middle of a file: {e:#}");
         fs::remove_dir_all(&at).unwrap();
     }
@@ -822,10 +935,22 @@ mod tests {
         for on_the_way in ["media", "media/0", "media/10"] {
             assert!(!s.leaves(Path::new(on_the_way)), "{on_the_way}");
         }
-        for kept in ["media/0/Android", "media/0/Android/data/com.example/files/a", "media/obb", "media/obb/com.example"] {
+        for kept in [
+            "media/0/Android",
+            "media/0/Android/data/com.example/files/a",
+            "media/obb",
+            "media/obb/com.example",
+        ] {
             assert!(!s.leaves(Path::new(kept)), "{kept}");
         }
-        for left in ["media/0/DCIM", "media/0/DCIM/photo.jpg", "media/0/Androids", "media/0/Skyward/backups", "cache", "cache/x"] {
+        for left in [
+            "media/0/DCIM",
+            "media/0/DCIM/photo.jpg",
+            "media/0/Androids",
+            "media/0/Skyward/backups",
+            "cache",
+            "cache/x",
+        ] {
             assert!(s.leaves(Path::new(left)), "{left}");
         }
         assert!(!s.leaves(Path::new("system")));
@@ -873,14 +998,32 @@ mod tests {
         fs::write(to.join("media/0/Android/data/com.later/files/x"), b"x").unwrap();
         fs::create_dir_all(to.join("media/0/Android/data/com.example/files")).unwrap();
         fs::write(to.join("media/0/Android/data/com.example/files/after.txt"), b"after").unwrap();
-        let unpacked = unpack(archived.as_slice(), &to, &apps_folders(), Others::Removed, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        let unpacked = unpack(
+            archived.as_slice(),
+            &to,
+            &apps_folders(),
+            Others::Removed,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(unpacked, Unpacked::default());
-        assert_eq!(fs::read(to.join("media/0/Android/data/com.example/files/export.txt")).unwrap(), b"exported");
+        assert_eq!(
+            fs::read(to.join("media/0/Android/data/com.example/files/export.txt")).unwrap(),
+            b"exported"
+        );
         assert_eq!(fs::read(to.join("media/0/Android/media/com.example/voice.m4a")).unwrap(), b"voice");
         assert_eq!(fs::read(to.join("media/obb/com.example/main.obb")).unwrap(), b"obb");
-        assert!(!to.join("media/0/Android/data/com.later").exists(), "an app's folder the backup does not hold goes");
+        assert!(
+            !to.join("media/0/Android/data/com.later").exists(),
+            "an app's folder the backup does not hold goes"
+        );
         assert!(!to.join("media/0/Android/data/com.example/files/after.txt").exists());
-        assert_eq!(fs::read(to.join("media/0/DCIM/newer.jpg")).unwrap(), b"newer", "the users' own files stay");
+        assert_eq!(
+            fs::read(to.join("media/0/DCIM/newer.jpg")).unwrap(),
+            b"newer",
+            "the users' own files stay"
+        );
         assert!(!to.join("media/0/DCIM/photo.jpg").exists(), "and none of the phone's then come in");
         fs::remove_dir_all(&at).unwrap();
     }
@@ -902,11 +1045,27 @@ mod tests {
         fs::write(to.join("0/DCIM/Camera/IMG_0002.jpg"), b"taken since").unwrap();
         fs::create_dir_all(to.join("0/Download")).unwrap();
         fs::write(to.join("0/Download/since.pdf"), b"pdf").unwrap();
-        let unpacked = unpack(archived.as_slice(), &to, &left_out, Others::Kept, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        let unpacked = unpack(
+            archived.as_slice(),
+            &to,
+            &left_out,
+            Others::Kept,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(unpacked, Unpacked::default());
-        assert_eq!(fs::read(to.join("0/DCIM/Camera/IMG_0001.jpg")).unwrap(), b"as it was", "a file of the same name is the backup's again");
+        assert_eq!(
+            fs::read(to.join("0/DCIM/Camera/IMG_0001.jpg")).unwrap(),
+            b"as it was",
+            "a file of the same name is the backup's again"
+        );
         assert_eq!(fs::read(to.join("0/notes.txt")).unwrap(), b"notes");
-        assert_eq!(fs::read(to.join("0/DCIM/Camera/IMG_0002.jpg")).unwrap(), b"taken since", "what the backup does not hold stays");
+        assert_eq!(
+            fs::read(to.join("0/DCIM/Camera/IMG_0002.jpg")).unwrap(),
+            b"taken since",
+            "what the backup does not hold stays"
+        );
         assert_eq!(fs::read(to.join("0/Download/since.pdf")).unwrap(), b"pdf");
         assert!(!to.join("0/Skyward/backups").exists(), "a backup holds none of the backups");
         fs::remove_dir_all(&at).unwrap();
@@ -933,13 +1092,31 @@ mod tests {
         fs::create_dir_all(to.join("system/users")).unwrap();
         fs::write(to.join("system/users/10.xml.bak"), b"the phone's own").unwrap();
         fs::write(to.join("system/users/11.xml"), b"<user/>").unwrap();
-        unpack(archived.as_slice(), &to, &without_ten(), Others::Removed, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        unpack(
+            archived.as_slice(),
+            &to,
+            &without_ten(),
+            Others::Removed,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(fs::read(to.join("system/users/0.xml")).unwrap(), b"<user/>");
         assert_eq!(fs::read(to.join("system/users/0/settings.xml")).unwrap(), b"<settings/>");
         assert_eq!(fs::read(to.join("system/users/userlist.xml")).unwrap(), b"<users/>");
-        assert!(!to.join("system/users/10.xml").exists() && !to.join("system/users/10").exists(), "left out");
-        assert_eq!(fs::read(to.join("system/users/10.xml.bak")).unwrap(), b"the phone's own", "and left alone");
-        assert!(!to.join("system/users/11.xml").exists(), "what the backup does not hold goes all the same");
+        assert!(
+            !to.join("system/users/10.xml").exists() && !to.join("system/users/10").exists(),
+            "left out"
+        );
+        assert_eq!(
+            fs::read(to.join("system/users/10.xml.bak")).unwrap(),
+            b"the phone's own",
+            "and left alone"
+        );
+        assert!(
+            !to.join("system/users/11.xml").exists(),
+            "what the backup does not hold goes all the same"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 

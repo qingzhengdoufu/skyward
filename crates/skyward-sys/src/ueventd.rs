@@ -72,7 +72,9 @@ pub fn accounts(files: &[&str]) -> HashMap<String, u32> {
         let Ok(text) = std::fs::read_to_string(file) else { continue };
         for line in text.lines() {
             let mut fields = line.split(':');
-            let (Some(name), Some(_), Some(id)) = (fields.next(), fields.next(), fields.next()) else { continue };
+            let (Some(name), Some(_), Some(id)) = (fields.next(), fields.next(), fields.next()) else {
+                continue;
+            };
             if let Ok(id) = id.parse() {
                 out.insert(name.to_string(), id);
             }
@@ -103,10 +105,19 @@ pub fn rules(text: &str, known: &HashMap<String, u32>) -> Vec<Rule> {
         }
         let fields: Vec<&str> = line.split_whitespace().collect();
         let [path, mode, user, group, ..] = fields[..] else { continue };
-        let (Ok(mode), Some(uid), Some(gid)) = (u32::from_str_radix(mode.trim_start_matches('0'), 8), account(known, user), account(known, group)) else {
+        let (Ok(mode), Some(uid), Some(gid)) = (
+            u32::from_str_radix(mode.trim_start_matches('0'), 8),
+            account(known, user),
+            account(known, group),
+        ) else {
             continue;
         };
-        out.push(Rule { path: path.to_string(), mode, uid, gid });
+        out.push(Rule {
+            path: path.to_string(),
+            mode,
+            uid,
+            gid,
+        });
     }
     out
 }
@@ -137,7 +148,11 @@ pub fn apply() -> anyhow::Result<usize> {
 pub fn apply_to(node: &str) -> anyhow::Result<()> {
     use anyhow::Context;
     let rules = described();
-    let rule = rules.iter().rev().find(|r| r.matches(node)).with_context(|| format!("none of the phone's rules for its device nodes names {node}"))?;
+    let rule = rules
+        .iter()
+        .rev()
+        .find(|r| r.matches(node))
+        .with_context(|| format!("none of the phone's rules for its device nodes names {node}"))?;
     set(node, rule).with_context(|| format!("give {node} the owner and permissions its phone describes"))
 }
 
@@ -209,7 +224,15 @@ mod tests {
     #[test]
     fn a_rule_gives_a_node_its_owner_and_permissions() {
         let parsed = rules("/dev/smcinvoke            0660   system     drmrpc\n", &known());
-        assert_eq!(parsed, vec![Rule { path: "/dev/smcinvoke".into(), mode: 0o660, uid: 1000, gid: 1026 }]);
+        assert_eq!(
+            parsed,
+            vec![Rule {
+                path: "/dev/smcinvoke".into(),
+                mode: 0o660,
+                uid: 1000,
+                gid: 1026
+            }]
+        );
     }
 
     #[test]

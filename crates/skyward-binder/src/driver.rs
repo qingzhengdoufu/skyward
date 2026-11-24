@@ -2,11 +2,11 @@ use crate::parcel::{Parcel, Payload, Reader};
 use crate::serve::{Answer, Objects};
 use crate::wire::{
     BC_ACQUIRE, BC_ACQUIRE_DONE, BC_ENTER_LOOPER, BC_FREE_BUFFER, BC_INCREFS_DONE, BC_RELEASE, BC_REPLY, BC_TRANSACTION, BC_TRANSACTION_SG,
-    BINDER_SET_MAX_THREADS, BINDER_VERSION, BINDER_WRITE_READ, BR_ACQUIRE, BR_DEAD_REPLY, BR_DECREFS, BR_ERROR, BR_FAILED_REPLY, BR_FROZEN_REPLY,
-    BR_INCREFS, BR_NOOP, BR_OK, BR_RELEASE, BR_REPLY, BR_SPAWN_LOOPER, BR_TRANSACTION, BR_TRANSACTION_COMPLETE,
+    BINDER_SET_MAX_THREADS, BINDER_VERSION, BINDER_WRITE_READ, BR_ACQUIRE, BR_DEAD_REPLY, BR_DECREFS, BR_ERROR, BR_FAILED_REPLY,
+    BR_FROZEN_REPLY, BR_INCREFS, BR_NOOP, BR_OK, BR_RELEASE, BR_REPLY, BR_SPAWN_LOOPER, BR_TRANSACTION, BR_TRANSACTION_COMPLETE,
 };
 use crate::wire::{TransactionData, WriteRead};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -104,7 +104,11 @@ impl Binder {
     }
 
     fn on(node: &Path, served: Option<Arc<Objects<Binder>>>) -> Result<Binder> {
-        let file = File::options().read(true).write(true).open(node).with_context(|| format!("open {}", node.display()))?;
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .open(node)
+            .with_context(|| format!("open {}", node.display()))?;
         let mut version: i32 = 0;
         unsafe { call(&file, BINDER_VERSION, &mut version as *mut i32 as *mut libc::c_void) }.context("ask the driver its protocol")?;
         if version != PROTOCOL {
@@ -113,9 +117,17 @@ impl Binder {
         // The threads that take calls say so themselves, as many as the
         // program starts, so the driver never has to ask for another.
         let mut threads: u32 = 0;
-        unsafe { call(&file, BINDER_SET_MAX_THREADS, &mut threads as *mut u32 as *mut libc::c_void) }.context("keep the driver from asking for threads")?;
+        unsafe { call(&file, BINDER_SET_MAX_THREADS, &mut threads as *mut u32 as *mut libc::c_void) }
+            .context("keep the driver from asking for threads")?;
         let map = unsafe {
-            libc::mmap(std::ptr::null_mut(), MAP_BYTES, libc::PROT_READ, libc::MAP_PRIVATE | libc::MAP_NORESERVE, file.as_raw_fd(), 0)
+            libc::mmap(
+                std::ptr::null_mut(),
+                MAP_BYTES,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE | libc::MAP_NORESERVE,
+                file.as_raw_fd(),
+                0,
+            )
         };
         if map == libc::MAP_FAILED {
             return Err(std::io::Error::last_os_error()).context("map the driver's replies");
@@ -130,7 +142,11 @@ impl Binder {
     /// directory's own object counted up and down from outside while it is
     /// still starting.
     pub fn directory(&self) -> Result<Handle<'_>> {
-        Ok(Handle { binder: self, handle: 0, held: false })
+        Ok(Handle {
+            binder: self,
+            handle: 0,
+            held: false,
+        })
     }
 
     /// Call method `code` on `handle` and wait for what it answers.
@@ -166,7 +182,10 @@ impl Binder {
         // the other side sent lands in the mapped room, not here. While the
         // reply is awaited the other side may call back into an object
         // served here, which is answered and the waiting gone on with.
-        let mut waiting = Waiting { words: write, replies: Vec::new() };
+        let mut waiting = Waiting {
+            words: write,
+            replies: Vec::new(),
+        };
         let mut said = [0u8; SAID_BYTES];
         let deadline = timeout.map(|wait| Instant::now() + wait);
         if deadline.is_some() {
@@ -218,7 +237,12 @@ impl Binder {
             ..WriteRead::default()
         };
         unsafe { call(&self.file, BINDER_WRITE_READ, &mut bwr as *mut WriteRead as *mut libc::c_void) }?;
-        ensure!(bwr.write_consumed == bwr.write_size, "the driver took {} of the {} bytes it was told", bwr.write_consumed, bwr.write_size);
+        ensure!(
+            bwr.write_consumed == bwr.write_size,
+            "the driver took {} of the {} bytes it was told",
+            bwr.write_consumed,
+            bwr.write_size
+        );
         waiting.words.clear();
         waiting.replies.clear();
         Ok(bwr.read_consumed as usize)
@@ -302,7 +326,11 @@ impl Binder {
                         bail!("the call failed in the driver with error {code}");
                     }
                     let data = unsafe { std::slice::from_raw_parts(td.buffer as *const u8, td.data_size as usize) };
-                    return Ok(Some(Reply { binder: self, buffer: td.buffer, data }));
+                    return Ok(Some(Reply {
+                        binder: self,
+                        buffer: td.buffer,
+                        data,
+                    }));
                 }
                 BR_DEAD_REPLY | BR_FAILED_REPLY | BR_FROZEN_REPLY if !calling => {}
                 BR_DEAD_REPLY => bail!("the other side is gone"),
@@ -343,7 +371,11 @@ impl Drop for Binder {
 
 /// The next `n` bytes of what the driver said, taken off its front.
 fn part<'a>(said: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
-    ensure!(said.len() >= n, "the driver cut what it said short: {} bytes where {n} follow", said.len());
+    ensure!(
+        said.len() >= n,
+        "the driver cut what it said short: {} bytes where {n} follow",
+        said.len()
+    );
     let (head, rest) = said.split_at(n);
     *said = rest;
     Ok(head)
@@ -367,13 +399,19 @@ fn wait_readable(fd: i32, deadline: Instant) -> Result<()> {
         let remaining = deadline.saturating_duration_since(Instant::now());
         ensure!(!remaining.is_zero(), "the service did not answer before the deadline");
         let millis = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
-        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         match unsafe { libc::poll(&mut pfd, 1, millis) } {
             0 => bail!("the service did not answer before the deadline"),
             n if n > 0 => return Ok(()),
             _ => {
                 let error = std::io::Error::last_os_error();
-                if error.kind() != std::io::ErrorKind::Interrupted { return Err(error.into()); }
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error.into());
+                }
             }
         }
     }
@@ -393,7 +431,11 @@ impl<'a> Handle<'a> {
     /// the reply that carried it.
     pub fn hold(binder: &'a Binder, handle: u32) -> Result<Handle<'a>> {
         binder.tell(BC_ACQUIRE, &handle.to_ne_bytes()).context("hold an object open")?;
-        Ok(Handle { binder, handle, held: true })
+        Ok(Handle {
+            binder,
+            handle,
+            held: true,
+        })
     }
 
     pub fn transact(&self, code: u32, data: &impl Payload) -> Result<Reply<'a>> {

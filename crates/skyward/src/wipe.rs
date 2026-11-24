@@ -1,7 +1,7 @@
 //! Erasing what the system, the wipe page or an update asks to erase, the
 //! way a phone's own recovery erases it, on a thread of its own.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use skyward_block::fstab::{self, Entry};
 use skyward_block::{erase, mount};
 use skyward_crypto::data::{self, Opening};
@@ -56,7 +56,11 @@ const SYSTEM_CACHES: [&str; 3] = ["/data/system/package_cache", "/data/resource-
 /// classpath and the system server, and what is compiled for the slot an
 /// update was installed to. The system compiles all of it again as it
 /// needs it.
-const ART_CACHES: [&str; 3] = ["/data/dalvik-cache", "/data/misc/apexdata/com.android.art/dalvik-cache", "/data/ota"];
+const ART_CACHES: [&str; 3] = [
+    "/data/dalvik-cache",
+    "/data/misc/apexdata/com.android.art/dalvik-cache",
+    "/data/ota",
+];
 
 /// Where every Android phone keeps logs and dumps: crashes, programs that
 /// stopped answering, the system's dropbox of reports, logcat kept across
@@ -176,7 +180,12 @@ pub fn factory_reset(reformat: Option<String>) -> Result<Plan, Stop> {
         if !skyward_crypto::encryption::made_afresh(&data) && reformat.is_none() {
             return Ok(Err(Refusal::NotRebuilt));
         }
-        Ok(Ok(Plan { data, cache: cache()?, metadata: first(METADATA)?, reformat }))
+        Ok(Ok(Plan {
+            data,
+            cache: cache()?,
+            metadata: first(METADATA)?,
+            reformat,
+        }))
     })();
     match plan {
         Ok(Ok(plan)) => Ok(plan),
@@ -190,7 +199,9 @@ pub fn factory_reset(reformat: Option<String>) -> Result<Plan, Stop> {
 /// /metadata that does not mount keeps track of no update to lose, and
 /// erasing makes it afresh.
 fn update_hold() -> Result<Option<Hold>> {
-    let Some(current) = skyward_vab::current_slot()? else { return Ok(None) };
+    let Some(current) = skyward_vab::current_slot()? else {
+        return Ok(None);
+    };
     let at = Path::new(METADATA);
     if !mount::is_mount_point(at)? {
         let device = fstab::device(&first(METADATA)?)?;
@@ -206,7 +217,10 @@ impl Plan {
     /// The parts, in the order they are erased.
     pub fn steps(&self) -> Vec<Step> {
         let cache = self.cache.as_ref().map(|_| Step::Cache);
-        std::iter::once(Step::Data).chain(cache).chain(std::iter::once(Step::Metadata)).collect()
+        std::iter::once(Step::Data)
+            .chain(cache)
+            .chain(std::iter::once(Step::Metadata))
+            .collect()
     }
 
     /// Erase each part, telling `tell` of each as it begins. The programs
@@ -273,7 +287,12 @@ pub fn parts(steps: Vec<Step>, logs: &[String], reformat: Option<String>) -> Res
         false => None,
         true => Some(cache().map_err(failed(Step::Cache))?.ok_or(Stop::Refused(Refusal::NoCache))?),
     };
-    Ok(Parts { steps, cache, logs: logs.iter().map(PathBuf::from).collect(), reformat })
+    Ok(Parts {
+        steps,
+        cache,
+        logs: logs.iter().map(PathBuf::from).collect(),
+        reformat,
+    })
 }
 
 impl Parts {
@@ -454,7 +473,10 @@ impl Users {
 fn folders(folder: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for entry in contents(folder)? {
-        if fs::symlink_metadata(&entry).with_context(|| format!("look at {}", entry.display()))?.is_dir() {
+        if fs::symlink_metadata(&entry)
+            .with_context(|| format!("look at {}", entry.display()))?
+            .is_dir()
+        {
             out.push(entry);
         }
     }
@@ -499,7 +521,10 @@ pub fn cache() -> Result<Option<Entry>> {
 /// The first entry the phone's table has for `mount_point`: the one the
 /// system tries first.
 fn first(mount_point: &str) -> Result<Entry> {
-    fstab::read(mount_point)?.into_iter().next().with_context(|| format!("the phone's table has no {mount_point}"))
+    fstab::read(mount_point)?
+        .into_iter()
+        .next()
+        .with_context(|| format!("the phone's table has no {mount_point}"))
 }
 
 /// Make the partition an entry names afresh as `filesystem`, with nothing
@@ -554,7 +579,10 @@ fn end_holders(device: (u32, u32)) -> Result<()> {
         ensure!(
             Instant::now() < until,
             "{} still hold the data partition",
-            left.iter().map(|(pid, name)| format!("{name} ({pid})")).collect::<Vec<_>>().join(", ")
+            left.iter()
+                .map(|(pid, name)| format!("{name} ({pid})"))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         thread::sleep(Duration::from_millis(50));
     }
@@ -564,7 +592,10 @@ fn end_holders(device: (u32, u32)) -> Result<()> {
 /// that is not there.
 fn contents(folder: &Path) -> Result<Vec<PathBuf>> {
     match fs::read_dir(folder) {
-        Ok(entries) => entries.map(|e| e.map(|e| e.path())).collect::<std::io::Result<_>>().with_context(|| format!("read {}", folder.display())),
+        Ok(entries) => entries
+            .map(|e| e.map(|e| e.path()))
+            .collect::<std::io::Result<_>>()
+            .with_context(|| format!("read {}", folder.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e).with_context(|| format!("read {}", folder.display())),
     }
@@ -600,10 +631,7 @@ fn clear_files(folders: &[PathBuf], tell: &mut dyn FnMut(Event)) -> Result<()> {
 
 /// Do `work`, telling `tell` how far it has come at most every
 /// [`PROGRESS_EVERY`], and once more as it ends.
-fn told(
-    tell: &mut dyn FnMut(Event),
-    work: impl FnOnce(&AtomicBool, &mut dyn FnMut(skyward_files::Progress)) -> Result<()>,
-) -> Result<()> {
+fn told(tell: &mut dyn FnMut(Event), work: impl FnOnce(&AtomicBool, &mut dyn FnMut(skyward_files::Progress)) -> Result<()>) -> Result<()> {
     let mut since = Instant::now() - PROGRESS_EVERY;
     let mut last = None;
     let done = work(&AtomicBool::new(false), &mut |p| {
@@ -640,7 +668,12 @@ const LABEL: &str = "security.selinux";
 
 fn look(path: &Path) -> Result<Look> {
     let meta = fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
-    Ok(Look { uid: meta.uid(), gid: meta.gid(), mode: meta.mode() & 0o7777, label: label(path)? })
+    Ok(Look {
+        uid: meta.uid(),
+        gid: meta.gid(),
+        mode: meta.mode() & 0o7777,
+        label: label(path)?,
+    })
 }
 
 fn cstr(text: &str) -> CString {
@@ -733,14 +766,21 @@ fn read_logs(device: &Path, at: &Path) -> Result<Option<(Look, Vec<Log>)>> {
         }
         let mut logs = Vec::new();
         for path in contents(&dir)? {
-            let name = path.file_name().with_context(|| format!("{} has no name", path.display()))?.to_owned();
+            let name = path
+                .file_name()
+                .with_context(|| format!("{} has no name", path.display()))?
+                .to_owned();
             let text = name.to_string_lossy();
             if !(text.starts_with("last_") || text == "log") || !path.is_file() {
                 continue;
             }
             let mut data = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             data.truncate(LOG_KEPT);
-            logs.push(Log { name: PathBuf::from(name), data, look: look(&path)? });
+            logs.push(Log {
+                name: PathBuf::from(name),
+                data,
+                look: look(&path)?,
+            });
         }
         Ok(Some((look(&dir)?, logs)))
     })();
@@ -856,7 +896,10 @@ mod tests {
     #[test]
     fn on_the_phone_what_a_user_keeps_under_a_key_that_is_gone_is_deleted_by_the_names_it_shows() {
         let root = scratch("locked");
-        assert!(contents(&root.join("absent")).unwrap().is_empty(), "a folder that is not there holds nothing");
+        assert!(
+            contents(&root.join("absent")).unwrap().is_empty(),
+            "a folder that is not there holds nothing"
+        );
         let locked = root.join("locked");
         fs::create_dir(&locked).unwrap();
         let raw: Vec<u8> = (0..64u8).map(|b| b ^ std::process::id() as u8).collect();
@@ -868,7 +911,10 @@ mod tests {
         remove_key(&root, &key);
         let entries = contents(&locked).unwrap();
         assert_eq!(entries.len(), 2);
-        assert!(!entries.iter().any(|e| e.ends_with("note.txt") || e.ends_with("DCIM")), "without the key the names do not read: {entries:?}");
+        assert!(
+            !entries.iter().any(|e| e.ends_with("note.txt") || e.ends_with("DCIM")),
+            "without the key the names do not read: {entries:?}"
+        );
         let mut told = Vec::new();
         clear(&entries, &mut |e| {
             if let Event::Progress(done, total) = e {
@@ -895,7 +941,13 @@ mod tests {
         for user in [0, 10] {
             let app = users.apps(user).join("com.example.notes");
             let early = users.apps_early(user).join("com.example.notes");
-            for folder in [app.join("cache/thumbnails"), app.join("code_cache"), app.join("databases"), early.join("cache"), early.join("files")] {
+            for folder in [
+                app.join("cache/thumbnails"),
+                app.join("code_cache"),
+                app.join("databases"),
+                early.join("cache"),
+                early.join("files"),
+            ] {
                 fs::create_dir_all(folder).unwrap();
             }
             fs::write(app.join("databases/notes.db"), b"notes").unwrap();
@@ -914,7 +966,10 @@ mod tests {
             for (name, inode) in CACHE_INODES.iter().zip([app.join("cache"), app.join("code_cache")]) {
                 let ino = fs::metadata(inode).unwrap().ino().to_ne_bytes();
                 let (path, name) = (path_cstr(&app).unwrap(), cstr(name));
-                assert_eq!(unsafe { libc::lsetxattr(path.as_ptr(), name.as_ptr(), ino.as_ptr().cast(), ino.len(), 0) }, 0);
+                assert_eq!(
+                    unsafe { libc::lsetxattr(path.as_ptr(), name.as_ptr(), ino.as_ptr().cast(), ino.len(), 0) },
+                    0
+                );
             }
         }
         users
@@ -927,7 +982,11 @@ mod tests {
         let root = scratch("caches");
         let users = users_at(&root);
         assert_eq!(users.list().unwrap(), [0, 10]);
-        assert_eq!(users.apps(0), root.join("data"), "the owner's apps are where the system has always kept them");
+        assert_eq!(
+            users.apps(0),
+            root.join("data"),
+            "the owner's apps are where the system has always kept them"
+        );
         clear(&users.app_caches().unwrap(), &mut quiet).unwrap();
         for user in [0, 10] {
             let app = users.apps(user).join("com.example.notes");
@@ -959,7 +1018,11 @@ mod tests {
                 storage.join("Android/data/com.example.notes"),
                 storage.join("Android/media/com.example.notes"),
             ] {
-                assert!(emptied.is_dir() && contents(&emptied).unwrap().is_empty(), "{} is emptied and stays", emptied.display());
+                assert!(
+                    emptied.is_dir() && contents(&emptied).unwrap().is_empty(),
+                    "{} is emptied and stays",
+                    emptied.display()
+                );
             }
             assert!(storage.join("DCIM/photo.jpg").exists(), "the user's own files stay");
             for name in CACHE_INODES {
@@ -985,7 +1048,11 @@ mod tests {
         fs::create_dir(other.join("com.example.notes")).unwrap();
         assert!(users.locked().unwrap().is_empty(), "with the key in, every user reads");
         remove_key(&root, &key);
-        assert_eq!(users.locked().unwrap(), [10], "the owner's folder is not encrypted here; user 10's key is out");
+        assert_eq!(
+            users.locked().unwrap(),
+            [10],
+            "the owner's folder is not encrypted here; user 10's key is out"
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1018,7 +1085,11 @@ mod tests {
         let root = scratch(test);
         let image = root.join("cache.img");
         fs::File::create(&image).unwrap().set_len(128 << 20).unwrap();
-        let out = std::process::Command::new("/system/bin/losetup").args(["-f", "--show"]).arg(&image).output().unwrap();
+        let out = std::process::Command::new("/system/bin/losetup")
+            .args(["-f", "--show"])
+            .arg(&image)
+            .output()
+            .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         let device = String::from_utf8(out.stdout).unwrap().trim().to_string();
         let held = fs::File::open(&device).unwrap();
@@ -1046,7 +1117,13 @@ mod tests {
         fs::write(at.join("stray"), b"cached").unwrap();
         let labelled = label(&logs.join("last_log.1")).unwrap();
         mount::umount(&at).unwrap();
-        Cache { root, device, entry, held, labelled }
+        Cache {
+            root,
+            device,
+            entry,
+            held,
+            labelled,
+        }
     }
 
     impl Cache {
@@ -1055,11 +1132,18 @@ mod tests {
         fn holds_the_logs_alone(self, filesystem: &str) {
             let at = PathBuf::from(&self.entry.mount_point);
             let logs = at.join(CACHE_LOGS);
-            assert_eq!(skyward_block::probe::filesystem(Path::new(&self.device)).unwrap().as_deref(), Some(filesystem));
+            assert_eq!(
+                skyward_block::probe::filesystem(Path::new(&self.device)).unwrap().as_deref(),
+                Some(filesystem)
+            );
             mount::mount(Path::new(&self.device), &at, filesystem, &[]).unwrap();
             assert!(!at.join("stray").exists(), "the rest is gone");
             assert!(!logs.join("command").exists(), "only the logs are kept");
-            assert_eq!(fs::read(logs.join("last_kmsg")).unwrap().len(), LOG_KEPT, "each up to the most kept");
+            assert_eq!(
+                fs::read(logs.join("last_kmsg")).unwrap().len(),
+                LOG_KEPT,
+                "each up to the most kept"
+            );
             assert_eq!(fs::read(logs.join("last_log.1")).unwrap(), b"an earlier log");
             assert_eq!(fs::read(logs.join("log")).unwrap(), b"this one");
             let earlier = fs::metadata(logs.join("last_log.1")).unwrap();
@@ -1069,7 +1153,10 @@ mod tests {
             assert_eq!(label(&logs.join("last_log.1")).unwrap(), self.labelled, "with the label it had");
             mount::umount(&at).unwrap();
             drop(self.held);
-            let detached = std::process::Command::new("/system/bin/losetup").args(["-d", &self.device]).status().unwrap();
+            let detached = std::process::Command::new("/system/bin/losetup")
+                .args(["-d", &self.device])
+                .status()
+                .unwrap();
             assert!(detached.success(), "let {} go", self.device);
             fs::remove_dir_all(&self.root).unwrap();
         }

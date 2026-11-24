@@ -10,9 +10,9 @@ use skyward_block::fsck::{self, Fixed};
 use skyward_block::fstab::{self, Entry};
 use skyward_block::{mount, probe, tools};
 use skyward_crypto::data;
+use skyward_install::Refusal;
 use skyward_install::package::Phone;
 use skyward_install::wipe::{self as package, Wipe};
-use skyward_install::Refusal;
 use skyward_sys::{bcb, prop};
 use skyward_vab::Slot;
 use std::os::fd::RawFd;
@@ -231,7 +231,10 @@ fn copy_e2fsck(slot: Slot) -> Result<tools::Tool, Stop> {
         skyward_vab::unmount_one(slot, tools::SYSTEM)?;
         let program = copied?;
         Ok(match found {
-            Ok(_) => Ok(tools::Tool { program, libraries: vec![E2FSCK_COPY.into(), tools::RECOVERY_LIB64.into()] }),
+            Ok(_) => Ok(tools::Tool {
+                program,
+                libraries: vec![E2FSCK_COPY.into(), tools::RECOVERY_LIB64.into()],
+            }),
             Err(tools::Missing::Unmounted(base)) => Err(Stop::Unmounted(base)),
             Err(tools::Missing::Absent(name)) => Err(Stop::Failed(format!("the installed system has no {name}"))),
         })
@@ -244,13 +247,18 @@ fn copy_e2fsck(slot: Slot) -> Result<tools::Tool, Stop> {
 fn copy_with_libraries(program: &Path) -> Result<PathBuf> {
     let dir = Path::new(E2FSCK_COPY);
     std::fs::create_dir_all(dir).with_context(|| format!("make {E2FSCK_COPY}"))?;
-    let name = program.file_name().with_context(|| format!("{} names no program", program.display()))?;
+    let name = program
+        .file_name()
+        .with_context(|| format!("{} names no program", program.display()))?;
     let copy = dir.join(name);
     std::fs::copy(program, &copy).with_context(|| format!("copy {} to {}", program.display(), copy.display()))?;
     std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)).with_context(|| format!("make {} runnable", copy.display()))?;
     for entry in std::fs::read_dir(tools::SYSTEM_LIB64).with_context(|| format!("read {}", tools::SYSTEM_LIB64))? {
         let library = entry.with_context(|| format!("read {}", tools::SYSTEM_LIB64))?.path();
-        let own = library.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(EXT2_LIBRARIES) && n.ends_with(".so"));
+        let own = library
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(EXT2_LIBRARIES) && n.ends_with(".so"));
         if own {
             let to = dir.join(library.file_name().expect("listed with a name"));
             std::fs::copy(&library, &to).with_context(|| format!("copy {} to {}", library.display(), to.display()))?;
@@ -284,7 +292,9 @@ fn remake(part: Part, filesystem: &str, tell: &mut dyn FnMut(Event)) -> Result<(
     let made = match &part {
         Part::Entry(entry) if entry.mount_point == "/cache" => crate::wipe::remake_cache(entry, filesystem),
         Part::Entry(entry) => crate::wipe::remake(entry, filesystem),
-        Part::Data => Err(anyhow::anyhow!("the data partition is made afresh as another filesystem by a factory reset")),
+        Part::Data => Err(anyhow::anyhow!(
+            "the data partition is made afresh as another filesystem by a factory reset"
+        )),
     };
     let item = match made {
         Ok(()) => Item::Made,
@@ -341,7 +351,11 @@ mod tests {
         std::fs::create_dir_all(&at).unwrap();
         let image = root.join("part.img");
         std::fs::File::create(&image).unwrap().set_len(128 << 20).unwrap();
-        let out = std::process::Command::new("/system/bin/losetup").args(["-f", "--show"]).arg(&image).output().unwrap();
+        let out = std::process::Command::new("/system/bin/losetup")
+            .args(["-f", "--show"])
+            .arg(&image)
+            .output()
+            .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         let device = String::from_utf8(out.stdout).unwrap().trim().to_string();
         // Held open throughout, so nothing lets the device go before the
@@ -371,7 +385,10 @@ mod tests {
         assert_eq!(written.raw_os_error(), Some(libc::EROFS), "read-only");
         mount::umount(&at).unwrap();
         drop(held);
-        let detached = std::process::Command::new("/system/bin/losetup").args(["-d", &device]).status().unwrap();
+        let detached = std::process::Command::new("/system/bin/losetup")
+            .args(["-d", &device])
+            .status()
+            .unwrap();
         assert!(detached.success(), "let {device} go");
         std::fs::remove_dir_all(&root).unwrap();
     }

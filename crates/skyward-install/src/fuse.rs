@@ -15,17 +15,18 @@
 //! hands such a script the name of the package file, and so does this one
 //! wherever it has a name to hand over.
 
-use crate::adb::{Connection, Link, Offer, MAX_BLOCKS};
-use anyhow::{anyhow, Context, Result};
+use crate::adb::{Connection, Link, MAX_BLOCKS, Offer};
+use anyhow::{Context, Result, anyhow};
 use polyfuse_kernel::{
-    fuse_attr, fuse_attr_out, fuse_entry_out, fuse_in_header, fuse_init_in, fuse_init_out, fuse_opcode, fuse_open_out,
-    fuse_out_header, fuse_read_in, FUSE_COMPAT_22_INIT_OUT_SIZE, FUSE_KERNEL_MINOR_VERSION, FUSE_KERNEL_VERSION,
+    FUSE_COMPAT_22_INIT_OUT_SIZE, FUSE_KERNEL_MINOR_VERSION, FUSE_KERNEL_VERSION, fuse_attr, fuse_attr_out, fuse_entry_out, fuse_in_header,
+    fuse_init_in, fuse_init_out, fuse_opcode, fuse_open_out, fuse_out_header, fuse_read_in,
 };
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use zerocopy::{FromBytes, IntoBytes};
 
@@ -48,11 +49,7 @@ pub struct Name(String);
 impl Name {
     /// `name` as a name to serve a package under, if it is one.
     pub fn new(name: &str) -> Option<Name> {
-        let well_formed = !name.is_empty()
-            && name.len() <= NAME_MAX
-            && name != "."
-            && name != ".."
-            && !name.contains(['/', '\0']);
+        let well_formed = !name.is_empty() && name.len() <= NAME_MAX && name != "." && name != ".." && !name.contains(['/', '\0']);
         well_formed.then(|| Name(name.to_string()))
     }
 
@@ -137,7 +134,13 @@ impl LocalFile {
         let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
         let size = file.metadata().with_context(|| format!("look at {}", path.display()))?.len();
         let block_size = file_block(size);
-        Ok((LocalFile { file, block_size: u64::from(block_size) }, Offer { size, block_size }))
+        Ok((
+            LocalFile {
+                file,
+                block_size: u64::from(block_size),
+            },
+            Offer { size, block_size },
+        ))
     }
 }
 
@@ -176,7 +179,13 @@ struct Part {
 
 impl Followed {
     fn new(offer: Offer) -> Followed {
-        let part = Part { block_size: u64::from(offer.block_size), start: 0, end: 0, reached: vec![false; offer.blocks() as usize], read: 0 };
+        let part = Part {
+            block_size: u64::from(offer.block_size),
+            start: 0,
+            end: 0,
+            reached: vec![false; offer.blocks() as usize],
+            read: 0,
+        };
         Followed(Arc::new(Mutex::new(part)))
     }
 
@@ -202,7 +211,9 @@ impl Followed {
     fn reach(&self, index: u64) {
         let mut part = self.part();
         // A block past the package's end holds none of it.
-        let Some(reached) = part.reached.get_mut(index as usize) else { return };
+        let Some(reached) = part.reached.get_mut(index as usize) else {
+            return;
+        };
         if std::mem::replace(reached, true) {
             return;
         }
@@ -226,6 +237,7 @@ pub struct Server {
     /// Every read after a fault fails too.
     fault: Option<Fault>,
     followed: Followed,
+    served: Arc<AtomicU64>,
 }
 
 impl Server {
@@ -239,6 +251,7 @@ impl Server {
             block: vec![0; offer.block_size as usize],
             fault: None,
             followed: Followed::new(offer),
+            served: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -246,6 +259,10 @@ impl Server {
     /// thread to name it and to ask after it.
     pub fn followed(&self) -> Followed {
         self.followed.clone()
+    }
+
+    pub fn served(&self) -> u64 {
+        self.served.load(Ordering::Relaxed)
     }
 
     pub fn fault(&self) -> Option<&Fault> {
@@ -261,10 +278,11 @@ impl Server {
     }
 
     pub fn handle(&mut self, request: &[u8], fetch: &mut Fetch) -> Result<Handled> {
-        let (header, body) =
-            fuse_in_header::read_from_prefix(request).map_err(|_| anyhow!("a request of {} bytes", request.len()))?;
+        let (header, body) = fuse_in_header::read_from_prefix(request).map_err(|_| anyhow!("a request of {} bytes", request.len()))?;
         let unique = header.unique;
-        let Ok(opcode) = fuse_opcode::try_from(header.opcode) else { return Ok(Handled::Reply(error(unique, libc::ENOSYS))) };
+        let Ok(opcode) = fuse_opcode::try_from(header.opcode) else {
+            return Ok(Handled::Reply(error(unique, libc::ENOSYS)));
+        };
         Ok(match opcode {
             fuse_opcode::FUSE_INIT => {
                 let (init, _) = fuse_init_in::read_from_prefix(body).map_err(|_| anyhow!("a short INIT"))?;
@@ -285,7 +303,11 @@ impl Server {
             }
             fuse_opcode::FUSE_GETATTR => match self.attr(header.nodeid) {
                 Some(attr) => {
-                    let out = fuse_attr_out { attr_valid: VALID, attr, ..Default::default() };
+                    let out = fuse_attr_out {
+                        attr_valid: VALID,
+                        attr,
+                        ..Default::default()
+                    };
                     let r = reply(unique, out.as_bytes());
                     if header.nodeid == EXIT_ID {
                         Handled::Exit(r)
@@ -327,7 +349,11 @@ impl Server {
             ..Default::default()
         };
         // Kernels before 7.23 take the reply's first fields only.
-        let len = if init.minor <= 22 { FUSE_COMPAT_22_INIT_OUT_SIZE } else { size_of::<fuse_init_out>() };
+        let len = if init.minor <= 22 {
+            FUSE_COMPAT_22_INIT_OUT_SIZE
+        } else {
+            size_of::<fuse_init_out>()
+        };
         reply(unique, &out.as_bytes()[..len])
     }
 
@@ -338,7 +364,15 @@ impl Server {
             EXIT_ID => (0, S_IFREG),
             _ => return None,
         };
-        Some(fuse_attr { ino: node, size, blocks: size.div_ceil(512), mode, nlink: 1, blksize: 4096, ..Default::default() })
+        Some(fuse_attr {
+            ino: node,
+            size,
+            blocks: size.div_ceil(512),
+            mode,
+            nlink: 1,
+            blksize: 4096,
+            ..Default::default()
+        })
     }
 
     /// Whether `node` is the package, under either of the names it is served
@@ -350,7 +384,14 @@ impl Server {
 
     fn entry(&self, node: u64) -> fuse_entry_out {
         let attr = self.attr(node).expect("entries are for nodes that exist");
-        fuse_entry_out { nodeid: node, generation: node, entry_valid: VALID, attr_valid: VALID, attr, ..Default::default() }
+        fuse_entry_out {
+            nodeid: node,
+            generation: node,
+            entry_valid: VALID,
+            attr_valid: VALID,
+            attr,
+            ..Default::default()
+        }
     }
 
     /// `size` bytes from `offset`, zeros past the end of the package.
@@ -373,6 +414,7 @@ impl Server {
             data.extend_from_slice(&self.block[within..within + take]);
             at += take as u64;
         }
+        self.served.fetch_add(data.len() as u64, Ordering::Relaxed);
         reply(unique, &data)
     }
 
@@ -401,7 +443,11 @@ impl Server {
 
 fn reply(unique: u64, body: &[u8]) -> Vec<u8> {
     let len = size_of::<fuse_out_header>() + body.len();
-    let header = fuse_out_header { len: len as u32, error: 0, unique };
+    let header = fuse_out_header {
+        len: len as u32,
+        error: 0,
+        unique,
+    };
     let mut out = Vec::with_capacity(len);
     out.extend_from_slice(header.as_bytes());
     out.extend_from_slice(body);
@@ -409,23 +455,31 @@ fn reply(unique: u64, body: &[u8]) -> Vec<u8> {
 }
 
 fn error(unique: u64, errno: i32) -> Vec<u8> {
-    fuse_out_header { len: size_of::<fuse_out_header>() as u32, error: -errno, unique }.as_bytes().to_vec()
+    fuse_out_header {
+        len: size_of::<fuse_out_header>() as u32,
+        error: -errno,
+        unique,
+    }
+    .as_bytes()
+    .to_vec()
 }
 
 #[cfg(target_os = "android")]
-pub use device::{mount, Mount, Mounted};
+pub use device::{Mount, Mounted, mount};
 
 #[cfg(target_os = "android")]
 mod device {
-    use super::{Fault, Followed, Handled, Name, Server, Source, EXIT, MOUNT_POINT, PACKAGE};
+    use super::{EXIT, Fault, Followed, Handled, MOUNT_POINT, Name, PACKAGE, Server, Source};
     use crate::adb::Offer;
-    use anyhow::{anyhow, Context, Result};
+    use anyhow::{Context, Result, anyhow};
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
     use std::io::{ErrorKind, Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
@@ -445,6 +499,7 @@ mod device {
         thread: JoinHandle<(S, Result<Option<Fault>>)>,
         path: PathBuf,
         followed: Followed,
+        served: Arc<AtomicU64>,
     }
 
     /// Mount the package `offer` describes at /sideload, read-only, served
@@ -469,8 +524,12 @@ mod device {
             dev.as_raw_fd(),
             offer.block_size
         );
-        let (source, target, kind, data) =
-            (CString::new("/dev/fuse")?, CString::new(MOUNT_POINT)?, CString::new("fuse")?, CString::new(options)?);
+        let (source, target, kind, data) = (
+            CString::new("/dev/fuse")?,
+            CString::new(MOUNT_POINT)?,
+            CString::new("fuse")?,
+            CString::new(options)?,
+        );
         let flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_RDONLY | libc::MS_NOEXEC;
         if unsafe { libc::mount(source.as_ptr(), target.as_ptr(), kind.as_ptr(), flags, data.as_ptr().cast()) } != 0 {
             return Err(std::io::Error::last_os_error()).context("mount the package at /sideload");
@@ -490,6 +549,7 @@ mod device {
             };
             let mut server = Server::new(self.offer, self.name);
             let followed = server.followed();
+            let served = server.served.clone();
             let thread = thread::Builder::new()
                 .name("sideload-fuse".into())
                 .spawn(move || {
@@ -498,7 +558,12 @@ mod device {
                     (source, result.map(|()| server.fault().cloned()))
                 })
                 .expect("the FUSE thread starts");
-            Mount { thread, followed, path }
+            Mount {
+                thread,
+                followed,
+                path,
+                served,
+            }
         }
     }
 
@@ -543,6 +608,10 @@ mod device {
     }
 
     impl<S> Mount<S> {
+        pub fn served(&self) -> u64 {
+            self.served.load(Ordering::Relaxed)
+        }
+
         /// Follow the reading of the `len` bytes of the package from
         /// `start`, from now on: an update's payload, which the program
         /// that installs it reads from its start to its end.
@@ -595,7 +664,10 @@ mod device {
                 }
             } else {
                 let _ = skyward_sys::kmsg("sideload: the serving thread is stuck; leaving it behind\n");
-                (None, Err(anyhow!("the sideload serving thread is stuck in a fetch from the computer")))
+                (
+                    None,
+                    Err(anyhow!("the sideload serving thread is stuck in a fetch from the computer")),
+                )
             };
             let unmounted = skyward_block::mount::umount_detach(Path::new(MOUNT_POINT));
             (source, stopped.and(unmounted).and(served))
@@ -615,13 +687,13 @@ mod device {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::{identify, Package};
+    use crate::package::{Package, identify};
     use polyfuse_kernel::fuse_open_in;
     use std::cell::Cell;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use zerocopy::Immutable;
-    use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
+    use zip::write::SimpleFileOptions;
 
     fn request<T: IntoBytes + Immutable>(opcode: fuse_opcode, node: u64, body: &T) -> Vec<u8> {
         request_raw(opcode, node, body.as_bytes())
@@ -639,7 +711,15 @@ mod tests {
     }
 
     fn read_request(offset: u64, size: u32) -> Vec<u8> {
-        request(fuse_opcode::FUSE_READ, PACKAGE_ID, &fuse_read_in { offset, size, ..Default::default() })
+        request(
+            fuse_opcode::FUSE_READ,
+            PACKAGE_ID,
+            &fuse_read_in {
+                offset,
+                size,
+                ..Default::default()
+            },
+        )
     }
 
     /// The reply's header and body.
@@ -657,13 +737,25 @@ mod tests {
     }
 
     fn server_for(package: &[u8]) -> Server {
-        Server::new(Offer { size: package.len() as u64, block_size: 4096 }, None)
+        Server::new(
+            Offer {
+                size: package.len() as u64,
+                block_size: 4096,
+            },
+            None,
+        )
     }
 
     /// The same package, served under the name of the file the computer
     /// sent as well as under package.zip.
     fn server_named_for(package: &[u8], name: Name) -> Server {
-        Server::new(Offer { size: package.len() as u64, block_size: 4096 }, Some(name))
+        Server::new(
+            Offer {
+                size: package.len() as u64,
+                block_size: 4096,
+            },
+            Some(name),
+        )
     }
 
     /// Fetching the blocks of `package`, counting the fetches.
@@ -680,19 +772,42 @@ mod tests {
     fn the_package_is_the_one_file_and_exit_stops_serving() {
         let (pkg, fetches) = (package(), Cell::new(0));
         let (mut server, mut fetch) = (server_for(&pkg), fetch_from(&pkg, &fetches));
-        let (h, body) = split(server.handle(&request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"package.zip\0"), &mut fetch).unwrap());
+        let (h, body) = split(
+            server
+                .handle(&request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"package.zip\0"), &mut fetch)
+                .unwrap(),
+        );
         assert_eq!(h.error, 0);
         let (entry, _) = fuse_entry_out::read_from_prefix(&body).unwrap();
-        assert_eq!((entry.nodeid, entry.attr.size, entry.attr.mode), (PACKAGE_ID, 10_240, S_IFREG | 0o444));
-        let (h, _) = split(server.handle(&request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"other.zip\0"), &mut fetch).unwrap());
+        assert_eq!(
+            (entry.nodeid, entry.attr.size, entry.attr.mode),
+            (PACKAGE_ID, 10_240, S_IFREG | 0o444)
+        );
+        let (h, _) = split(
+            server
+                .handle(&request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"other.zip\0"), &mut fetch)
+                .unwrap(),
+        );
         assert_eq!(h.error, -libc::ENOENT);
-        let (h, _) = split(server.handle(&request(fuse_opcode::FUSE_OPEN, PACKAGE_ID, &fuse_open_in::default()), &mut fetch).unwrap());
+        let (h, _) = split(
+            server
+                .handle(&request(fuse_opcode::FUSE_OPEN, PACKAGE_ID, &fuse_open_in::default()), &mut fetch)
+                .unwrap(),
+        );
         assert_eq!(h.error, 0);
-        let (h, _) = split(server.handle(&request(fuse_opcode::FUSE_OPEN, EXIT_ID, &fuse_open_in::default()), &mut fetch).unwrap());
+        let (h, _) = split(
+            server
+                .handle(&request(fuse_opcode::FUSE_OPEN, EXIT_ID, &fuse_open_in::default()), &mut fetch)
+                .unwrap(),
+        );
         assert_eq!(h.error, -libc::EPERM);
-        let exit = server.handle(&request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"exit\0"), &mut fetch).unwrap();
+        let exit = server
+            .handle(&request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"exit\0"), &mut fetch)
+            .unwrap();
         assert!(matches!(exit, Handled::Exit(_)));
-        let forget = server.handle(&request_raw(fuse_opcode::FUSE_FORGET, PACKAGE_ID, &[0; 8]), &mut fetch).unwrap();
+        let forget = server
+            .handle(&request_raw(fuse_opcode::FUSE_FORGET, PACKAGE_ID, &[0; 8]), &mut fetch)
+            .unwrap();
         assert_eq!(forget, Handled::Silent);
     }
 
@@ -706,7 +821,10 @@ mod tests {
         let (h, body) = split(server.handle(&lookup, &mut fetch).unwrap());
         assert_eq!(h.error, 0);
         let (entry, _) = fuse_entry_out::read_from_prefix(&body).unwrap();
-        assert_eq!((entry.nodeid, entry.attr.size, entry.attr.mode), (NAMED_ID, 10_240, S_IFREG | 0o444));
+        assert_eq!(
+            (entry.nodeid, entry.attr.size, entry.attr.mode),
+            (NAMED_ID, 10_240, S_IFREG | 0o444)
+        );
         // package.zip still is, and still is its own node: the kernel checks
         // the name it asked for against the one the filesystem answers with.
         let lookup = request_raw(fuse_opcode::FUSE_LOOKUP, ROOT_ID, b"package.zip\0");
@@ -714,7 +832,15 @@ mod tests {
         let (entry, _) = fuse_entry_out::read_from_prefix(&body).unwrap();
         assert_eq!(entry.nodeid, PACKAGE_ID);
         // Reading under the name reads the same package.
-        let read = request(fuse_opcode::FUSE_READ, NAMED_ID, &fuse_read_in { offset: 0, size: 64, ..Default::default() });
+        let read = request(
+            fuse_opcode::FUSE_READ,
+            NAMED_ID,
+            &fuse_read_in {
+                offset: 0,
+                size: 64,
+                ..Default::default()
+            },
+        );
         let (h, body) = split(server.handle(&read, &mut fetch).unwrap());
         assert_eq!((h.error, body), (0, pkg[..64].to_vec()));
         let open = request(fuse_opcode::FUSE_OPEN, NAMED_ID, &fuse_open_in::default());
@@ -733,13 +859,24 @@ mod tests {
         assert_eq!(split(server.handle(&getattr, &mut fetch).unwrap()).0.error, -libc::ENOENT);
         let open = request(fuse_opcode::FUSE_OPEN, NAMED_ID, &fuse_open_in::default());
         assert_eq!(split(server.handle(&open, &mut fetch).unwrap()).0.error, -libc::ENOENT);
-        let read = request(fuse_opcode::FUSE_READ, NAMED_ID, &fuse_read_in { offset: 0, size: 64, ..Default::default() });
+        let read = request(
+            fuse_opcode::FUSE_READ,
+            NAMED_ID,
+            &fuse_read_in {
+                offset: 0,
+                size: 64,
+                ..Default::default()
+            },
+        );
         assert_eq!(split(server.handle(&read, &mut fetch).unwrap()).0.error, -libc::ENOENT);
     }
 
     #[test]
     fn only_a_single_path_name_is_a_name_to_serve_a_package_under() {
-        assert_eq!(Name::new("ishtar-ota.zip").map(|n| n.as_str().to_string()), Some("ishtar-ota.zip".into()));
+        assert_eq!(
+            Name::new("ishtar-ota.zip").map(|n| n.as_str().to_string()),
+            Some("ishtar-ota.zip".into())
+        );
         assert_eq!(Name::new("../../etc/passwd"), None, "a path of its own");
         assert_eq!(Name::new("a/b.zip"), None);
         assert_eq!(Name::new("."), None);
@@ -756,7 +893,11 @@ mod tests {
         assert_eq!(named("/sdcard/Download/ishtar-ota.zip"), Some("ishtar-ota.zip".into()));
         // The last part of a path is what it is called, whatever holds it.
         assert_eq!(named("/sdcard/Download"), Some("Download".into()));
-        assert_eq!(named("ishtar-ota.zip"), Some("ishtar-ota.zip".into()), "a path with no folder to it");
+        assert_eq!(
+            named("ishtar-ota.zip"),
+            Some("ishtar-ota.zip".into()),
+            "a path with no folder to it"
+        );
         assert_eq!(named("/"), None, "a path whose last part is the root");
         assert_eq!(named(".."), None);
     }
@@ -765,15 +906,30 @@ mod tests {
     fn init_answers_with_the_older_of_both_versions() {
         let (pkg, fetches) = (package(), Cell::new(0));
         let (mut server, mut fetch) = (server_for(&pkg), fetch_from(&pkg, &fetches));
-        let init = fuse_init_in { major: 7, minor: 38, max_readahead: 131_072, flags: 0 };
+        let init = fuse_init_in {
+            major: 7,
+            minor: 38,
+            max_readahead: 131_072,
+            flags: 0,
+        };
         let (h, body) = split(server.handle(&request(fuse_opcode::FUSE_INIT, 0, &init), &mut fetch).unwrap());
         assert_eq!(h.error, 0);
         let (out, _) = fuse_init_out::read_from_prefix(&body).unwrap();
         assert_eq!((out.major, out.minor, out.max_readahead), (7, FUSE_KERNEL_MINOR_VERSION, 131_072));
-        let old = fuse_init_in { major: 7, minor: 22, max_readahead: 0, flags: 0 };
+        let old = fuse_init_in {
+            major: 7,
+            minor: 22,
+            max_readahead: 0,
+            flags: 0,
+        };
         let (_, body) = split(server.handle(&request(fuse_opcode::FUSE_INIT, 0, &old), &mut fetch).unwrap());
         assert_eq!(body.len(), FUSE_COMPAT_22_INIT_OUT_SIZE);
-        let wrong = fuse_init_in { major: 6, minor: 0, max_readahead: 0, flags: 0 };
+        let wrong = fuse_init_in {
+            major: 6,
+            minor: 0,
+            max_readahead: 0,
+            flags: 0,
+        };
         let (h, _) = split(server.handle(&request(fuse_opcode::FUSE_INIT, 0, &wrong), &mut fetch).unwrap());
         assert_eq!(h.error, -libc::EPROTO);
     }
@@ -811,7 +967,11 @@ mod tests {
         server.handle(&read_request(6000, 2000), &mut fetch).unwrap();
         assert_eq!(followed.read(), 3192, "a block read again adds nothing");
         server.handle(&read_request(8192, 2048), &mut fetch).unwrap();
-        assert_eq!(followed.read(), 4000, "the third block, read before the part was named, counts now, up to the part's end");
+        assert_eq!(
+            followed.read(),
+            4000,
+            "the third block, read before the part was named, counts now, up to the part's end"
+        );
         server.handle(&read_request(12_288, 100), &mut fetch).unwrap();
         assert_eq!(followed.read(), 4000, "past the package's end there is none of the part");
     }
@@ -828,6 +988,18 @@ mod tests {
         assert_eq!(followed.read(), 0);
         server.handle(&read_request(8192, 4096), &mut fetch).unwrap();
         assert_eq!(followed.read(), 2048, "the short last block is all of the part");
+    }
+
+    #[test]
+    fn rereading_a_package_counts_as_activity_without_inflating_payload_progress() {
+        let (pkg, fetches) = (package(), Cell::new(0));
+        let (mut server, mut fetch) = (server_for(&pkg), fetch_from(&pkg, &fetches));
+        let followed = server.followed();
+        followed.follow(4096, 4096);
+        server.handle(&read_request(4096, 4096), &mut fetch).unwrap();
+        assert_eq!((server.served(), followed.read()), (4096, 4096));
+        server.handle(&read_request(4096, 4096), &mut fetch).unwrap();
+        assert_eq!((server.served(), followed.read()), (8192, 4096));
     }
 
     /// The package as a program reads it through the filesystem: each read
@@ -877,7 +1049,8 @@ mod tests {
         ];
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, data) in entries {
-            zip.start_file(name, SimpleFileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
+            zip.start_file(name, SimpleFileOptions::default().compression_method(CompressionMethod::Stored))
+                .unwrap();
             zip.write_all(data).unwrap();
         }
         zip.finish().unwrap().into_inner()
@@ -891,21 +1064,34 @@ mod tests {
         let followed = server.followed();
         // Telling what the package is reads its start and the zip's
         // directory, at its end, before anything is known of the payload.
-        let whole = Through { server: &mut server, package: &pkg, at: 0 };
-        let Package::Update(update) = identify(whole).unwrap() else { panic!("an update package") };
+        let whole = Through {
+            server: &mut server,
+            package: &pkg,
+            at: 0,
+        };
+        let Package::Update(update) = identify(whole).unwrap() else {
+            panic!("an update package")
+        };
         assert_eq!(update.payload_size, 40_000);
         followed.follow(update.payload_offset, update.payload_size);
         assert_eq!(followed.read(), 0, "none of the payload has been read for the update yet");
         // The program that installs the update reads the payload from its
         // start to its end.
-        let mut through = Through { server: &mut server, package: &pkg, at: update.payload_offset };
+        let mut through = Through {
+            server: &mut server,
+            package: &pkg,
+            at: update.payload_offset,
+        };
         let (mut taken, mut chunk) = (0u64, vec![0u8; 3000]);
         while taken < update.payload_size {
             let want = (update.payload_size - taken).min(chunk.len() as u64) as usize;
             through.read_exact(&mut chunk[..want]).unwrap();
             taken += want as u64;
             let read = followed.read();
-            assert!((taken..=taken + 4096).contains(&read), "{read} of the payload counted with {taken} taken");
+            assert!(
+                (taken..=taken + 4096).contains(&read),
+                "{read} of the payload counted with {taken} taken"
+            );
             assert!(read <= update.payload_size);
         }
         assert_eq!(followed.read(), update.payload_size, "all of the payload, and no more");
@@ -933,7 +1119,10 @@ mod tests {
 
     #[test]
     fn a_failed_fetch_fails_the_read() {
-        let offer = Offer { size: 10_240, block_size: 4096 };
+        let offer = Offer {
+            size: 10_240,
+            block_size: 4096,
+        };
         let mut server = Server::new(offer, None);
         let mut fetch = |_: u64, _: &mut [u8]| Err("USB: the computer closed the stream".to_string());
         let (h, _) = split(server.handle(&read_request(0, 4096), &mut fetch).unwrap());
@@ -945,7 +1134,11 @@ mod tests {
     fn unknown_and_unsupported_requests_get_enosys() {
         let (pkg, fetches) = (package(), Cell::new(0));
         let (mut server, mut fetch) = (server_for(&pkg), fetch_from(&pkg, &fetches));
-        let (h, _) = split(server.handle(&request_raw(fuse_opcode::FUSE_STATFS, ROOT_ID, &[]), &mut fetch).unwrap());
+        let (h, _) = split(
+            server
+                .handle(&request_raw(fuse_opcode::FUSE_STATFS, ROOT_ID, &[]), &mut fetch)
+                .unwrap(),
+        );
         assert_eq!(h.error, -libc::ENOSYS);
         let mut odd = request_raw(fuse_opcode::FUSE_STATFS, ROOT_ID, &[]);
         odd[4..8].copy_from_slice(&999u32.to_le_bytes());
@@ -961,7 +1154,13 @@ mod tests {
         let content: Vec<u8> = (0..150_000u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(&path, &content).unwrap();
         let (mut file, offer) = LocalFile::open(&path).unwrap();
-        assert_eq!(offer, Offer { size: 150_000, block_size: FILE_BLOCK });
+        assert_eq!(
+            offer,
+            Offer {
+                size: 150_000,
+                block_size: FILE_BLOCK
+            }
+        );
         assert!(offer.check().is_ok());
         let mut server = Server::new(offer, None);
         let mut fetch = |index: u64, out: &mut [u8]| file.read_block(index, out);
@@ -995,7 +1194,10 @@ mod tests {
         assert_eq!(file_block(16 << 30), FILE_BLOCK, "the most the usual blocks hold");
         assert_eq!(file_block((16 << 30) + 1), 2 * FILE_BLOCK);
         let size = 100 << 30;
-        let offer = Offer { size, block_size: file_block(size) };
+        let offer = Offer {
+            size,
+            block_size: file_block(size),
+        };
         assert!(offer.check().is_ok());
     }
 }

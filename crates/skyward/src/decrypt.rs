@@ -79,12 +79,6 @@ impl Decryptor {
     }
 }
 
-/// Do `work` with the phone's key service, reached afresh for it, and say
-/// why it failed in words for the page.
-pub fn with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T, String> {
-    work_with_key_service(work).map_err(|e| format!("{e:#}"))
-}
-
 fn work_with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T> {
     let binder = Binder::open()?;
     let service = KeyMint::open(&binder)?;

@@ -1,8 +1,8 @@
 use crate::snapshots::{self, Merge, SnapshotStatus, Snapshots};
-use crate::{snapshot_state, MergeStatus, Slot, SnapshotState, METADATA};
-use anyhow::{ensure, Context, Result};
-use skyward_block::{devnum, dm, mount, BY_NAME};
-use skyward_lp::{Extent, Metadata, Partition, ATTR_DISABLED};
+use crate::{METADATA, MergeStatus, Slot, SnapshotState, snapshot_state};
+use anyhow::{Context, Result, ensure};
+use skyward_block::{BY_NAME, devnum, dm, mount};
+use skyward_lp::{ATTR_DISABLED, Extent, Metadata, Partition};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -46,7 +46,13 @@ fn block_devices(md: &Metadata, super_dev: &Path) -> Result<Vec<(u32, u32)>> {
     md.block_devices
         .iter()
         .enumerate()
-        .map(|(i, d)| if i == 0 { devnum(super_dev) } else { devnum(Path::new(BY_NAME).join(&d.partition_name)) })
+        .map(|(i, d)| {
+            if i == 0 {
+                devnum(super_dev)
+            } else {
+                devnum(Path::new(BY_NAME).join(&d.partition_name))
+            }
+        })
         .collect()
 }
 
@@ -55,7 +61,11 @@ pub(crate) fn targets(p: &Partition, devices: &[(u32, u32)]) -> Vec<dm::Target> 
     p.extents
         .iter()
         .map(|e| match *e {
-            Extent::Linear { sectors, device, sector } => dm::Target::Linear { sectors, device: devices[device], offset: sector },
+            Extent::Linear { sectors, device, sector } => dm::Target::Linear {
+                sectors,
+                device: devices[device],
+                offset: sector,
+            },
             Extent::Zero { sectors } => dm::Target::Zero { sectors },
         })
         .collect()
@@ -73,10 +83,17 @@ fn map_and_mount(p: &Partition, devices: &[(u32, u32)], slot: Slot) -> Result<Mo
     let mount_point = mount_point(base(p, slot));
     let mounted = (|| -> Result<String> {
         fs::create_dir_all(&mount_point).with_context(|| format!("create {}", mount_point.display()))?;
-        Ok(mount::mount_ro_over(&device, &mount_point).with_context(|| format!("mount {}", p.name))?.to_string())
+        Ok(mount::mount_ro_over(&device, &mount_point)
+            .with_context(|| format!("mount {}", p.name))?
+            .to_string())
     })();
     match mounted {
-        Ok(filesystem) => Ok(Mounted { partition: p.name.clone(), device, mount_point, filesystem }),
+        Ok(filesystem) => Ok(Mounted {
+            partition: p.name.clone(),
+            device,
+            mount_point,
+            filesystem,
+        }),
         Err(e) => Err(match dm::remove(&p.name) {
             Ok(()) => e,
             Err(r) => e.context(format!("removing {} afterwards failed too: {r:#}", p.name)),
@@ -126,7 +143,10 @@ pub fn mount_partitions(slot: Slot) -> Result<Mounts> {
     };
 
     let shown = mounted_partitions(slot)?;
-    let mut mounts = Mounts { partitions: Vec::new(), damaged: md.damaged.clone() };
+    let mut mounts = Mounts {
+        partitions: Vec::new(),
+        damaged: md.damaged.clone(),
+    };
     for p in slot_partitions(&md, slot) {
         if let Some(m) = shown.iter().find(|m| m.partition == p.name) {
             mounts.partitions.push(m.clone());
@@ -184,7 +204,14 @@ pub fn check_merge(slot: Slot, tell: &dyn Fn(MergeStatus) -> Result<()>) -> Resu
 
 /// Map partition `p` through its snapshot `status` and mount it read-only;
 /// a snapshot that does not mount is taken apart again.
-fn mount_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p: &Partition, status: &SnapshotStatus, slot: Slot) -> Result<Mounted> {
+fn mount_snapshot(
+    snaps: &Snapshots,
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    p: &Partition,
+    status: &SnapshotStatus,
+    slot: Slot,
+) -> Result<Mounted> {
     let device = snapshots::map_snapshot(snaps, md, devices, p, status)?;
     mount_mapped(p, device, slot)
 }
@@ -195,10 +222,17 @@ fn mount_mapped(p: &Partition, device: PathBuf, slot: Slot) -> Result<Mounted> {
     let mount_point = mount_point(base(p, slot));
     let mounted = (|| -> Result<String> {
         fs::create_dir_all(&mount_point).with_context(|| format!("create {}", mount_point.display()))?;
-        Ok(mount::mount_ro_over(&device, &mount_point).with_context(|| format!("mount {}", p.name))?.to_string())
+        Ok(mount::mount_ro_over(&device, &mount_point)
+            .with_context(|| format!("mount {}", p.name))?
+            .to_string())
     })();
     match mounted {
-        Ok(filesystem) => Ok(Mounted { partition: p.name.clone(), device, mount_point, filesystem }),
+        Ok(filesystem) => Ok(Mounted {
+            partition: p.name.clone(),
+            device,
+            mount_point,
+            filesystem,
+        }),
         Err(e) => Err(match snapshots::unmap_snapshot(&p.name) {
             Ok(()) => e,
             Err(r) => e.context(format!("taking {} apart afterwards failed too: {r:#}", p.name)),
@@ -217,7 +251,10 @@ pub fn slot_bases(slot: Slot) -> Result<Vec<String>> {
 /// the order super lists them.
 pub fn slot_sizes(slot: Slot) -> Result<Vec<(String, u64)>> {
     let md = skyward_lp::read(&super_device(), slot.number())?;
-    Ok(slot_partitions(&md, slot).into_iter().map(|p| (base(p, slot).to_string(), bytes(p))).collect())
+    Ok(slot_partitions(&md, slot)
+        .into_iter()
+        .map(|p| (base(p, slot).to_string(), bytes(p)))
+        .collect())
 }
 
 /// One of the slot's logical partitions mapped whole under a name of its
@@ -238,9 +275,16 @@ pub fn map_whole(slot: Slot, base_name: &str, name: &str, readonly: bool) -> Res
     let md = skyward_lp::read(&super_dev, slot.number())?;
     let devices = block_devices(&md, &super_dev)?;
     let full = format!("{base_name}{}", slot.suffix());
-    let p = slot_partitions(&md, slot).into_iter().find(|p| p.name == full).with_context(|| format!("super holds no {full}"))?;
+    let p = slot_partitions(&md, slot)
+        .into_iter()
+        .find(|p| p.name == full)
+        .with_context(|| format!("super holds no {full}"))?;
     let device = dm::create(name, &targets(p, &devices), readonly)?;
-    Ok(Whole { name: name.into(), device, size: bytes(p) })
+    Ok(Whole {
+        name: name.into(),
+        device,
+        size: bytes(p),
+    })
 }
 
 /// Remove a mapping [`map_whole`] made.
@@ -253,7 +297,12 @@ pub fn unmap_whole(whole: &Whole) -> Result<()> {
 /// can be written into.
 pub fn slot_names(slot: Slot) -> Result<Vec<String>> {
     let md = skyward_lp::read(&super_device(), slot.number())?;
-    Ok(md.partitions.iter().filter_map(|p| p.name.strip_suffix(slot.suffix())).map(str::to_string).collect())
+    Ok(md
+        .partitions
+        .iter()
+        .filter_map(|p| p.name.strip_suffix(slot.suffix()))
+        .map(str::to_string)
+        .collect())
 }
 
 /// A logical partition [`remake`] readied for an image, mapped writable as
@@ -295,9 +344,17 @@ fn remake_on(super_dev: &Path, slot: Slot, base_name: &str, bytes: u64) -> Resul
     let mapped = dm::status(&name)?;
     if let Some(device) = mapped {
         let points = mount::points_of(device)?;
-        ensure!(points.is_empty(), "{name} is mounted on {}, and is written only once it is off", points[0].display());
+        ensure!(
+            points.is_empty(),
+            "{name} is mounted on {}, and is written only once it is off",
+            points[0].display()
+        );
     }
-    let before = md.partition(&name).with_context(|| format!("super holds no {name}"))?.extents.clone();
+    let before = md
+        .partition(&name)
+        .with_context(|| format!("super holds no {name}"))?
+        .extents
+        .clone();
     md.resize(&name, bytes)?;
     let p = md.partition(&name).expect("resizing keeps the partition");
     if p.extents != before {
@@ -311,7 +368,12 @@ fn remake_on(super_dev: &Path, slot: Slot, base_name: &str, bytes: u64) -> Resul
             (PathBuf::from(format!("/dev/block/dm-{minor}")), Some(table))
         }
     };
-    Ok(Remade { name, device, size: p.bytes(), held })
+    Ok(Remade {
+        name,
+        device,
+        size: p.bytes(),
+        held,
+    })
 }
 
 /// Take away the mapping [`remake`] made once the image is written; one
@@ -458,7 +520,12 @@ pub fn mounted_partitions(slot: Slot) -> Result<Vec<Mounted>> {
         if shown.device != devnum(&device)? {
             continue;
         }
-        let m = Mounted { partition: name.to_string(), device, mount_point, filesystem: shown.filesystem };
+        let m = Mounted {
+            partition: name.to_string(),
+            device,
+            mount_point,
+            filesystem: shown.filesystem,
+        };
         found.push((minor.parse::<u32>()?, m));
     }
     found.sort_by_key(|(minor, _)| *minor);
@@ -550,7 +617,11 @@ mod tests {
 
         // A name of its own, which nothing the recovery mapped has.
         let mut md = skyward_lp::read(&device, slot.number()).unwrap();
-        let taken = md.partitions.iter().position(|p| p.name == format!("vendor_dlkm{}", slot.suffix())).expect("super lists vendor_dlkm");
+        let taken = md
+            .partitions
+            .iter()
+            .position(|p| p.name == format!("vendor_dlkm{}", slot.suffix()))
+            .expect("super lists vendor_dlkm");
         let name = format!("scratch{}", slot.suffix());
         md.partitions[taken].name = name.clone();
         skyward_lp::write(&device, &md, &[slot.number()]).unwrap();
@@ -562,8 +633,14 @@ mod tests {
         assert_eq!((remade.name.as_str(), remade.size), (name.as_str(), 8 << 20));
         assert_eq!(skyward_block::size_bytes(&remade.device).unwrap(), 8 << 20);
         write_whole(&remade.device, &small);
-        let Extent::Linear { sector, .. } = md.partitions[taken].extents[0] else { panic!("its first extent lies on super") };
-        assert_eq!(read_at(&device, sector * 512, small.len()), small, "what is written to it lies where its first extent is");
+        let Extent::Linear { sector, .. } = md.partitions[taken].extents[0] else {
+            panic!("its first extent lies on super")
+        };
+        assert_eq!(
+            read_at(&device, sector * 512, small.len()),
+            small,
+            "what is written to it lies where its first extent is"
+        );
         settle(&remade).unwrap();
         assert!(dm::status(&name).unwrap().is_none(), "a mapping made for the image goes with it");
         for number in [0, 1] {
@@ -591,7 +668,10 @@ mod tests {
         let unchanged = skyward_lp::read(&device, slot.number()).unwrap();
         dm::remove(&name).unwrap();
         let err = remake_on(&device, slot, "scratch", md.block_devices[0].size).unwrap_err();
-        assert!(format!("{err:#}").contains("too few free") || format!("{err:#}").contains("its group"), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("too few free") || format!("{err:#}").contains("its group"),
+            "{err:#}"
+        );
         assert_eq!(skyward_lp::read(&device, slot.number()).unwrap(), unchanged);
         assert!(dm::status(&name).unwrap().is_none());
 

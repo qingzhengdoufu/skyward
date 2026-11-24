@@ -95,8 +95,15 @@ pub enum Install {
     },
     /// `overwriting` says whether the update writes over the running
     /// system.
-    Updating { version: Option<String>, stage: Option<Stage>, overwriting: bool },
-    Flashing { partition: String, stage: Option<Stage> },
+    Updating {
+        version: Option<String>,
+        stage: Option<Stage>,
+        overwriting: bool,
+    },
+    Flashing {
+        partition: String,
+        stage: Option<Stage>,
+    },
     /// A zip with an install script waits for the user to agree to run it.
     ConfirmingScript,
     /// A system to install beside the installed one waits for the room its
@@ -379,10 +386,20 @@ impl App {
                     (Outcome::Failed(_), Install::Updating { overwriting: true, .. }) => Some(Damage::System),
                     // A logical partition made as large as the image no
                     // longer holds what it held, written to or not.
-                    (Outcome::Failed(_), Install::Flashing { partition, stage: Some(Stage::Resizing) }) => Some(Damage::Partition(partition.clone())),
-                    (Outcome::Failed(_), Install::Flashing { partition, stage: Some(Stage::Flashing { done, .. }) }) if *done > 0 => {
-                        Some(Damage::Partition(partition.clone()))
-                    }
+                    (
+                        Outcome::Failed(_),
+                        Install::Flashing {
+                            partition,
+                            stage: Some(Stage::Resizing),
+                        },
+                    ) => Some(Damage::Partition(partition.clone())),
+                    (
+                        Outcome::Failed(_),
+                        Install::Flashing {
+                            partition,
+                            stage: Some(Stage::Flashing { done, .. }),
+                        },
+                    ) if *done > 0 => Some(Damage::Partition(partition.clone())),
                     (Outcome::Failed(_), Install::Scripting { running: true, .. }) => Some(Damage::Script),
                     _ => None,
                 };

@@ -6,14 +6,18 @@
 use crate::description::{Described, Kind};
 use crate::phone::{Happens, Phone};
 use crate::script::{Program, Socket};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use skyward_config::Service;
 use std::path::Path;
 
 /// The key service, and the packages whose services it serves besides: it
 /// is one program behind them all.
 const KEYS: &str = "android.hardware.security.keymint.IKeyMintDevice/default";
-const KEY_PACKAGES: [&str; 3] = ["android.hardware.security.keymint", "android.hardware.security.secureclock", "android.hardware.security.sharedsecret"];
+const KEY_PACKAGES: [&str; 3] = [
+    "android.hardware.security.keymint",
+    "android.hardware.security.secureclock",
+    "android.hardware.security.sharedsecret",
+];
 
 /// The credential service and the boot control, each by its package and
 /// its interface; a phone has either as a service of the newer kind or of
@@ -58,7 +62,10 @@ pub struct Driver {
 }
 
 /// The driver of NXP's NFC controller, which NXP's secure element is in.
-const NXP_CONTROLLER: Driver = Driver { module: "nxp-nci", node: "/dev/nq-nci" };
+const NXP_CONTROLLER: Driver = Driver {
+    module: "nxp-nci",
+    node: "/dev/nq-nci",
+};
 
 /// The makes of weaver, each by what the name of its program ends in, the
 /// longer endings first, with the driver its secure element takes where a
@@ -68,7 +75,11 @@ const NXP_CONTROLLER: Driver = Driver { module: "nxp-nci", node: "/dev/nq-nci" }
 const WEAVERS: [(&str, Through, Option<Driver>); 3] = [
     (".thales", Through::ElementService, None),
     (".nxp-qti", Through::ElementService, Some(NXP_CONTROLLER)),
-    ("weaver-service", Through::Own("vendor.goodix.hardware.secure_element_aidl.IGdxEse"), None),
+    (
+        "weaver-service",
+        Through::Own("vendor.goodix.hardware.secure_element_aidl.IGdxEse"),
+        None,
+    ),
 ];
 
 /// Qualcomm's programs between Android and the secure world, by the names
@@ -94,7 +105,11 @@ const HARDWARE_DIRECTORY_READY: &str = "hwservicemanager.ready";
 /// program and runs on its libraries alone.
 const VENDOR_LIBRARIES: [&str; 3] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"];
 const ODM_LIBRARIES: [&str; 4] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"];
-const SYSTEM_LIBRARIES: [&str; 3] = ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64"];
+const SYSTEM_LIBRARIES: [&str; 3] = [
+    "/mnt/system/system/lib64/bootstrap",
+    "/mnt/system/system/lib64",
+    "/mnt/system_ext/lib64",
+];
 
 /// The installed system's folders, where a program on the vendor or the
 /// odm partition finds the few libraries it asks for that none of its own
@@ -116,7 +131,11 @@ pub(crate) fn libraries_of(path: &str, bundle: Option<&Path>) -> Vec<String> {
         _ => (&SYSTEM_LIBRARIES, &[]),
     };
     let bundle = bundle.map(|dir| dir.to_string_lossy().into_owned());
-    own.iter().map(|l| l.to_string()).chain(bundle).chain(shared.iter().map(|l| l.to_string())).collect()
+    own.iter()
+        .map(|l| l.to_string())
+        .chain(bundle)
+        .chain(shared.iter().map(|l| l.to_string()))
+        .collect()
 }
 
 /// A program to start, with what init gives it that a recovery has to
@@ -136,20 +155,29 @@ impl From<Service> for Started {
     /// A program init gives nothing besides what `service` says.
     fn from(service: Service) -> Started {
         use crate::script::SocketKind;
-        let sockets = service.sockets.iter().map(|s| Socket {
-            name: s.name.clone(),
-            kind: match s.kind.as_str() {
-                "dgram" => SocketKind::Dgram,
-                "seqpacket" => SocketKind::Seqpacket,
-                _ => SocketKind::Stream,
-            },
-            passcred: false,
-            listen: s.kind != "dgram",
-            mode: s.mode,
-            user: Some(s.user.clone()),
-            group: Some(s.group.clone()),
-        }).collect();
-        Started { service, sockets, environment: Vec::new(), anew: false }
+        let sockets = service
+            .sockets
+            .iter()
+            .map(|s| Socket {
+                name: s.name.clone(),
+                kind: match s.kind.as_str() {
+                    "dgram" => SocketKind::Dgram,
+                    "seqpacket" => SocketKind::Seqpacket,
+                    _ => SocketKind::Stream,
+                },
+                passcred: false,
+                listen: s.kind != "dgram",
+                mode: s.mode,
+                user: Some(s.user.clone()),
+                group: Some(s.group.clone()),
+            })
+            .collect();
+        Started {
+            service,
+            sockets,
+            environment: Vec::new(),
+            anew: false,
+        }
     }
 }
 
@@ -194,9 +222,14 @@ pub fn steps(phone: &Phone) -> Result<Vec<Step>> {
     }
 
     ensure!(described(phone, Kind::Aidl, KEYS).is_some(), "the phone describes no {KEYS}");
-    let keys = behind(phone, "the key service", KEYS, |file| file.contains("keymint") && !file.contains("strongbox"))?;
+    let keys = behind(phone, "the key service", KEYS, |file| {
+        file.contains("keymint") && !file.contains("strongbox")
+    })?;
     let with_keys = |d: &Described| d.instance == INSTANCE && KEY_PACKAGES.contains(&d.package.as_str());
-    start(&mut out, started(phone, keys, Ready::Service(KEYS.into()), besides(phone, keys, KEYS, with_keys)));
+    start(
+        &mut out,
+        started(phone, keys, Ready::Service(KEYS.into()), besides(phone, keys, KEYS, with_keys)),
+    );
 
     let (credentials, credentials_kind) = offered(phone, CREDENTIALS).context("the phone describes no credential service")?;
     let (boot, boot_kind) = offered(phone, BOOT).context("the phone describes no boot control")?;
@@ -206,7 +239,10 @@ pub fn steps(phone: &Phone) -> Result<Vec<Step>> {
             .iter()
             .find(|p| p.name == HARDWARE_DIRECTORY && phone.carries(p))
             .context("the phone has hardware services of the older kind, and no directory for them among the programs its scripts name")?;
-        start(&mut out, started(phone, directory, Ready::Property(HARDWARE_DIRECTORY_READY), Vec::new()));
+        start(
+            &mut out,
+            started(phone, directory, Ready::Property(HARDWARE_DIRECTORY_READY), Vec::new()),
+        );
     }
     let ready = |name: String, kind: Kind| match kind {
         Kind::Aidl => Ready::Service(name),
@@ -272,7 +308,10 @@ fn weaver(phone: &Phone) -> Result<Vec<Step>> {
     let mut out = Vec::new();
     let program = behind(phone, "the weaver", WEAVER, |file| file.contains("weaver-service"))?;
     let file = file_name(program);
-    let (_, through, driver) = WEAVERS.iter().find(|(ending, ..)| file.ends_with(ending)).with_context(|| format!("{} is a weaver of a make the recovery does not know", program.path))?;
+    let (_, through, driver) = WEAVERS
+        .iter()
+        .find(|(ending, ..)| file.ends_with(ending))
+        .with_context(|| format!("{} is a weaver of a make the recovery does not know", program.path))?;
     out.extend(driver.map(Step::Drive));
     match through {
         Through::Own(interface) => {
@@ -284,25 +323,43 @@ fn weaver(phone: &Phone) -> Result<Vec<Step>> {
             out.push(Step::Start(Box::new(element(phone, &own.described.name())?)));
         }
         Through::ElementService => {
-            ensure!(described(phone, Kind::Aidl, ELEMENT_SERVICE).is_some(), "{} goes through {ELEMENT_SERVICE}, which the phone does not describe", program.path);
+            ensure!(
+                described(phone, Kind::Aidl, ELEMENT_SERVICE).is_some(),
+                "{} goes through {ELEMENT_SERVICE}, which the phone does not describe",
+                program.path
+            );
             let embedded: Vec<String> = phone
                 .services
                 .iter()
                 .map(|s| &s.described)
-                .filter(|d| d.kind == Kind::Aidl && (d.package.as_str(), d.interface.as_str()) == ELEMENT && d.instance.starts_with(EMBEDDED))
+                .filter(|d| {
+                    d.kind == Kind::Aidl && (d.package.as_str(), d.interface.as_str()) == ELEMENT && d.instance.starts_with(EMBEDDED)
+                })
                 .map(Described::name)
                 .collect();
-            ensure!(!embedded.is_empty(), "{} goes through a secure element built into the phone, and the phone describes the service of none", program.path);
+            ensure!(
+                !embedded.is_empty(),
+                "{} goes through a secure element built into the phone, and the phone describes the service of none",
+                program.path
+            );
             for name in embedded {
                 let started = element(phone, &name)?;
-                if !out.iter().any(|step| matches!(step, Step::Start(s) if s.service.path == started.service.path)) {
+                if !out
+                    .iter()
+                    .any(|step| matches!(step, Step::Start(s) if s.service.path == started.service.path))
+                {
                     out.push(Step::Start(Box::new(started)));
                 }
             }
             out.push(Step::ServeElements);
         }
     }
-    let mut weaver = started(phone, program, Ready::Service(WEAVER.into()), besides(phone, program, WEAVER, |_| false));
+    let mut weaver = started(
+        phone,
+        program,
+        Ready::Service(WEAVER.into()),
+        besides(phone, program, WEAVER, |_| false),
+    );
     weaver.anew = *through == Through::ElementService;
     out.push(Step::Start(Box::new(weaver)));
     Ok(out)
@@ -319,8 +376,21 @@ fn element(phone: &Phone, name: &str) -> Result<Started> {
     let own = match of_an_element(&told.described) {
         true => name.to_string(),
         false => {
-            let beside = own_description(phone, program, name).and_then(|file| phone.services.iter().find(|s| s.file == file && s.described.kind == Kind::Aidl && of_an_element(&s.described)));
-            beside.with_context(|| format!("{} registers {name}, and its description tells of the service of no secure element beside it", program.path))?.described.name()
+            let beside = own_description(phone, program, name).and_then(|file| {
+                phone
+                    .services
+                    .iter()
+                    .find(|s| s.file == file && s.described.kind == Kind::Aidl && of_an_element(&s.described))
+            });
+            beside
+                .with_context(|| {
+                    format!(
+                        "{} registers {name}, and its description tells of the service of no secure element beside it",
+                        program.path
+                    )
+                })?
+                .described
+                .name()
         }
     };
     let registers = besides(phone, program, &own, |_| false);
@@ -330,14 +400,23 @@ fn element(phone: &Phone, name: &str) -> Result<Started> {
 /// The description of the service `name` of `kind`, where the phone
 /// describes it.
 fn described<'a>(phone: &'a Phone, kind: Kind, name: &str) -> Option<&'a crate::phone::Service> {
-    phone.services.iter().find(|s| s.described.kind == kind && s.described.name() == name)
+    phone
+        .services
+        .iter()
+        .find(|s| s.described.kind == kind && s.described.name() == name)
 }
 
 /// The name the phone has the default service of `interface` under, and
 /// its kind: the newer kind where it has it, else the older at the highest
 /// version it describes.
 fn offered(phone: &Phone, (package, interface): (&str, &str)) -> Option<(String, Kind)> {
-    let of = |kind: Kind| phone.services.iter().map(|s| &s.described).filter(move |d| d.kind == kind && d.package == package && d.interface == interface && d.instance == INSTANCE);
+    let of = |kind: Kind| {
+        phone
+            .services
+            .iter()
+            .map(|s| &s.described)
+            .filter(move |d| d.kind == kind && d.package == package && d.interface == interface && d.instance == INSTANCE)
+    };
     if let Some(newer) = of(Kind::Aidl).next() {
         return Some((newer.name(), Kind::Aidl));
     }
@@ -379,7 +458,11 @@ fn behind<'a>(phone: &'a Phone, what: &str, name: &str, matches: impl Fn(&str) -
     let saying: Vec<&Program> = phone.programs.iter().filter(|p| p.interfaces.iter().any(|i| i == name)).collect();
     let may: Vec<&Program> = phone.programs.iter().filter(|p| !on_demand(p)).collect();
     let described_with: Vec<&Program> = match phone.services.iter().find(|s| s.described.name() == name) {
-        Some(service) => may.iter().copied().filter(|p| !p.script.is_empty() && stem(&p.script) == stem(&service.file)).collect(),
+        Some(service) => may
+            .iter()
+            .copied()
+            .filter(|p| !p.script.is_empty() && stem(&p.script) == stem(&service.file))
+            .collect(),
         None => Vec::new(),
     };
     let matching: Vec<&Program> = may.iter().copied().filter(|p| matches(file_name(p))).collect();
@@ -400,7 +483,10 @@ fn one<'a>(phone: &Phone, what: &str, candidates: Vec<&'a Program>) -> Result<Op
         match running[..] {
             [] => continue,
             [program] => return Ok(Some(program)),
-            _ => bail!("the phone runs more than one program for {what}: {}", running.iter().map(|p| p.path.as_str()).collect::<Vec<_>>().join(", ")),
+            _ => bail!(
+                "the phone runs more than one program for {what}: {}",
+                running.iter().map(|p| p.path.as_str()).collect::<Vec<_>>().join(", ")
+            ),
         }
     }
     Ok(None)
@@ -434,5 +520,10 @@ fn started(phone: &Phone, program: &Program, ready: Ready, registers: Vec<String
         description: None,
         sockets: Vec::new(),
     };
-    Started { service, sockets: program.sockets.clone(), environment: program.environment.clone(), anew: false }
+    Started {
+        service,
+        sockets: program.sockets.clone(),
+        environment: program.environment.clone(),
+        anew: false,
+    }
 }

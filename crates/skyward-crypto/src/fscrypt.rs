@@ -2,7 +2,7 @@
 //! read. The kernel keeps the key for the filesystem, not for any one
 //! file, and names it by a hash it works out itself.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 /// How long the name the kernel gives a key is.
@@ -78,7 +78,10 @@ pub fn unlocked(dir: &Path) -> Result<bool> {
             status[..4].copy_from_slice(&BY_IDENTIFIER.to_ne_bytes());
             status[8..8 + NAME_BYTES].copy_from_slice(&policy[16..16 + NAME_BYTES]);
         }
-        other => bail!("{} is encrypted under a policy of version {other}, which is not known here", dir.display()),
+        other => bail!(
+            "{} is encrypted under a policy of version {other}, which is not known here",
+            dir.display()
+        ),
     }
     if unsafe { libc::ioctl(folder.as_raw_fd(), GET_KEY_STATUS as libc::Ioctl, status.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error()).with_context(|| format!("ask whether the key for {} is in", dir.display()));

@@ -5,7 +5,7 @@ pub mod archive;
 pub mod image;
 pub mod store;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use skyward_files::Ownership;
 use std::io::Write;
@@ -59,7 +59,10 @@ pub fn create_folder(path: &Path, ownership: Ownership) -> Result<()> {
 }
 
 pub fn check_efs_selection(selected: bool, partitions: &[String]) -> Result<()> {
-    ensure!(!selected || !partitions.is_empty(), "EFS backup is unavailable: this device has no verified EFS partition list");
+    ensure!(
+        !selected || !partitions.is_empty(),
+        "EFS backup is unavailable: this device has no verified EFS partition list"
+    );
     Ok(())
 }
 
@@ -118,10 +121,16 @@ impl Manifest {
         let mut names = HashSet::new();
         let mut files = HashSet::new();
         for item in &self.items {
-            ensure!(plain(&item.name) && names.insert(item.name.as_str()), "invalid or duplicate partition name");
+            ensure!(
+                plain(&item.name) && names.insert(item.name.as_str()),
+                "invalid or duplicate partition name"
+            );
             ensure!(item.part != Part::Data || item.name == "data", "invalid data backup name");
             ensure!(!item.stored.files.is_empty(), "backup part has no files");
-            ensure!(item.stored.sha256.len() == 64 && item.stored.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()), "invalid backup SHA-256");
+            ensure!(
+                item.stored.sha256.len() == 64 && item.stored.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "invalid backup SHA-256"
+            );
             for name in &item.stored.files {
                 ensure!(plain(name) && files.insert(name.as_str()), "unsafe or duplicate backup filename");
             }
@@ -135,7 +144,8 @@ impl Manifest {
         self.validate()?;
         let text = toml::to_string(self).context("write the manifest")?;
         let mut file = skyward_files::make_file(&path, ownership)?;
-        file.write_all(text.as_bytes()).with_context(|| format!("write {}", path.display()))?;
+        file.write_all(text.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
         file.sync_all().with_context(|| format!("write {}", path.display()))
     }
 
@@ -176,7 +186,13 @@ mod tests {
     fn a_manifest_reads_back_as_written() {
         let at = std::env::temp_dir().join(format!("skyward-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&at).unwrap();
-        let stored = |name: &str, size| Stored { files: vec![format!("{name}.000")], size, stored: size / 2, compressed: true, sha256: "ab".repeat(32) };
+        let stored = |name: &str, size| Stored {
+            files: vec![format!("{name}.000")],
+            size,
+            stored: size / 2,
+            compressed: true,
+            sha256: "ab".repeat(32),
+        };
         let m = Manifest {
             format: FORMAT,
             device: "ishtar".into(),
@@ -186,9 +202,21 @@ mod tests {
             android: Some("16".into()),
             data_key: Some("00112233445566778899aabbccddeeff".into()),
             items: vec![
-                Item { part: Part::Boot, name: "boot".into(), stored: stored("boot", 201_326_592) },
-                Item { part: Part::Data, name: "data".into(), stored: stored("data", 9_000_000_000) },
-                Item { part: Part::Media, name: "media".into(), stored: stored("media", 40_000_000_000) },
+                Item {
+                    part: Part::Boot,
+                    name: "boot".into(),
+                    stored: stored("boot", 201_326_592),
+                },
+                Item {
+                    part: Part::Data,
+                    name: "data".into(),
+                    stored: stored("data", 9_000_000_000),
+                },
+                Item {
+                    part: Part::Media,
+                    name: "media".into(),
+                    stored: stored("media", 40_000_000_000),
+                },
             ],
         };
         m.write(&at, Ownership::Kept).unwrap();
@@ -207,5 +235,37 @@ mod tests {
         bad.items.push(bad.items[0].clone());
         assert!(bad.validate().is_err());
         std::fs::remove_dir_all(&at).unwrap();
+    }
+
+    #[test]
+    fn valid_format_one_is_read_but_a_future_format_is_refused() {
+        let at = std::env::temp_dir().join(format!("skyward-manifest-compat-{}", std::process::id()));
+        std::fs::create_dir_all(&at).unwrap();
+        let m = Manifest {
+            format: FORMAT_WITHOUT_STORAGE,
+            device: "miro".into(),
+            made: 1_792_561_872,
+            slot: "_a".into(),
+            system: None,
+            android: None,
+            data_key: None,
+            items: vec![Item {
+                part: Part::Boot,
+                name: "boot".into(),
+                stored: Stored {
+                    files: vec!["boot.img.000".into()],
+                    size: 4096,
+                    stored: 4096,
+                    compressed: false,
+                    sha256: "ab".repeat(32),
+                },
+            }],
+        };
+        m.write(&at, Ownership::Kept).unwrap();
+        assert_eq!(Manifest::read(&at).unwrap(), m);
+        let future = Manifest { format: FORMAT + 1, ..m };
+        std::fs::write(at.join(MANIFEST), toml::to_string(&future).unwrap()).unwrap();
+        assert!(Manifest::read(&at).is_err());
+        std::fs::remove_dir_all(at).unwrap();
     }
 }

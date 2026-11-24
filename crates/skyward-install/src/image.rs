@@ -3,14 +3,14 @@
 //! which partitions it can go to, and writing it to them the way fastboot
 //! does.
 
-use abootimg_oxide::binrw::io::Cursor;
 use abootimg_oxide::binrw::BinRead;
+use abootimg_oxide::binrw::io::Cursor;
 use abootimg_oxide::{Header, VendorHeader};
-use android_sparse_image::{ChunkHeader, ChunkType, FileHeader, CHUNK_HEADER_BYTES_LEN, FILE_HEADER_BYTES_LEN, HEADER_MAGIC};
-use anyhow::{bail, ensure, Context, Result};
+use android_sparse_image::{CHUNK_HEADER_BYTES_LEN, ChunkHeader, ChunkType, FILE_HEADER_BYTES_LEN, FileHeader, HEADER_MAGIC};
+use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
-use skyward_vab::Slot;
 use skyward_sys::kmsg;
+use skyward_vab::Slot;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -60,7 +60,10 @@ const CHUNK: usize = 1 << 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageKind {
     /// A boot image; what it carries decides where it can go.
-    Boot { kernel: bool, ramdisk: Ramdisk },
+    Boot {
+        kernel: bool,
+        ramdisk: Ramdisk,
+    },
     VendorBoot,
     Dtbo,
     Vbmeta,
@@ -109,8 +112,14 @@ impl ImageKind {
     /// without one it needs boot's.
     fn partitions(self) -> &'static [&'static str] {
         match self {
-            ImageKind::Boot { kernel: true, ramdisk: Ramdisk::Recovery } => &["recovery", "boot"],
-            ImageKind::Boot { kernel: false, ramdisk: Ramdisk::Recovery } => &["recovery"],
+            ImageKind::Boot {
+                kernel: true,
+                ramdisk: Ramdisk::Recovery,
+            } => &["recovery", "boot"],
+            ImageKind::Boot {
+                kernel: false,
+                ramdisk: Ramdisk::Recovery,
+            } => &["recovery"],
             ImageKind::Boot { kernel: true, .. } => &["boot"],
             ImageKind::Boot { kernel: false, .. } => &["init_boot"],
             ImageKind::VendorBoot => &["vendor_boot"],
@@ -154,8 +163,20 @@ pub struct Layout {
 impl Layout {
     /// A file of `len` bytes that goes in as it is.
     pub fn whole(len: u64) -> Layout {
-        let runs = if len == 0 { Vec::new() } else { vec![Run { at: 0, len, source: Source::File(0) }] };
-        Layout { size: len, sparse: false, runs }
+        let runs = if len == 0 {
+            Vec::new()
+        } else {
+            vec![Run {
+                at: 0,
+                len,
+                source: Source::File(0),
+            }]
+        };
+        Layout {
+            size: len,
+            sparse: false,
+            runs,
+        }
     }
 
     /// How `file`, of `len` bytes, lays its image out: by its chunks where
@@ -177,25 +198,39 @@ impl Layout {
         let mut runs = Vec::new();
         for k in 0..header.chunks {
             let mut raw = [0u8; CHUNK_HEADER_BYTES_LEN];
-            file.read_exact(&mut raw).with_context(|| format!("read the header of chunk {k} at {from}"))?;
+            file.read_exact(&mut raw)
+                .with_context(|| format!("read the header of chunk {k} at {from}"))?;
             let chunk = ChunkHeader::from_bytes(&raw).with_context(|| format!("read the header of chunk {k} at {from}"))?;
             let data = u64::from(chunk.total_size)
                 .checked_sub(raw.len() as u64)
                 .with_context(|| format!("chunk {k} says it is shorter than its header"))?;
             from += raw.len() as u64;
-            ensure!(from + data <= len, "chunk {k} runs to byte {}, past the {len} the file holds", from + data);
+            ensure!(
+                from + data <= len,
+                "chunk {k} runs to byte {}, past the {len} the file holds",
+                from + data
+            );
             let out = match chunk.chunk_type {
                 ChunkType::Raw => {
                     let out = chunk.out_size(&header);
                     ensure!(data == out, "chunk {k} brings {data} bytes for {out} of the image");
-                    runs.push(Run { at, len: out, source: Source::File(from) });
+                    runs.push(Run {
+                        at,
+                        len: out,
+                        source: Source::File(from),
+                    });
                     out
                 }
                 ChunkType::Fill => {
                     ensure!(data == 4, "chunk {k} fills with {data} bytes, and a fill takes 4");
                     let mut pattern = [0u8; 4];
-                    file.read_exact(&mut pattern).with_context(|| format!("read what chunk {k} fills with"))?;
-                    runs.push(Run { at, len: chunk.out_size(&header), source: Source::Fill(pattern) });
+                    file.read_exact(&mut pattern)
+                        .with_context(|| format!("read what chunk {k} fills with"))?;
+                    runs.push(Run {
+                        at,
+                        len: chunk.out_size(&header),
+                        source: Source::Fill(pattern),
+                    });
                     chunk.out_size(&header)
                 }
                 ChunkType::DontCare => {
@@ -209,7 +244,9 @@ impl Layout {
                     0
                 }
             };
-            at = at.checked_add(out).with_context(|| format!("chunk {k} takes the image past what a partition holds"))?;
+            at = at
+                .checked_add(out)
+                .with_context(|| format!("chunk {k} takes the image past what a partition holds"))?;
             from += data;
             file.seek(SeekFrom::Start(from)).with_context(|| format!("seek past chunk {k}"))?;
         }
@@ -293,7 +330,10 @@ pub fn open<R: Read + Seek>(file: &mut R, len: u64) -> Result<Image> {
     let layout = Layout::read(file, len)?;
     let mut image = Expanded::new(file, &layout);
     let mut head = Vec::with_capacity(HEAD);
-    (&mut image).take(HEAD as u64).read_to_end(&mut head).context("read the image's first bytes")?;
+    (&mut image)
+        .take(HEAD as u64)
+        .read_to_end(&mut head)
+        .context("read the image's first bytes")?;
     let kind = detect(&mut image, &head)?;
     Ok(Image { kind, layout })
 }
@@ -307,11 +347,15 @@ pub fn detect<R: Read + Seek>(file: &mut R, head: &[u8]) -> Result<ImageKind> {
         let ramdisk = match header.ramdisk_size() {
             0 => Ramdisk::None,
             size => {
-                file.seek(SeekFrom::Start(header.ramdisk_position() as u64)).context("seek to the ramdisk")?;
+                file.seek(SeekFrom::Start(header.ramdisk_position() as u64))
+                    .context("seek to the ramdisk")?;
                 ramdisk(file.take(u64::from(size))).context("read the ramdisk")?
             }
         };
-        ensure!(kernel || ramdisk != Ramdisk::None, "the boot image holds neither a kernel nor a ramdisk");
+        ensure!(
+            kernel || ramdisk != Ramdisk::None,
+            "the boot image holds neither a kernel nor a ramdisk"
+        );
         return Ok(ImageKind::Boot { kernel, ramdisk });
     }
     if head.starts_with(VENDOR_BOOT_MAGIC) {
@@ -328,7 +372,11 @@ pub fn detect<R: Read + Seek>(file: &mut R, head: &[u8]) -> Result<ImageKind> {
         return Ok(ImageKind::Super);
     }
     let holds = |(at, magic): (usize, &[u8])| head.get(at..at + magic.len()) == Some(magic);
-    for (magic, filesystem) in [(EROFS_MAGIC, Filesystem::Erofs), (F2FS_MAGIC, Filesystem::F2fs), (EXT4_MAGIC, Filesystem::Ext4)] {
+    for (magic, filesystem) in [
+        (EROFS_MAGIC, Filesystem::Erofs),
+        (F2FS_MAGIC, Filesystem::F2fs),
+        (EXT4_MAGIC, Filesystem::Ext4),
+    ] {
         if holds(magic) {
             return Ok(ImageKind::Filesystem(filesystem));
         }
@@ -395,7 +443,8 @@ pub fn device_config<R: Read + Seek>(file: &mut R) -> Result<Option<Vec<u8>>> {
     if header.ramdisk_size() == 0 {
         return Ok(None);
     }
-    file.seek(SeekFrom::Start(header.ramdisk_position() as u64)).context("seek to the ramdisk")?;
+    file.seek(SeekFrom::Start(header.ramdisk_position() as u64))
+        .context("seek to the ramdisk")?;
     let mut ramdisk = BufReader::new(file.take(u64::from(header.ramdisk_size())));
     let start = ramdisk.fill_buf().context("read the ramdisk's first bytes")?;
     if ![LZ4_LEGACY, LZ4_FRAME, GZIP, NEWC].iter().any(|magic| start.starts_with(magic)) {
@@ -437,7 +486,10 @@ pub struct Target {
 /// `vendor_dlkm.img` and `vendor_dlkm_b.img` name vendor_dlkm.
 pub fn named(file_name: &str) -> &str {
     let stem = file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem);
-    [Slot::A, Slot::B].iter().find_map(|slot| stem.strip_suffix(slot.suffix())).unwrap_or(stem)
+    [Slot::A, Slot::B]
+        .iter()
+        .find_map(|slot| stem.strip_suffix(slot.suffix()))
+        .unwrap_or(stem)
 }
 
 /// The partitions of this phone an image of `kind` can go to, the
@@ -464,7 +516,10 @@ pub fn targets(kind: ImageKind, named: Option<&str>, dir: &Path, logical: &[Stri
         ImageKind::Boot { .. } | ImageKind::VendorBoot | ImageKind::Dtbo | ImageKind::Vbmeta => {
             for name in kind.partitions() {
                 if slotted(name)? {
-                    found.push(Target { name: name.to_string(), place: Place::Slotted });
+                    found.push(Target {
+                        name: name.to_string(),
+                        place: Place::Slotted,
+                    });
                 }
             }
             if let Some(first) = named.and_then(|named| found.iter().position(|t| t.name == named)) {
@@ -474,20 +529,32 @@ pub fn targets(kind: ImageKind, named: Option<&str>, dir: &Path, logical: &[Stri
         ImageKind::Super => {
             let path = dir.join(SUPER);
             if path.try_exists().with_context(|| format!("look for {}", path.display()))? {
-                found.push(Target { name: SUPER.to_string(), place: Place::Single });
+                found.push(Target {
+                    name: SUPER.to_string(),
+                    place: Place::Single,
+                });
             }
         }
         ImageKind::Filesystem(_) | ImageKind::Other => {
             if let Some(named) = named {
                 if slotted(named)? {
-                    found.push(Target { name: named.to_string(), place: Place::Slotted });
+                    found.push(Target {
+                        name: named.to_string(),
+                        place: Place::Slotted,
+                    });
                 } else if logical.iter().any(|name| name == named) {
-                    found.push(Target { name: named.to_string(), place: Place::Logical });
+                    found.push(Target {
+                        name: named.to_string(),
+                        place: Place::Logical,
+                    });
                 }
             }
             if matches!(kind, ImageKind::Filesystem(_)) {
                 let rest = logical.iter().filter(|name| Some(name.as_str()) != named);
-                found.extend(rest.map(|name| Target { name: name.clone(), place: Place::Logical }));
+                found.extend(rest.map(|name| Target {
+                    name: name.clone(),
+                    place: Place::Logical,
+                }));
             }
         }
     }
@@ -500,13 +567,20 @@ pub fn targets(kind: ImageKind, named: Option<&str>, dir: &Path, logical: &[Stri
 pub fn check_super<R: Read + Seek>(image: &mut R, size: u64) -> Result<()> {
     let at = |offset: u64, len: usize| -> Result<Vec<u8>> {
         let mut buf = vec![0u8; len];
-        image.seek(SeekFrom::Start(offset)).with_context(|| format!("seek to {offset} in the image"))?;
-        image.read_exact(&mut buf).with_context(|| format!("read {len} bytes at {offset} in the image"))?;
+        image
+            .seek(SeekFrom::Start(offset))
+            .with_context(|| format!("seek to {offset} in the image"))?;
+        image
+            .read_exact(&mut buf)
+            .with_context(|| format!("read {len} bytes at {offset} in the image"))?;
         Ok(buf)
     };
     let md = skyward_lp::read_with(at, 0).context("read the image's metadata")?;
     let made_for = md.block_devices.first().context("the image's metadata names no super")?.size;
-    ensure!(made_for <= size, "the image is of a super of {made_for} bytes, and this phone's holds {size}");
+    ensure!(
+        made_for <= size,
+        "the image is of a super of {made_for} bytes, and this phone's holds {size}"
+    );
     Ok(())
 }
 
@@ -526,16 +600,31 @@ pub fn flash<R: Read + Seek>(image: &mut R, len: u64, devices: &[PathBuf], progr
 /// moved to the partition's end, with zeros between, as fastboot moves it
 /// in every partition but a logical one, which is as large as its image.
 /// `progress` hears the bytes written and read back so far, of all.
-pub fn write<R: Read + Seek>(image: &mut R, layout: &Layout, devices: &[PathBuf], footer: bool, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+pub fn write<R: Read + Seek>(
+    image: &mut R,
+    layout: &Layout,
+    devices: &[PathBuf],
+    footer: bool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<()> {
     ensure!(!devices.is_empty(), "no partition to write");
     let mut outs = Vec::with_capacity(devices.len());
     for path in devices {
-        let mut f = OpenOptions::new().read(true).write(true).open(path).with_context(|| format!("open {}", path.display()))?;
-        let size = f.seek(SeekFrom::End(0)).with_context(|| format!("find the size of {}", path.display()))?;
+        let mut f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .with_context(|| format!("open {}", path.display()))?;
+        let size = f
+            .seek(SeekFrom::End(0))
+            .with_context(|| format!("find the size of {}", path.display()))?;
         outs.push((path, f, size));
     }
     let size = outs[0].2;
-    ensure!(outs.iter().all(|(_, _, s)| *s == size), "the partition differs in size between slots");
+    ensure!(
+        outs.iter().all(|(_, _, s)| *s == size),
+        "the partition differs in size between slots"
+    );
     let len = layout.size;
     ensure!(len <= size, "the image is {len} bytes, more than the {size} its partition holds");
 
@@ -545,8 +634,16 @@ pub fn write<R: Read + Seek>(image: &mut R, layout: &Layout, devices: &[PathBuf]
         image.seek(SeekFrom::Start(len - FOOTER_LEN)).context("seek to the image's end")?;
         image.read_exact(&mut end).context("read the image's end")?;
         if end.starts_with(FOOTER_MAGIC) {
-            runs.push(Run { at: len, len: size - len - FOOTER_LEN, source: Source::Fill([0; 4]) });
-            runs.push(Run { at: size - FOOTER_LEN, len: FOOTER_LEN, source: Source::File(len - FOOTER_LEN) });
+            runs.push(Run {
+                at: len,
+                len: size - len - FOOTER_LEN,
+                source: Source::Fill([0; 4]),
+            });
+            runs.push(Run {
+                at: size - FOOTER_LEN,
+                len: FOOTER_LEN,
+                source: Source::File(len - FOOTER_LEN),
+            });
             runs.retain(|run| run.len != 0);
         }
     }
@@ -558,14 +655,17 @@ pub fn write<R: Read + Seek>(image: &mut R, layout: &Layout, devices: &[PathBuf]
     for run in &runs {
         match run.source {
             Source::File(from) => {
-                image.seek(SeekFrom::Start(from)).with_context(|| format!("seek to {from} in the image"))?;
+                image
+                    .seek(SeekFrom::Start(from))
+                    .with_context(|| format!("seek to {from} in the image"))?;
             }
             // A run starts on a block and a chunk is whole patterns long,
             // so every chunk of it starts the pattern anew.
             Source::Fill(pattern) => buf.chunks_exact_mut(pattern.len()).for_each(|four| four.copy_from_slice(&pattern)),
         }
         for (path, f, _) in &mut outs {
-            f.seek(SeekFrom::Start(run.at)).with_context(|| format!("seek to {} in {}", run.at, path.display()))?;
+            f.seek(SeekFrom::Start(run.at))
+                .with_context(|| format!("seek to {} in {}", run.at, path.display()))?;
         }
         let mut left = run.len;
         while left > 0 {
@@ -590,18 +690,24 @@ pub fn write<R: Read + Seek>(image: &mut R, layout: &Layout, devices: &[PathBuf]
     for (path, f, _) in &mut outs {
         let mut back = Sha256::new();
         for run in &runs {
-            f.seek(SeekFrom::Start(run.at)).with_context(|| format!("seek to {} in {}", run.at, path.display()))?;
+            f.seek(SeekFrom::Start(run.at))
+                .with_context(|| format!("seek to {} in {}", run.at, path.display()))?;
             let mut left = run.len;
             while left > 0 {
                 let n = left.min(CHUNK as u64) as usize;
-                f.read_exact(&mut buf[..n]).with_context(|| format!("read back {}", path.display()))?;
+                f.read_exact(&mut buf[..n])
+                    .with_context(|| format!("read back {}", path.display()))?;
                 back.update(&buf[..n]);
                 left -= n as u64;
                 done += n as u64;
                 progress(done, total);
             }
         }
-        ensure!(back.finalize() == written, "{} reads back different from what was written", path.display());
+        ensure!(
+            back.finalize() == written,
+            "{} reads back different from what was written",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -659,7 +765,11 @@ pub(crate) mod samples {
     pub fn skyward_for(codename: &str) -> Vec<u8> {
         let config = format!("[device]\ncodename = \"{codename}\"\n");
         let mut out = Vec::new();
-        for (name, data) in [("init", &b""[..]), ("system/bin/recovery", b""), ("skyward/device.toml", config.as_bytes())] {
+        for (name, data) in [
+            ("init", &b""[..]),
+            ("system/bin/recovery", b""),
+            ("skyward/device.toml", config.as_bytes()),
+        ] {
             let mut entry = cpio::NewcBuilder::new(name).mode(0o100644).write(out, data.len() as u32);
             entry.write_all(data).unwrap();
             out = entry.finish().unwrap();
@@ -668,12 +778,30 @@ pub(crate) mod samples {
     }
 }
 
+/// Whether `file`, the image at `path`, is a Skyward recovery, taking one
+/// this build cannot read for one that is not and saying in the log what it
+/// started with: a stock recovery, or any recovery packed another way, is a
+/// thing a phone may well hold in a slot, and what is done with one is
+/// nothing, so it is no reason to stop what was asked for.
+pub fn is_skyward_at<R: Read + Seek>(file: &mut R, path: &Path) -> Result<bool> {
+    Ok(match is_skyward(file) {
+        Ok(skyward) => skyward,
+        Err(error) => {
+            let _ = kmsg(&format!(
+                "install: {} holds an image this build cannot read, so it is not taken for Skyward: {error:#}",
+                path.display()
+            ));
+            false
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::samples::{archive, boot_image, lz4_legacy, recovery, skyward_for};
     use super::*;
-    use abootimg_oxide::binrw::BinWrite;
     use abootimg_oxide::VendorHeaderV4;
+    use abootimg_oxide::binrw::BinWrite;
 
     fn gzip(data: &[u8]) -> Vec<u8> {
         let mut w = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -691,17 +819,41 @@ mod tests {
         let generic = archive(&["init", "first_stage_ramdisk", "system/bin/snapuserd"]);
 
         let kind = kind_of(&boot_image(0, &lz4_legacy(&recovery))).unwrap();
-        assert_eq!(kind, ImageKind::Boot { kernel: false, ramdisk: Ramdisk::Recovery });
+        assert_eq!(
+            kind,
+            ImageKind::Boot {
+                kernel: false,
+                ramdisk: Ramdisk::Recovery
+            }
+        );
         assert_eq!(kind.partitions(), ["recovery"]);
         let kind = kind_of(&boot_image(0, &gzip(&generic))).unwrap();
-        assert_eq!(kind, ImageKind::Boot { kernel: false, ramdisk: Ramdisk::Generic });
+        assert_eq!(
+            kind,
+            ImageKind::Boot {
+                kernel: false,
+                ramdisk: Ramdisk::Generic
+            }
+        );
         assert_eq!(kind.partitions(), ["init_boot"]);
         let kind = kind_of(&boot_image(5000, &recovery)).unwrap();
         assert_eq!(kind.partitions(), ["recovery", "boot"]);
         let kind = kind_of(&boot_image(5000, &lz4_legacy(&generic))).unwrap();
-        assert_eq!(kind, ImageKind::Boot { kernel: true, ramdisk: Ramdisk::Generic });
+        assert_eq!(
+            kind,
+            ImageKind::Boot {
+                kernel: true,
+                ramdisk: Ramdisk::Generic
+            }
+        );
         assert_eq!(kind.partitions(), ["boot"]);
-        assert_eq!(kind_of(&boot_image(5000, &[])).unwrap(), ImageKind::Boot { kernel: true, ramdisk: Ramdisk::None });
+        assert_eq!(
+            kind_of(&boot_image(5000, &[])).unwrap(),
+            ImageKind::Boot {
+                kernel: true,
+                ramdisk: Ramdisk::None
+            }
+        );
 
         assert!(kind_of(&boot_image(0, &[])).is_err());
         assert!(kind_of(&boot_image(0, b"BZh91AY&SY")).is_err(), "a ramdisk packed some other way");
@@ -712,14 +864,22 @@ mod tests {
     fn skyward_is_told_from_the_stock_recovery_it_is_packed_on() {
         assert!(is_skyward(&mut Cursor::new(recovery(true))).unwrap());
         assert!(!is_skyward(&mut Cursor::new(recovery(false))).unwrap());
-        assert!(!is_skyward(&mut Cursor::new(boot_image(5000, &[]))).unwrap(), "a boot image with no ramdisk");
-        assert!(!is_skyward(&mut Cursor::new(boot_image(0, b"\xfd7zXZ\0"))).unwrap(), "a ramdisk packed as Skyward never packs it");
+        assert!(
+            !is_skyward(&mut Cursor::new(boot_image(5000, &[]))).unwrap(),
+            "a boot image with no ramdisk"
+        );
+        assert!(
+            !is_skyward(&mut Cursor::new(boot_image(0, b"\xfd7zXZ\0"))).unwrap(),
+            "a ramdisk packed as Skyward never packs it"
+        );
         assert!(!is_skyward(&mut Cursor::new(vec![0u8; 8192])).unwrap(), "an erased partition");
     }
 
     #[test]
     fn skyward_carries_its_device_configuration() {
-        let config = device_config(&mut Cursor::new(skyward_for("ishtar"))).unwrap().expect("Skyward carries one");
+        let config = device_config(&mut Cursor::new(skyward_for("ishtar")))
+            .unwrap()
+            .expect("Skyward carries one");
         assert_eq!(config, b"[device]\ncodename = \"ishtar\"\n");
         assert!(is_skyward(&mut Cursor::new(skyward_for("ishtar"))).unwrap());
         assert_eq!(device_config(&mut Cursor::new(recovery(false))).unwrap(), None);
@@ -749,7 +909,11 @@ mod tests {
         assert_eq!(kind_of(bytes.get_ref()).unwrap(), ImageKind::VendorBoot);
         assert_eq!(kind_of(&[0xd7, 0xb7, 0xab, 0x1e, 0, 0, 0, 0x40]).unwrap(), ImageKind::Dtbo);
         assert_eq!(kind_of(b"AVB0\0\0\0\x01").unwrap(), ImageKind::Vbmeta);
-        assert_eq!(kind_of(b"\x7fELF\x02\x01\x01").unwrap(), ImageKind::Other, "a bootloader's program, which only its name places");
+        assert_eq!(
+            kind_of(b"\x7fELF\x02\x01\x01").unwrap(),
+            ImageKind::Other,
+            "a bootloader's program, which only its name places"
+        );
         assert_eq!(kind_of(&[]).unwrap(), ImageKind::Other);
     }
 
@@ -766,10 +930,18 @@ mod tests {
         assert_eq!(kind_of(&filesystem(EROFS_MAGIC)).unwrap(), ImageKind::Filesystem(Filesystem::Erofs));
         assert_eq!(kind_of(&filesystem(F2FS_MAGIC)).unwrap(), ImageKind::Filesystem(Filesystem::F2fs));
         assert_eq!(kind_of(&filesystem(EXT4_MAGIC)).unwrap(), ImageKind::Filesystem(Filesystem::Ext4));
-        assert_eq!(kind_of(&filesystem(EROFS_MAGIC)[..1026]).unwrap(), ImageKind::Other, "a file that ends inside the magic number");
+        assert_eq!(
+            kind_of(&filesystem(EROFS_MAGIC)[..1026]).unwrap(),
+            ImageKind::Other,
+            "a file that ends inside the magic number"
+        );
         assert_eq!(kind_of(&vec![0u8; 16384]).unwrap(), ImageKind::Other, "an erased partition");
         // The start of a Xiaomi 13 Ultra's own super.
-        let ishtar = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../skyward-lp/tests/ishtar-super-metadata.bin")).unwrap();
+        let ishtar = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../skyward-lp/tests/ishtar-super-metadata.bin"
+        ))
+        .unwrap();
         assert_eq!(kind_of(&ishtar).unwrap(), ImageKind::Super);
         let mut image = Cursor::new(&ishtar);
         check_super(&mut image, 9_663_676_416).unwrap();
@@ -783,14 +955,25 @@ mod tests {
     fn sparse(chunks: &[(ChunkType, u32, &[u8])]) -> Vec<u8> {
         let header = FileHeader {
             block_size: android_sparse_image::DEFAULT_BLOCKSIZE,
-            blocks: chunks.iter().filter(|(kind, ..)| *kind != ChunkType::Crc32).map(|(_, blocks, _)| blocks).sum(),
+            blocks: chunks
+                .iter()
+                .filter(|(kind, ..)| *kind != ChunkType::Crc32)
+                .map(|(_, blocks, _)| blocks)
+                .sum(),
             chunks: chunks.len() as u32,
             checksum: 0,
         };
         let mut out = header.to_bytes().to_vec();
         for &(chunk_type, chunk_size, data) in chunks {
             let total_size = (CHUNK_HEADER_BYTES_LEN + data.len()) as u32;
-            out.extend_from_slice(&ChunkHeader { chunk_type, chunk_size, total_size }.to_bytes());
+            out.extend_from_slice(
+                &ChunkHeader {
+                    chunk_type,
+                    chunk_size,
+                    total_size,
+                }
+                .to_bytes(),
+            );
             out.extend_from_slice(data);
         }
         out
@@ -815,7 +998,10 @@ mod tests {
         let layout = Layout::read(&mut Cursor::new(&file), file.len() as u64).unwrap();
         assert!(layout.sparse);
         assert_eq!(layout.size, 9 * 4096);
-        assert_eq!(layout.runs.iter().map(|run| (run.at, run.len)).collect::<Vec<_>>(), [(0, 8192), (5 * 4096, 8192), (7 * 4096, 4096)]);
+        assert_eq!(
+            layout.runs.iter().map(|run| (run.at, run.len)).collect::<Vec<_>>(),
+            [(0, 8192), (5 * 4096, 8192), (7 * 4096, 4096)]
+        );
         let mut whole = Vec::new();
         let mut source = Cursor::new(&file);
         Expanded::new(&mut source, &layout).read_to_end(&mut whole).unwrap();
@@ -845,9 +1031,20 @@ mod tests {
         let mut boot = boot_image(5000, &lz4_legacy(&recovery));
         boot.resize(boot.len().div_ceil(4096) * 4096, 0);
         let (head, rest) = boot.split_at(4096);
-        let file = sparse(&[(ChunkType::Raw, 1, head), (ChunkType::Raw, (rest.len() / 4096) as u32, rest), (ChunkType::DontCare, 100, &[])]);
+        let file = sparse(&[
+            (ChunkType::Raw, 1, head),
+            (ChunkType::Raw, (rest.len() / 4096) as u32, rest),
+            (ChunkType::DontCare, 100, &[]),
+        ]);
         let image = open(&mut Cursor::new(&file), file.len() as u64).unwrap();
-        assert_eq!(image.kind, ImageKind::Boot { kernel: true, ramdisk: Ramdisk::Recovery }, "its ramdisk is read through the chunks");
+        assert_eq!(
+            image.kind,
+            ImageKind::Boot {
+                kernel: true,
+                ramdisk: Ramdisk::Recovery
+            },
+            "its ramdisk is read through the chunks"
+        );
         assert_eq!(image.layout.size, boot.len() as u64 + 100 * 4096);
 
         let erofs = filesystem(EROFS_MAGIC);
@@ -863,14 +1060,33 @@ mod tests {
         let read = |file: &[u8]| Layout::read(&mut Cursor::new(file), file.len() as u64).map_err(|e| format!("{e:#}"));
         let good = sparse(&[(ChunkType::Raw, 2, &data), (ChunkType::DontCare, 1, &[])]);
         assert!(read(&good).is_ok());
-        assert!(read(&good[..good.len() - 12 - 4096]).unwrap_err().contains("past the"), "a file cut short");
-        assert!(read(&sparse(&[(ChunkType::Raw, 3, &data)])).unwrap_err().contains("brings 8192 bytes for 12288"));
-        assert!(read(&sparse(&[(ChunkType::Fill, 1, &[0; 8])])).unwrap_err().contains("a fill takes 4"));
-        assert!(read(&sparse(&[(ChunkType::DontCare, 1, &[0; 4])])).unwrap_err().contains("leaves as it is"));
+        assert!(
+            read(&good[..good.len() - 12 - 4096]).unwrap_err().contains("past the"),
+            "a file cut short"
+        );
+        assert!(
+            read(&sparse(&[(ChunkType::Raw, 3, &data)]))
+                .unwrap_err()
+                .contains("brings 8192 bytes for 12288")
+        );
+        assert!(
+            read(&sparse(&[(ChunkType::Fill, 1, &[0; 8])]))
+                .unwrap_err()
+                .contains("a fill takes 4")
+        );
+        assert!(
+            read(&sparse(&[(ChunkType::DontCare, 1, &[0; 4])]))
+                .unwrap_err()
+                .contains("leaves as it is")
+        );
         // A header that tells of more blocks than the chunks make up.
         let mut short = good.clone();
         short[16..20].copy_from_slice(&9u32.to_le_bytes());
-        assert!(read(&short).unwrap_err().contains("12288 bytes of an image of 36864"), "{:?}", read(&short));
+        assert!(
+            read(&short).unwrap_err().contains("12288 bytes of an image of 36864"),
+            "{:?}",
+            read(&short)
+        );
         let mut version = good.clone();
         version[4] = 2;
         assert!(read(&version).unwrap_err().contains("sparse image's header"));
@@ -894,10 +1110,29 @@ mod tests {
 
     #[test]
     fn only_partitions_the_phone_has_in_both_slots_are_offered() {
-        let dir = phone(&["boot_a", "boot_b", "recovery_a", "recovery_b", "init_boot_a", "init_boot_b", "vbmeta_a", "vbmeta_b", "vbmeta_system_a"]);
-        let both = ImageKind::Boot { kernel: true, ramdisk: Ramdisk::Recovery };
-        assert_eq!(names(&targets(both, None, dir.path(), &[]).unwrap()), [("recovery", Place::Slotted), ("boot", Place::Slotted)]);
-        assert_eq!(names(&targets(ImageKind::Vbmeta, None, dir.path(), &[]).unwrap()), [("vbmeta", Place::Slotted)]);
+        let dir = phone(&[
+            "boot_a",
+            "boot_b",
+            "recovery_a",
+            "recovery_b",
+            "init_boot_a",
+            "init_boot_b",
+            "vbmeta_a",
+            "vbmeta_b",
+            "vbmeta_system_a",
+        ]);
+        let both = ImageKind::Boot {
+            kernel: true,
+            ramdisk: Ramdisk::Recovery,
+        };
+        assert_eq!(
+            names(&targets(both, None, dir.path(), &[]).unwrap()),
+            [("recovery", Place::Slotted), ("boot", Place::Slotted)]
+        );
+        assert_eq!(
+            names(&targets(ImageKind::Vbmeta, None, dir.path(), &[]).unwrap()),
+            [("vbmeta", Place::Slotted)]
+        );
         assert!(targets(ImageKind::Dtbo, None, dir.path(), &[]).unwrap().is_empty());
     }
 
@@ -910,22 +1145,58 @@ mod tests {
         assert_eq!(named("modem"), "modem");
 
         let dir = phone(&[
-            "boot_a", "boot_b", "recovery_a", "recovery_b", "vbmeta_a", "vbmeta_b", "vbmeta_system_a", "vbmeta_system_b", "modem_a", "modem_b",
-            "super", "persist", "userdata", "sda",
+            "boot_a",
+            "boot_b",
+            "recovery_a",
+            "recovery_b",
+            "vbmeta_a",
+            "vbmeta_b",
+            "vbmeta_system_a",
+            "vbmeta_system_b",
+            "modem_a",
+            "modem_b",
+            "super",
+            "persist",
+            "userdata",
+            "sda",
         ]);
         let logical: Vec<String> = ["odm", "system", "vendor"].map(String::from).to_vec();
         let of = |kind, named| targets(kind, named, dir.path(), &logical).unwrap();
-        let both = ImageKind::Boot { kernel: true, ramdisk: Ramdisk::Recovery };
-        assert_eq!(names(&of(both, Some("boot"))), [("boot", Place::Slotted), ("recovery", Place::Slotted)]);
-        assert_eq!(names(&of(both, Some("vendor"))), [("recovery", Place::Slotted), ("boot", Place::Slotted)], "a name it does not fit says nothing");
-        assert_eq!(names(&of(ImageKind::Vbmeta, Some("vbmeta_system"))), [("vbmeta_system", Place::Slotted), ("vbmeta", Place::Slotted)]);
+        let both = ImageKind::Boot {
+            kernel: true,
+            ramdisk: Ramdisk::Recovery,
+        };
+        assert_eq!(
+            names(&of(both, Some("boot"))),
+            [("boot", Place::Slotted), ("recovery", Place::Slotted)]
+        );
+        assert_eq!(
+            names(&of(both, Some("vendor"))),
+            [("recovery", Place::Slotted), ("boot", Place::Slotted)],
+            "a name it does not fit says nothing"
+        );
+        assert_eq!(
+            names(&of(ImageKind::Vbmeta, Some("vbmeta_system"))),
+            [("vbmeta_system", Place::Slotted), ("vbmeta", Place::Slotted)]
+        );
 
         let erofs = ImageKind::Filesystem(Filesystem::Erofs);
-        assert_eq!(names(&of(erofs, None)), [("odm", Place::Logical), ("system", Place::Logical), ("vendor", Place::Logical)]);
-        assert_eq!(names(&of(erofs, Some("vendor"))), [("vendor", Place::Logical), ("odm", Place::Logical), ("system", Place::Logical)]);
+        assert_eq!(
+            names(&of(erofs, None)),
+            [("odm", Place::Logical), ("system", Place::Logical), ("vendor", Place::Logical)]
+        );
+        assert_eq!(
+            names(&of(erofs, Some("vendor"))),
+            [("vendor", Place::Logical), ("odm", Place::Logical), ("system", Place::Logical)]
+        );
         assert_eq!(
             names(&of(ImageKind::Filesystem(Filesystem::Ext4), Some("modem"))),
-            [("modem", Place::Slotted), ("odm", Place::Logical), ("system", Place::Logical), ("vendor", Place::Logical)],
+            [
+                ("modem", Place::Slotted),
+                ("odm", Place::Logical),
+                ("system", Place::Logical),
+                ("vendor", Place::Logical)
+            ],
             "a filesystem named for a partition the phone has in both slots"
         );
 
@@ -935,7 +1206,11 @@ mod tests {
         for kept in ["persist", "userdata", "sda", "super", "no_such"] {
             assert!(of(ImageKind::Other, Some(kept)).is_empty(), "{kept} is the phone's own to keep");
         }
-        assert_eq!(names(&of(erofs, Some("userdata"))).len(), 3, "a filesystem still fits the logical partitions");
+        assert_eq!(
+            names(&of(erofs, Some("userdata"))).len(),
+            3,
+            "a filesystem still fits the logical partitions"
+        );
 
         assert_eq!(names(&of(ImageKind::Super, Some("vendor"))), [("super", Place::Single)]);
         let none = phone(&["boot_a", "boot_b"]);
@@ -952,7 +1227,9 @@ mod tests {
 
     fn flash_all(image: &[u8], devices: &[PathBuf]) -> Result<Vec<(u64, u64)>> {
         let mut seen = Vec::new();
-        flash(&mut Cursor::new(image), image.len() as u64, devices, &mut |done, total| seen.push((done, total)))?;
+        flash(&mut Cursor::new(image), image.len() as u64, devices, &mut |done, total| {
+            seen.push((done, total))
+        })?;
         Ok(seen)
     }
 
@@ -1012,14 +1289,19 @@ mod tests {
     fn write_all(file: &[u8], devices: &[PathBuf], footer: bool) -> Result<Vec<(u64, u64)>> {
         let layout = Layout::read(&mut Cursor::new(file), file.len() as u64)?;
         let mut seen = Vec::new();
-        write(&mut Cursor::new(file), &layout, devices, footer, &mut |done, total| seen.push((done, total)))?;
+        write(&mut Cursor::new(file), &layout, devices, footer, &mut |done, total| {
+            seen.push((done, total))
+        })?;
         Ok(seen)
     }
 
     #[test]
     fn a_sparse_image_is_written_chunk_by_chunk_and_what_it_leaves_out_stays() {
         let dir = tempfile::tempdir().unwrap();
-        let slots = [partition(dir.path(), "modem_a", 12 * 4096), partition(dir.path(), "modem_b", 12 * 4096)];
+        let slots = [
+            partition(dir.path(), "modem_a", 12 * 4096),
+            partition(dir.path(), "modem_b", 12 * 4096),
+        ];
         let (first, second) = (blocks(2, 0x11), blocks(1, 0x77));
         let file = sparse(&[
             (ChunkType::Raw, 2, &first),
@@ -1100,21 +1382,9 @@ mod tests {
         write_all(&sparse_image, &slots, true).unwrap();
         let got = std::fs::read(&slots[0]).unwrap();
         assert_eq!(&got[..image.len()], &image[..]);
-        assert!(got[image.len()..].iter().all(|&b| b == 0xaa), "a sparse image says itself where everything goes");
+        assert!(
+            got[image.len()..].iter().all(|&b| b == 0xaa),
+            "a sparse image says itself where everything goes"
+        );
     }
-}
-
-/// Whether `file`, the image at `path`, is a Skyward recovery, taking one
-/// this build cannot read for one that is not and saying in the log what it
-/// started with: a stock recovery, or any recovery packed another way, is a
-/// thing a phone may well hold in a slot, and what is done with one is
-/// nothing, so it is no reason to stop what was asked for.
-pub fn is_skyward_at<R: Read + Seek>(file: &mut R, path: &Path) -> Result<bool> {
-    Ok(match is_skyward(file) {
-        Ok(skyward) => skyward,
-        Err(error) => {
-            let _ = kmsg(&format!("install: {} holds an image this build cannot read, so it is not taken for Skyward: {error:#}", path.display()));
-            false
-        }
-    })
 }

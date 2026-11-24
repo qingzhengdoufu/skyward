@@ -1,5 +1,5 @@
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont, VariableFont};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -49,12 +49,16 @@ struct Known {
 
 impl Face {
     fn new(data: &'static [u8], index: u32, weight: f32) -> Result<Self> {
-        let mut font =
-            FontRef::try_from_slice_and_index(data, index).map_err(|e| anyhow!("parse font: {e}"))?;
+        let mut font = FontRef::try_from_slice_and_index(data, index).map_err(|e| anyhow!("parse font: {e}"))?;
         font.set_variation(b"wght", weight);
         let upem = font.units_per_em().ok_or_else(|| anyhow!("font has no units-per-em"))?;
         let height = font.height_unscaled();
-        Ok(Face { font, upem, height, known: RefCell::new(Known::default()) })
+        Ok(Face {
+            font,
+            upem,
+            height,
+            known: RefCell::new(Known::default()),
+        })
     }
 
     /// The glyph for `ch`, and how far it advances the pen at `scale`.
@@ -79,7 +83,13 @@ impl Face {
             let (w, h) = (b.width() as u32, b.height() as u32);
             let mut cov = vec![0u8; (w * h) as usize];
             og.draw(|gx, gy, c| cov[(gy * w + gx) as usize] = (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-            Rc::new(Ink { x: b.min.x as i32, y: b.min.y as i32, w, h, cov })
+            Rc::new(Ink {
+                x: b.min.x as i32,
+                y: b.min.y as i32,
+                w,
+                h,
+                cov,
+            })
         });
         let mut known = self.known.borrow_mut();
         if known.glyphs.len() >= GLYPHS_KEPT {
@@ -150,8 +160,14 @@ impl Face {
     }
 
     fn bounds(&self, ch: char, em_px: f32) -> (f32, f32) {
-        let glyph = self.font.glyph_id(ch).with_scale_and_position(self.scale(em_px), ab_glyph::point(0.0, 0.0));
-        let og = self.font.outline_glyph(glyph).unwrap_or_else(|| panic!("font has no outline for {ch:?}"));
+        let glyph = self
+            .font
+            .glyph_id(ch)
+            .with_scale_and_position(self.scale(em_px), ab_glyph::point(0.0, 0.0));
+        let og = self
+            .font
+            .outline_glyph(glyph)
+            .unwrap_or_else(|| panic!("font has no outline for {ch:?}"));
         let b = og.px_bounds();
         (b.min.y, b.max.y)
     }
@@ -229,7 +245,10 @@ impl FontInfo {
     fn read(data: &[u8], index: u32) -> Result<FontInfo> {
         let face = ttf_parser::Face::parse(data, index).map_err(|e| anyhow!("parse font: {e}"))?;
         let name = |id: u16| -> Option<String> {
-            face.names().into_iter().filter(|n| n.name_id == id && n.is_unicode()).find_map(|n| n.to_string())
+            face.names()
+                .into_iter()
+                .filter(|n| n.name_id == id && n.is_unicode())
+                .find_map(|n| n.to_string())
         };
         let needed = |id: u16| name(id).ok_or_else(|| anyhow!("the font names no entry {id}"));
         let version = needed(ttf_parser::name_id::VERSION)?;
@@ -291,7 +310,14 @@ impl Fonts {
             .font
             .variations()
             .into_iter()
-            .map(|a| (String::from_utf8_lossy(&a.tag).into_owned(), a.min_value, a.default_value, a.max_value))
+            .map(|a| {
+                (
+                    String::from_utf8_lossy(&a.tag).into_owned(),
+                    a.min_value,
+                    a.default_value,
+                    a.max_value,
+                )
+            })
             .collect()
     }
 }

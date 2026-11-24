@@ -49,7 +49,12 @@ const LINE_GAP_DP: f32 = 30.0;
 
 const BLACK: Rgba = Rgba::rgb(0, 0, 0);
 const INK: Rgba = Rgba::rgb(255, 255, 255);
-const LINE_INK: Rgba = Rgba { r: 255, g: 255, b: 255, a: 160 };
+const LINE_INK: Rgba = Rgba {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 160,
+};
 
 /// What the charger does to the battery, in the language.
 fn doing(l: Lang, b: &Battery) -> &'static str {
@@ -75,7 +80,11 @@ impl Art {
         let (dpx, ppx, lpx) = (m.dp(DIGITS_DP), m.dp(PERCENT_DP), m.dp(LINE_DP));
         let (digits, line) = (b.level.to_string(), doing(l, b));
         let probe = Canvas::new(1, 1);
-        let (dw, pw, gap) = (probe.text_width(&face, &digits, dpx), probe.text_width(&face, "%", ppx), m.dp(PERCENT_GAP_DP));
+        let (dw, pw, gap) = (
+            probe.text_width(&face, &digits, dpx),
+            probe.text_width(&face, "%", ppx),
+            m.dp(PERCENT_GAP_DP),
+        );
         let x = (w - dw - gap - pw) / 2.0;
         // The digits and the percent sign share a baseline, the digits'
         // middle on the line the screen puts them.
@@ -95,7 +104,12 @@ impl Art {
         let line_art = Sprite::capture(lx - pad, cy - lpx, (lw + 2.0 * pad) as u32, (lpx * 2.0) as u32, |c, ox, oy| {
             c.text_vc(&f.body, line, lx + ox, cy + oy, lpx, INK, None);
         });
-        Ok(Art { shows: (b.level, line), digits: digits_art, percent, line: line_art })
+        Ok(Art {
+            shows: (b.level, line),
+            digits: digits_art,
+            percent,
+            line: line_art,
+        })
     }
 
     /// Whether the art shows `b` as it stands, in `l`.
@@ -153,5 +167,13 @@ fn tide(m: &Metrics, level: u8, ms: u64) -> (usize, Field) {
             *px = std::array::from_fn(|c| (NAVY[c] + (ELECTRIC[c] - NAVY[c]) * glow) * light * 255.0);
         }
     }
-    (top, Field { cell: CELL, cols, rows, rgb })
+    (
+        top,
+        Field {
+            cell: CELL,
+            cols,
+            rows,
+            rgb,
+        },
+    )
 }
