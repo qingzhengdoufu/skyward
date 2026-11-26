@@ -18,37 +18,247 @@ fn hits(rects: &[crate::geom::Rect], actions: &[Action]) -> Vec<Hit> {
     rects.iter().zip(actions).map(|(&rect, &action)| Hit { rect, action }).collect()
 }
 
+pub fn root_install(cx: &Ctx, kernelsu: bool) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = canvas(cx, t.m.h * 2);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let title = if kernelsu {
+        "KernelSU"
+    } else {
+        l.pick(["安装模块", "安裝模組", "Install module"])
+    };
+    let detail = if kernelsu {
+        format!("{} · android15-6.6", cx.info.kernel)
+    } else {
+        s.module_package.clone().unwrap_or_default()
+    };
+    let mut y = widgets::info_card(&mut c, t, f, top, &[(l.pick(["目标", "目標", "Target"]), detail)]);
+    if let Some(stage) = s.root_stage {
+        let text = l.pick(match stage {
+            skyward_root::Stage::Downloading => ["正在下载 6.6 安装资源", "正在下載 6.6 安裝資源", "Downloading 6.6 resources"],
+            skyward_root::Stage::BackingUp => ["正在备份 init_boot", "正在備份 init_boot", "Backing up init_boot"],
+            skyward_root::Stage::Patching => ["正在修补", "正在修補", "Patching"],
+            skyward_root::Stage::Writing => ["正在写入并校验", "正在寫入並驗證", "Writing and verifying"],
+            skyward_root::Stage::Done => ["完成", "完成", "Finished"],
+        });
+        y = widgets::progress_card(&mut c, t, f, y, title, text, None);
+    } else {
+        if let Some(result) = &s.root_result {
+            let text = match result {
+                Ok(text) => text,
+                Err(text) => text,
+            };
+            y = widgets::footnote(&mut c, t, f, y, text);
+        }
+        let available = s.data.storage_open()
+            && !s.system_detached
+            && (!kernelsu || skyward_root::compatible(&cx.info.kernel))
+            && (kernelsu || s.module_package.is_some());
+        let note = if kernelsu {
+            l.pick([
+                "下载到 data，仅写入当前槽位 init_boot。原镜像保存至 Skyward/root。",
+                "下載至 data，僅寫入目前槽位 init_boot。原映像檔儲存至 Skyward/root。",
+                "Resources go to data. Current-slot init_boot only; original image in Skyward/root.",
+            ])
+        } else {
+            l.pick([
+                "由已安装的 Root 管理器执行模块脚本，重启系统后生效。",
+                "由已安裝的 Root 管理器執行模組指令稿，重新啟動系統後生效。",
+                "The installed Root manager runs the module scripts. Applied after Android restarts.",
+            ])
+        };
+        y = widgets::footnote(&mut c, t, f, y, note);
+        if available {
+            let which = if kernelsu { Confirm::KernelSu } else { Confirm::RootModuleInstall };
+            let (label, danger) = crate::pages::confirm_label(which, s);
+            let rect = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+            out.push(Hit {
+                rect,
+                action: Action::Confirm(which),
+            });
+            y = rect.y + rect.h;
+        } else {
+            y = widgets::footnote(
+                &mut c,
+                t,
+                f,
+                y,
+                l.pick([
+                    "请先解密 data；KernelSU 需要确认 6.6 KMI。",
+                    "請先解密 data；KernelSU 需要確認 6.6 KMI。",
+                    "Decrypt data first. KernelSU requires a confirmed 6.6 KMI.",
+                ]),
+            );
+        }
+    }
+    Frame::new(t, c.crop_height((y + t.m.dp(24.0)) as u32), out, title, top)
+}
+
 pub fn tasks(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
-    let top = t.m.content_top;
-    let mut c = canvas(cx, t.m.h * 2);
-    let mut rows = vec![
-        Row::new(l.pick(["返回上一任务", "返回上一工作", "Resume previous task"])).icon(Rgba::rgb(52, 130, 255), Icon::Restore),
-        Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(Rgba::rgb(0, 160, 160), Icon::Globe),
-    ];
-    let mut actions = vec![Action::ResumeTask, Action::Open(Screen::Browser)];
-    if !matches!(s.install, Install::Idle) {
-        rows.push(
-            Row::new(l.pick(crate::lang::legacy(["安装任务", "安裝工作", "Installation"]))).icon(Rgba::rgb(29, 205, 58), Icon::Install),
+    let tiles = task_tiles(t, s.task_cards.len());
+    let height = tiles.last().map_or(t.m.h, |r| (r.y + r.h + t.m.dp(24.0)).ceil() as u32).max(t.m.h);
+    let mut c = canvas(cx, height);
+    if let Some(background) = &s.task_background {
+        draw_picture(
+            &mut c,
+            background,
+            crate::geom::Rect::new(0.0, 0.0, t.m.w as f32, height as f32),
+            0.0,
         );
-        actions.push(Action::Open(Screen::Installing));
+        c.shade_rows(0, height, |_, _| t.pal.bg.with_alpha(if t.dark { 180 } else { 205 }));
     }
-    rows.push(
-        Row::new(l.pick(crate::lang::legacy(["浏览器下载", "瀏覽器下載", "Browser downloads"]))).icon(Rgba::rgb(29, 205, 58), Icon::Folder),
+    let mut out = Vec::new();
+    for (index, (task, r)) in s.task_cards.iter().zip(tiles).enumerate() {
+        let preview = task_preview_rect(t, r);
+        let radius = t.m.card_radius;
+        c.fill_round_rect(preview.x, preview.y, preview.w, preview.h, radius, t.pal.card);
+        if let Some(picture) = &task.preview {
+            draw_picture(&mut c, picture, preview, radius);
+        }
+        let (color, icon) = task_icon(task.screen);
+        c.fill_circle(r.x + t.m.dp(13.0), r.y + t.m.dp(16.0), t.m.dp(12.0), color);
+        crate::icons::glyph(
+            &mut c,
+            icon,
+            r.x + t.m.dp(13.0),
+            r.y + t.m.dp(16.0),
+            t.m.dp(17.0),
+            Rgba::rgb(255, 255, 255),
+        );
+        c.text_vc(
+            &f.heading,
+            task.title,
+            r.x + t.m.dp(33.0),
+            r.y + t.m.dp(16.0),
+            t.m.dp(16.0),
+            t.pal.text,
+            Some(r.w - t.m.dp(69.0)),
+        );
+        out.push(Hit {
+            rect: r,
+            action: Action::ResumeTaskAt(index),
+        });
+        let close = crate::geom::Rect::new(r.x + r.w - t.m.dp(32.0), r.y, t.m.dp(32.0), t.m.dp(40.0));
+        let (x, y) = (close.centre().0, r.y + t.m.dp(16.0));
+        let size = t.m.dp(4.0);
+        c.line(x - size, y - size, x + size, y + size, t.m.dp(1.7), t.pal.subtitle);
+        c.line(x + size, y - size, x - size, y + size, t.m.dp(1.7), t.pal.subtitle);
+        out.push(Hit {
+            rect: close,
+            action: Action::CloseTask(task.screen),
+        });
+    }
+    if s.task_cards.is_empty() {
+        widgets::footnote(
+            &mut c,
+            t,
+            f,
+            t.m.content_top,
+            l.pick(["暂无其他任务", "暫無其他工作", "No recent tasks"]),
+        );
+    }
+    let mut dock = Canvas::new(t.m.w, (t.m.dp(76.0) + t.bottom_inset).ceil() as u32);
+    let (x, y, radius) = (t.m.w as f32 / 2.0, t.m.dp(34.0), t.m.dp(25.0));
+    dock.fill_circle(x, y, radius, t.pal.round.with_alpha(235));
+    dock.line(
+        x - t.m.dp(7.0),
+        y - t.m.dp(7.0),
+        x + t.m.dp(7.0),
+        y + t.m.dp(7.0),
+        t.m.dp(2.4),
+        t.pal.text,
     );
-    actions.push(Action::Open(Screen::BrowserDownloads));
-    rows.push(
-        Row::new(l.pick(crate::lang::legacy(["系统下载", "系統下載", "System download"]))).icon(Rgba::rgb(52, 130, 255), Icon::Phone),
+    dock.line(
+        x + t.m.dp(7.0),
+        y - t.m.dp(7.0),
+        x - t.m.dp(7.0),
+        y + t.m.dp(7.0),
+        t.m.dp(2.4),
+        t.pal.text,
     );
-    actions.push(Action::Open(Screen::Update));
-    let list = widgets::list(&mut c, t, f, top, &rows);
-    Frame::new(
-        t,
-        c.crop_height((list.bottom + t.m.dp(24.0)) as u32),
-        hits(&list.rows, &actions),
-        l.pick(crate::lang::legacy(["任务", "工作", "Tasks"])),
-        top,
-    )
+    Frame {
+        header: false,
+        back: false,
+        dock: Some(Dock {
+            canvas: dock,
+            hits: vec![Hit {
+                rect: crate::geom::Rect::new(x - radius, y - radius, radius * 2.0, radius * 2.0),
+                action: Action::ClearTasks,
+            }],
+        }),
+        ..Frame::new(t, c, out, "", t.m.dp(96.0))
+    }
+}
+
+fn task_icon(screen: Screen) -> (Rgba, Icon) {
+    match screen {
+        Screen::Browser => (Rgba::rgb(0, 160, 160), Icon::Globe),
+        Screen::Files => (Rgba::rgb(235, 171, 45), Icon::Folder),
+        Screen::Install => (Rgba::rgb(29, 180, 58), Icon::Install),
+        Screen::RootModules => (Rgba::rgb(35, 140, 200), Icon::Shield),
+        Screen::Backup => (Rgba::rgb(65, 130, 240), Icon::Backup),
+        Screen::Restore => (Rgba::rgb(65, 130, 240), Icon::Restore),
+        Screen::Terminal => (Rgba::rgb(88, 98, 110), Icon::Terminal),
+        _ => (Rgba::rgb(110, 120, 135), Icon::Gear),
+    }
+}
+
+pub(crate) fn task_chrome(out: &mut Canvas, t: &crate::Theme, state: &State, rows: std::ops::Range<u32>) {
+    let rows = rows.start.min(out.h)..rows.end.min(out.h);
+    let mut band = Canvas::band(out.w, out.h, rows.clone(), 0..out.w, t.pal.bg);
+    if let Some(background) = &state.task_background {
+        draw_picture(
+            &mut band,
+            background,
+            crate::geom::Rect::new(0.0, 0.0, out.w as f32, out.h as f32),
+            0.0,
+        );
+        band.shade_rows(rows.start, rows.end, |_, _| t.pal.bg.with_alpha(if t.dark { 180 } else { 205 }));
+    }
+    out.put_rows(&band, rows.start as i32, rows.end as i32, rows.start as i32);
+}
+
+/// Scaled previews are drawn inside their card, so bands and page transitions clip them too.
+fn draw_picture(c: &mut Canvas, picture: &BrowserPicture, r: crate::geom::Rect, radius: f32) {
+    let (w, h) = (picture.width as usize, picture.height as usize);
+    if w == 0 || h == 0 || picture.pixels.len() != w * h * 4 {
+        return;
+    }
+    let held = c.held();
+    let cols = c.cols();
+    let (first, last) = (
+        (r.y.floor().max(held.start as f32)) as u32,
+        (r.y + r.h).ceil().min(held.end as f32).max(0.0) as u32,
+    );
+    let (left, right) = (
+        (r.x.floor().max(cols.start as f32)) as u32,
+        (r.x + r.w).ceil().min(cols.end as f32).max(0.0) as u32,
+    );
+    for y in first..last {
+        let sy = ((y as f32 - r.y + 0.5) / r.h * h as f32 - 0.5).clamp(0.0, (h - 1) as f32);
+        let iy = sy as usize;
+        let fy = sy.fract();
+        for x in left..right {
+            let qx = (x as f32 + 0.5 - r.x - r.w / 2.0).abs() - (r.w / 2.0 - radius);
+            let qy = (y as f32 + 0.5 - r.y - r.h / 2.0).abs() - (r.h / 2.0 - radius);
+            let cov = (0.5 - (qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius)).clamp(0.0, 1.0);
+            if cov == 0.0 {
+                continue;
+            }
+            let sx = ((x as f32 - r.x + 0.5) / r.w * w as f32 - 0.5).clamp(0.0, (w - 1) as f32);
+            let ix = sx as usize;
+            let fx = sx.fract();
+            let pixel = |px: usize, py: usize, k: usize| picture.pixels[(py * w + px) * 4 + k] as f32;
+            let channel = |k| {
+                let top = pixel(ix, iy, k) * (1.0 - fx) + pixel((ix + 1).min(w - 1), iy, k) * fx;
+                let bottom = pixel(ix, (iy + 1).min(h - 1), k) * (1.0 - fx) + pixel((ix + 1).min(w - 1), (iy + 1).min(h - 1), k) * fx;
+                (top * (1.0 - fy) + bottom * fy).round() as u8
+            };
+            c.blend(x as i32, y as i32, Rgba::rgb(channel(0), channel(1), channel(2)), cov);
+        }
+    }
 }
 
 pub fn modules(cx: &Ctx) -> Frame {
@@ -64,11 +274,16 @@ pub fn modules(cx: &Ctx) -> Frame {
         f,
         y,
         &[
+            Row::new("KernelSU").icon(Rgba::rgb(35, 140, 200), Icon::Shield),
+            Row::new(l.pick(["安装模块 ZIP", "安裝模組 ZIP", "Install module ZIP"])).icon(Rgba::rgb(29, 205, 58), Icon::Install),
             Row::new(l.pick(crate::lang::legacy(["刷新模块", "重新整理模組", "Refresh modules"])))
                 .icon(Rgba::rgb(52, 130, 255), Icon::Restore),
         ],
     );
-    out.extend(hits(&read.rows, &[Action::ReadRootModules]));
+    out.extend(hits(
+        &read.rows,
+        &[Action::Open(Screen::KernelSu), Action::PickRootModule, Action::ReadRootModules],
+    ));
     y = read.bottom + t.m.card_gap;
     if !s.root_notice.is_empty() {
         y = widgets::footnote(&mut c, t, f, y, &s.root_notice);

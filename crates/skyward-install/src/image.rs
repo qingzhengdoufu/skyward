@@ -397,6 +397,13 @@ fn holds(packed: impl Read, wanted: impl Fn(&str) -> bool) -> Result<bool> {
     Ok(find(packed, wanted, |_| Ok(()))?.is_some())
 }
 
+pub fn rooted_ramdisk(packed: impl Read) -> Result<bool> {
+    holds(packed, |name| {
+        let name = name.to_ascii_lowercase();
+        name.contains("kernelsu") || name.contains("magisk") || name.starts_with(".backup")
+    })
+}
+
 /// What `take` makes of the first entry of a packed ramdisk whose name
 /// `wanted` picks, read from its start; none when no entry's name is
 /// picked.

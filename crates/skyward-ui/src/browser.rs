@@ -373,10 +373,7 @@ pub fn engine_viewport(t: &Theme, immersive: bool) -> Rect {
 }
 
 pub fn full_input_viewport(t: &Theme) -> Rect {
-    viewport_above(
-        t,
-        t.m.h as f32 - t.bottom_inset - widgets::keyboard_height(t) - t.m.dp(input_field_dp()),
-    )
+    viewport_above(t, t.m.h as f32 - widgets::keyboard_height(t) - t.m.dp(input_field_dp()))
 }
 
 fn input_field_dp() -> f32 {
@@ -1065,7 +1062,7 @@ fn full_input(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let m = &t.m;
     let mut frame = full_page(cx);
-    let keys_top = m.h as f32 - t.bottom_inset - widgets::keyboard_height(t);
+    let keys_top = m.h as f32 - widgets::keyboard_height(t);
     let direct = s.browser.full_text;
     let field_top = keys_top
         - m.dp(if direct {

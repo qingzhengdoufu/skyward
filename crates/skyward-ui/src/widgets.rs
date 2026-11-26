@@ -1189,6 +1189,7 @@ pub fn back_held(c: &mut Canvas, t: &Theme) {
 /// What the round button at the right end of the bar shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Glyph {
+    Add,
     /// A prompt and a cursor: a terminal.
     Terminal,
     /// A tick: keep what was done.
@@ -1227,6 +1228,10 @@ fn glyph_at(c: &mut Canvas, t: &Theme, glyph: Glyph, dx: f32, dy: f32, color: Rg
     let at = |x: f32, y: f32| (cx + m.dp(x), cy + m.dp(y));
     let mut stroke = |(x0, y0): (f32, f32), (x1, y1): (f32, f32)| c.line(x0, y0, x1, y1, sw, color);
     match glyph {
+        Glyph::Add => {
+            stroke(at(-7.0, 0.0), at(7.0, 0.0));
+            stroke(at(0.0, -7.0), at(0.0, 7.0));
+        }
         Glyph::Terminal => {
             stroke(at(-8.0, -6.0), at(-2.0, 0.0));
             stroke(at(-2.0, 0.0), at(-8.0, 6.0));
@@ -1500,7 +1505,7 @@ pub fn dock_bar(t: &Theme, f: &Fonts, bg: Rgba, labels: &[&str]) -> (Canvas, Vec
 pub fn chosen_bar(t: &Theme, f: &Fonts, bg: Rgba, labels: &[&str], chosen: Option<usize>) -> (Canvas, Vec<Rect>) {
     let m = &t.m;
     let (h, pad, gap) = (m.dp(48.0), m.dp(12.0), m.dp(12.0));
-    let mut c = Canvas::new(m.w, (pad + h + m.dp(KEYBOARD_BOTTOM_DP)).ceil() as u32);
+    let mut c = Canvas::new(m.w, (pad + h + m.dp(KEYBOARD_BOTTOM_DP) + t.bottom_inset).ceil() as u32);
     c.clear(bg);
     let n = labels.len() as f32;
     let w = (m.w as f32 - m.margin * 2.0 - gap * (n - 1.0)) / n;
@@ -2454,7 +2459,7 @@ const PAD_KEYS: [Cap; 12] = [
 
 /// How tall the keypad is on this theme's screen.
 pub fn keypad_height(t: &Theme) -> f32 {
-    t.m.dp(PAD_TOP_DP + 4.0 * PAD_KEY_DP + 3.0 * PAD_GAP_Y_DP + PAD_BOTTOM_DP)
+    t.m.dp(PAD_TOP_DP + 4.0 * PAD_KEY_DP + 3.0 * PAD_GAP_Y_DP + PAD_BOTTOM_DP) + t.bottom_inset
 }
 
 /// The keypad a screen lock's code is typed on, its top at `top`: four rows
@@ -3287,7 +3292,11 @@ const KEYBOARD_BOTTOM_DP: f32 = 26.0;
 /// How tall the keyboard is on this theme's screen.
 pub fn keyboard_height(t: &Theme) -> f32 {
     let m = &t.m;
-    m.dp(KEYBOARD_TOP_DP + 4.0 * KEY_H_DP + 3.0 * KEY_GAP_Y_DP + KEYBOARD_BOTTOM_DP)
+    m.dp(KEYBOARD_TOP_DP + 4.0 * KEY_H_DP + 3.0 * KEY_GAP_Y_DP + KEYBOARD_BOTTOM_DP) + t.bottom_inset
+}
+
+pub fn keyboard_panel(t: &Theme) -> Rgba {
+    if t.dark { Rgba::rgb(18, 18, 18) } else { Rgba::rgb(224, 226, 231) }
 }
 
 /// The on-screen keyboard across the bottom of the screen, its top at
@@ -3308,9 +3317,8 @@ pub fn keyboard(
 ) -> Vec<(Rect, Cap)> {
     let m = &t.m;
     let w = m.w as f32;
-    let (panel, key, side, ink, shadow) = if t.dark {
+    let (key, side, ink, shadow) = if t.dark {
         (
-            Rgba::rgb(18, 18, 18),
             Rgba::rgb(58, 58, 58),
             Rgba::rgb(38, 38, 38),
             Rgba::rgb(237, 237, 237),
@@ -3318,14 +3326,13 @@ pub fn keyboard(
         )
     } else {
         (
-            Rgba::rgb(224, 226, 231),
             Rgba::rgb(255, 255, 255),
             Rgba::rgb(193, 198, 207),
             Rgba::rgb(0, 0, 0),
             Rgba::rgb(138, 141, 147),
         )
     };
-    c.fill_rect(0.0, top, w, keyboard_height(t), panel);
+    c.fill_rect(0.0, top, w, keyboard_height(t), keyboard_panel(t));
     let (pad, gx, gy, kh) = (m.dp(KEYBOARD_PAD_X_DP), m.dp(KEY_GAP_X_DP), m.dp(KEY_GAP_Y_DP), m.dp(KEY_H_DP));
     let kw = (w - pad * 2.0 - gx * 9.0) / 10.0;
     let side_w = kw * 1.35;

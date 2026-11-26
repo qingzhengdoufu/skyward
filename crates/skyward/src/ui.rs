@@ -1381,6 +1381,7 @@ pub(super) struct Pages<'a> {
     pub(super) relabeler: Option<filework::Worker>,
     /// Backing up or restoring under way.
     pub(super) backuper: Option<backup::Worker>,
+    root_worker: Option<skyward_root::Worker>,
     /// An update's merge followed: one the recovery found under way, which
     /// the kernel took up again as the snapshots were mapped, or one started
     /// on the update page.
@@ -1632,6 +1633,7 @@ impl<'a> Pages<'a> {
             worker: None,
             relabeler: None,
             backuper: None,
+            root_worker: None,
             merger: None,
             systems_worker,
             switch_asked: false,
@@ -1797,7 +1799,7 @@ impl<'a> Pages<'a> {
     /// stands.
     pub(super) fn turn(&mut self, sleeper: &Sleeper, uevents: &uevent::Listener) -> Result<()> {
         let now = monotonic_ms();
-        if self.leave_at.is_some_and(|at| now >= at) {
+        if self.leave_at.is_some_and(|at| now >= at) && self.root_worker.is_none() {
             self.leave_at = None;
             power(self.leave)?;
         }
@@ -1840,6 +1842,7 @@ impl<'a> Pages<'a> {
         self.parts_told(now)?;
         self.backup_told(now);
         self.merge_told(now)?;
+        self.root_told();
         self.systems_told(now)?;
         self.wlan_told()?;
         self.keep_settings(now)?;
@@ -2052,6 +2055,9 @@ impl<'a> Pages<'a> {
         if let Some(b) = &self.backuper {
             fds.push(b.fd());
         }
+        if let Some(worker) = &self.root_worker {
+            fds.push(worker.fd());
+        }
         if let Some(m) = &self.merger {
             fds.push(m.fd());
         }
@@ -2099,6 +2105,7 @@ impl<'a> Pages<'a> {
     pub(super) fn may_sleep(&self) -> Result<bool> {
         let systems_busy = self.systems_worker.as_ref().is_some_and(systems::Worker::busy);
         let busy = self.browser_download.is_some()
+            || self.root_worker.is_some()
             || self.browser.is_some()
             || self.browser_stream.is_some()
             || self.installer.is_some()
@@ -2155,6 +2162,20 @@ impl<'a> Pages<'a> {
 /// What the work under way told since the last turn, each kind of work
 /// taken in by a method of its own.
 impl Pages<'_> {
+    fn root_told(&mut self) {
+        let events = self.root_worker.as_ref().map(skyward_root::Worker::events).unwrap_or_default();
+        for event in events {
+            match event {
+                skyward_root::Event::Stage(stage) => self.app.state.root_stage = Some(stage),
+                skyward_root::Event::Ended(result) => {
+                    self.app.state.root_stage = None;
+                    self.app.state.root_result = Some(result);
+                    self.root_worker = None;
+                }
+            }
+            self.app.refresh();
+        }
+    }
     /// What the installer told: its page follows it, and its end starts
     /// what the package, the request or rescue asked for after it.
     pub(super) fn installer_told(&mut self, now: u64) -> Result<()> {
@@ -2798,7 +2819,84 @@ impl Pages<'_> {
     /// to it.
     pub(super) fn effect(&mut self, fx: Effect, now: u64) -> Result<Vec<Effect>> {
         let cfg = self.cfg;
+        if self.root_worker.is_some()
+            && matches!(
+                fx,
+                Effect::Reboot(_)
+                    | Effect::SetSlot(_)
+                    | Effect::FactoryReset
+                    | Effect::Wipe(_)
+                    | Effect::EnterRecovery
+                    | Effect::Flash { .. }
+                    | Effect::WriteSkyward { .. }
+                    | Effect::SetAvb { .. }
+                    | Effect::Filesystem { .. }
+                    | Effect::VbmetaRestore { .. }
+                    | Effect::Restore { .. }
+                    | Effect::RestoreImage { .. }
+                    | Effect::Install
+                    | Effect::InstallFile(..)
+                    | Effect::InstallPath(_)
+                    | Effect::InstallSystem { .. }
+                    | Effect::SwitchSystem(_)
+                    | Effect::UpdateSkyward(_)
+                    | Effect::Merge
+                    | Effect::FileTransfer(_)
+            )
+        {
+            self.partition_wait(now);
+            return Ok(Vec::new());
+        }
         match fx {
+            Effect::RootInstall(mut job) => {
+                if !self.app.state.data.storage_open()
+                    || self.app.state.system_detached
+                    || self.installer.is_some()
+                    || self.partition_busy()
+                    || self.worker.is_some()
+                    || self.relabeler.is_some()
+                {
+                    self.partition_wait(now);
+                    return Ok(Vec::new());
+                }
+                if !withhold(&mut self.transfer, &mut self.app, now)? {
+                    return Ok(Vec::new());
+                }
+                if let skyward_root::Job::InstallKernelSu { kernel } = &mut job {
+                    *kernel = self.info.kernel.clone();
+                }
+                match skyward_root::Worker::start(job, self.servers.clone()) {
+                    Ok(worker) => {
+                        self.root_worker = Some(worker);
+                        self.app.state.root_stage = Some(skyward_root::Stage::Downloading);
+                        self.app.state.root_result = None;
+                    }
+                    Err(e) => self.app.state.root_result = Some(Err(format!("{e:#}"))),
+                }
+                self.app.refresh();
+            }
+            Effect::MakeFolder { folder, name } => {
+                if self.installer.is_some() || self.partition_busy() || self.worker.is_some() {
+                    self.partition_wait(now);
+                    return Ok(Vec::new());
+                }
+                let result = (|| -> Result<()> {
+                    ensure!(
+                        !name.is_empty() && !matches!(name.as_str(), "." | "..") && !name.contains(['/', '\\', '\0']) && name.len() <= 255,
+                        "invalid folder name"
+                    );
+                    ensure!(folder == self.app.state.files.path, "folder changed");
+                    let parent = Path::new(&folder);
+                    skyward_files::make_new_folder(&parent.join(name), ownership(parent)?)
+                })();
+                match result {
+                    Ok(()) => {
+                        self.app.folder_created(now);
+                        list(&mut self.app, folder, &self.closed)?;
+                    }
+                    Err(e) => self.app.report(&format!("{e:#}"), now),
+                }
+            }
             Effect::BrowserPluginDesktop { enabled } => {
                 if let Some(worker) = &self.browser_stream {
                     worker.command(crate::browser::Control::Desktop { enabled });
@@ -3568,7 +3666,8 @@ impl Pages<'_> {
     }
 
     fn partition_busy(&self) -> bool {
-        self.browser_stream.is_some()
+        self.root_worker.is_some()
+            || self.browser_stream.is_some()
             || self.eraser.is_some()
             || self.decryptor.is_some()
             || self.part_worker.is_some()

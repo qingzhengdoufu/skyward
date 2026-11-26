@@ -83,7 +83,7 @@ impl App {
                 whole.replace(&frame.canvas);
                 frame.canvas = whole;
             }
-            self.height = frame.height(&t) + if self.browser_fullscreen() { 0.0 } else { self.nav_height() as f32 };
+            self.height = frame.height(&t);
             self.frame = Some(frame);
             self.clamp_scroll();
             if std::mem::take(&mut self.snap) {
@@ -585,8 +585,13 @@ impl App {
         }
         let bar = view.bar;
         let strip = frame.pinned.as_ref().map(|p| (p, pinned_top(t, p, offset)));
+        if screen == Screen::Tasks {
+            crate::tools::task_chrome(out, t, &self.state, 0..m.dp(72.0) as u32);
+            let bottom = m.h.saturating_sub(frame.dock.as_ref().map_or(0, |dock| dock.canvas.h));
+            crate::tools::task_chrome(out, t, &self.state, bottom..out.h);
+        }
         shine(out, Group::Page);
-        if bar > 0.0 && frame.browser_area.is_none() {
+        if bar > 0.0 && frame.browser_area.is_none() && screen != Screen::Tasks {
             match strip {
                 Some((p, top)) => widgets::strip_mask(out, t, frame.bg, bar, top.round(), top.round() + p.canvas.h as f32),
                 None => {
@@ -604,7 +609,7 @@ impl App {
             shine(out, Group::Strip);
         }
         if let Some(d) = &frame.dock {
-            if browser_fullscreen {
+            if browser_fullscreen || screen == Screen::Tasks {
                 out.lay(&d.canvas, 0, t.m.h as i32 - d.canvas.h as i32, 1.0);
             } else {
                 out.put(&d.canvas, t.m.h as i32 - d.canvas.h as i32);

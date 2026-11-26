@@ -11,6 +11,13 @@ pub enum RenameRefused {
 }
 
 impl App {
+    pub fn folder_created(&mut self, now: u64) {
+        if self.screen() == Screen::NewFolder {
+            let _ = self.back(now);
+        }
+        self.state.new_name.clear();
+        self.refresh();
+    }
     /// How renaming the entry the file page shows went: done, the folder
     /// comes back with the entry under its new name; refused, why.
     pub fn renamed(&mut self, outcome: Result<(), RenameRefused>, now: u64) {

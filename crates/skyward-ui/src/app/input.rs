@@ -20,14 +20,17 @@ impl App {
             self.drag = Drag::Waking;
             return Vec::new();
         }
-        if let Some(effects) = self.immersive_touch(ev, now) {
+        if let Some(effects) = self.navigation_touch(ev, now) {
             return effects;
         }
-        if let Some(effects) = self.navigation_touch(ev, now) {
+        if let Some(effects) = self.immersive_touch(ev, now) {
             return effects;
         }
         if !self.browser_immersive() && self.shade_touch(ev, now) {
             return Vec::new();
+        }
+        if let Some(effects) = self.browser_edge_touch(ev, now) {
+            return effects;
         }
         let shade_content = self.shade.is_some() && self.screen() == Screen::ControlCenter;
         if !shade_content && self.browser_address_touch(ev, f, now) {
@@ -95,7 +98,11 @@ impl App {
                 } else {
                     None
                 };
-                let at_edge = side.filter(|_| self.stack.len() > 1 && !self.frame.as_ref().is_some_and(|frame| frame.fixed));
+                let at_edge = side.filter(|_| {
+                    self.stack.len() > 1
+                        && (!self.frame.as_ref().is_some_and(|frame| frame.fixed)
+                            || matches!(self.screen(), Screen::NewFolder | Screen::Browser | Screen::BrowserAddress))
+                });
                 if at_edge.is_some() && self.in_motion(now) {
                     self.drag = Drag::Press {
                         x,
@@ -166,7 +173,7 @@ impl App {
                             },
                         )
                     })
-                } else if self.bar.on && y < widgets::bar_bottom(&t) {
+                } else if (self.screen() == Screen::Tasks && y < m.dp(72.0)) || (self.bar.on && y < widgets::bar_bottom(&t)) {
                     None
                 } else {
                     let fr = self.frame.as_ref();
@@ -251,7 +258,7 @@ impl App {
                             Drag::Edge {
                                 start: x0,
                                 from_left,
-                                armed: false,
+                                armed: if from_left { x - x0 } else { x0 - x } > m.dp(BACK_SWIPE_DP),
                                 x,
                                 cy: y0 - m.dp(CUE_LIFT_DP),
                             }
@@ -375,7 +382,7 @@ impl App {
                 Drag::BrowserScroll { start, last } => {
                     fx.extend(self.act(Action::BrowserPluginScroll((last - start) / self.px_per_dp), now))
                 }
-                Drag::Edge { armed: true, .. } => fx.extend(self.back(now)),
+                Drag::Edge { armed: true, .. } => fx.extend(self.act(Action::NavBack, now)),
                 Drag::Edge {
                     start, from_left, x, cy, ..
                 } => {
@@ -427,7 +434,7 @@ impl App {
     }
 }
 
-fn browser_point(rect: Rect, x: f32, y: f32) -> (u16, u16) {
+pub(super) fn browser_point(rect: Rect, x: f32, y: f32) -> (u16, u16) {
     (
         ((x - rect.x) / rect.w * 1000.0).clamp(0.0, 999.0) as u16,
         ((y - rect.y) / rect.h * 1000.0).clamp(0.0, 999.0) as u16,

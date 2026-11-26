@@ -1,5 +1,13 @@
 ![Skyward Recovery](assets/hero.jpg)
 
+> 本分支包含 REDMI K80 Pro（`miro`）适配。当前已验收基线见
+> [test45 说明](docs/MIRO-TEST45.md)，上游同步情况见
+> [0.5.1 集成记录](docs/MIRO-UPSTREAM051.md)。原始上游是
+> [kirklin/skyward](https://github.com/kirklin/skyward)，设备适配参考
+> [Rinrroy/skyward-for-haotian](https://github.com/Rinrroy/skyward-for-haotian)。
+> 下文保留继承的上游介绍。浏览器开发镜像暂不公开分发，详见
+> [运行资源分发限制](crates/skyward-browser/NOTICE.md)。
+
 # Skyward for the Xiaomi 15 Pro
 
 [English](README.md) | 简体中文

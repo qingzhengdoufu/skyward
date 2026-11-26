@@ -243,6 +243,6 @@ impl Frame {
         }
         let h = self.canvas.h as f32;
         let h = self.rows.as_ref().map_or(h, |r| h.max((r.bottom() + t.m.margin * 2.0).ceil()));
-        h + self.dock.as_ref().map_or(0.0, |d| d.canvas.h as f32)
+        h + self.dock.as_ref().map_or(0.0, |d| d.canvas.h as f32) + t.bottom_inset
     }
 }

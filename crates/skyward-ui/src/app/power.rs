@@ -114,6 +114,8 @@ impl App {
     /// now, then the panel goes off. A finger on the glass lets go of what
     /// it held, and the page stops where it is.
     pub(super) fn sleep(&mut self, now: u64) {
+        self.nav_gesture = None;
+        self.browser_edge = None;
         self.darkening = self.panel(now);
         self.curtain.set(false, now);
         self.display_on = false;

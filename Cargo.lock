@@ -2491,6 +2491,7 @@ dependencies = [
  "skyward-net",
  "skyward-omapi",
  "skyward-programs",
+ "skyward-root",
  "skyward-sys",
  "skyward-systems",
  "skyward-ui",
@@ -2759,6 +2760,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "skyward-root"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "hex",
+ "libc",
+ "lz4_flex 0.14.0",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "skyward-block",
+ "skyward-bootimg",
+ "skyward-install",
+ "skyward-net",
+ "skyward-sys",
+ "skyward-vab",
+ "tempfile",
+ "ureq",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "skyward-sys"
 version = "1.0.0"
 dependencies = [
@@ -2826,6 +2850,7 @@ dependencies = [
  "skyward-info",
  "skyward-install",
  "skyward-net",
+ "skyward-root",
  "skyward-sys",
  "skyward-systems",
  "skyward-vab",

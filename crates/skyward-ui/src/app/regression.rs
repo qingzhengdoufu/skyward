@@ -913,42 +913,40 @@ fn full_page_bookmarks_and_menu_zoom_remain_usable() {
 }
 
 #[test]
-fn smaller_navigation_buttons_vibrate_once_and_obey_the_touch_preference() {
+fn gesture_navigation_returns_home_and_vibrates_only_when_committed() {
     let (f, i) = (fonts(), info());
     for enabled in [true, false] {
-        for button in 0..3 {
-            let mut app = App::new(Screen::Home, W, H, PPD);
+        for hold in [false, true] {
+            let mut app = App::new(Screen::Settings, W, H, PPD);
             app.set_navigation(true);
             app.state.vibrate = enabled;
             app.frame(&f, &i);
-            assert_eq!(app.nav_height(), (PPD * 32.0) as u32);
-            let x = app.navigation_buttons()[button].centre().0;
+            assert_eq!(app.nav_height(), (PPD * 24.0) as u32);
+            let x = W as f32 / 2.0;
             let y = H as f32 - app.nav_height() as f32 / 2.0;
             let expected = if enabled { vec![Effect::Haptic] } else { Vec::new() };
-            assert_eq!(app.touch(Touch::Down(x, y), &f, 1000), expected);
-            assert!(
-                app.touch(Touch::Down(x, y), &f, 1001).is_empty(),
-                "duplicate down does not vibrate twice"
-            );
-            assert!(
-                app.touch(Touch::Up, &f, 1010).is_empty(),
-                "release performs navigation without another haptic"
-            );
-            assert_eq!(app.screen(), if button == 2 { Screen::Tasks } else { Screen::Home });
+            assert!(app.touch(Touch::Down(x, y), &f, 1000).is_empty());
+            app.touch(Touch::Move(x, y - PPD * 80.0), &f, 1100);
+            if hold {
+                assert_eq!(app.tick(1400), expected);
+                assert!(app.touch(Touch::Up, &f, 1410).is_empty());
+                assert_eq!(app.screen(), Screen::Tasks);
+                assert!(app.tick(1500).is_empty());
+            } else {
+                assert_eq!(app.touch(Touch::Up, &f, 1150), expected);
+                assert_eq!(app.screen(), Screen::Home);
+            }
         }
     }
 }
 
 #[test]
-fn navigation_uses_a_compact_group_and_dragging_out_cancels_the_button() {
+fn a_tap_or_horizontal_bottom_gesture_does_not_leave_the_page() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Settings, W, H, PPD);
     app.set_navigation(true);
     app.frame(&f, &i);
-    let buttons = app.navigation_buttons();
-    assert!(buttons[0].x > 0.0 && buttons[2].x + buttons[2].w < W as f32);
-    assert_eq!(buttons[0].w, PPD * 84.0);
-    let (x, y) = buttons[1].centre();
+    let (x, y) = (W as f32 / 2.0, H as f32 - 10.0);
     assert!(app.touch(Touch::Down(5.0, y), &f, 1000).is_empty());
     app.touch(Touch::Up, &f, 1001);
     assert_eq!(app.screen(), Screen::Settings);
@@ -956,7 +954,7 @@ fn navigation_uses_a_compact_group_and_dragging_out_cancels_the_button() {
     app.touch(Touch::Move(5.0, y), &f, 1020);
     app.touch(Touch::Up, &f, 1030);
     assert_eq!(app.screen(), Screen::Settings);
-    assert!(app.nav_press.is_none());
+    assert!(app.nav_gesture.is_none());
 }
 
 #[test]
@@ -972,6 +970,426 @@ fn control_center_has_no_header_settings_shortcut() {
         .collect();
     assert_eq!(settings.len(), 1, "the grid settings shortcut is retained");
     assert!(settings[0].rect.y >= top, "no upper-right header shortcut remains");
+}
+
+#[test]
+fn recent_tasks_are_bounded_and_invalid_details_fall_back_to_their_parent() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.open(Screen::Files);
+    app.state.file = Some(entry("test.txt", FileKind::File));
+    app.open(Screen::FileInfo);
+    app.home();
+    assert_eq!(app.state.task_cards.len(), 1);
+    app.state.file = None;
+    app.overview();
+    app.resume_task(0);
+    assert_eq!(app.screen(), Screen::Files);
+    app.frame(&f, &i);
+    app.home();
+    app.open(Screen::Settings);
+    app.home();
+    assert_eq!(app.state.task_cards.len(), 2);
+    app.overview();
+    app.resume_task(1);
+    assert_eq!(app.screen(), Screen::Files);
+    assert_eq!(app.stack.first().unwrap().0, Screen::Home);
+}
+
+#[test]
+fn password_and_decryption_pages_never_make_preview_cards() {
+    for screen in [Screen::Decrypt, Screen::WlanPassword, Screen::WlanAdd] {
+        let mut app = App::new(screen, W, H, PPD);
+        app.home();
+        assert!(app.state.task_cards.is_empty());
+    }
+}
+
+#[test]
+fn new_folder_supports_both_edge_back_gestures_without_creating_a_folder() {
+    let (f, i) = (fonts(), info());
+    for left in [true, false] {
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.open(Screen::Files);
+        app.act(Action::NewFolder, 0);
+        app.state.new_name = "未创建".into();
+        app.frame(&f, &i);
+        let x = if left { PPD * 3.0 } else { W as f32 - PPD * 3.0 };
+        let end = x + if left { PPD * 100.0 } else { -PPD * 100.0 };
+        app.touch(Touch::Down(x, PPD * 220.0), &f, 1000);
+        app.touch(Touch::Move(end, PPD * 220.0), &f, 1100);
+        assert!(app.touch(Touch::Up, &f, 1200).is_empty());
+        assert_eq!(app.screen(), Screen::Files);
+        assert!(app.state.new_name.is_empty());
+    }
+}
+
+#[test]
+fn browser_edge_back_is_not_forwarded_to_the_webpage_and_vertical_drags_still_are() {
+    let (f, i) = (fonts(), info());
+    for left in [true, false] {
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.open(Screen::Browser);
+        app.state.browser.full_active = true;
+        app.state.browser.view = BrowserView::Full;
+        app.frame(&f, &i);
+        let x = if left { PPD * 3.0 } else { W as f32 - PPD * 3.0 };
+        let end = x + if left { PPD * 100.0 } else { -PPD * 100.0 };
+        let y = PPD * 220.0;
+        assert!(app.touch(Touch::Down(x, y), &f, 1000).is_empty());
+        assert!(
+            !app.touch(Touch::Move(end, y), &f, 1100)
+                .iter()
+                .any(|fx| matches!(fx, Effect::BrowserPluginTouch { .. }))
+        );
+        app.touch(Touch::Up, &f, 1200);
+        assert_eq!(app.screen(), Screen::Home);
+        app.open(Screen::Browser);
+        app.frame(&f, &i);
+        app.touch(Touch::Down(x, y), &f, 2000);
+        let effects = app.touch(Touch::Move(x, y + PPD * 30.0), &f, 2100);
+        assert!(matches!(
+            effects.as_slice(),
+            [
+                Effect::BrowserPluginTouch { phase: 0, .. },
+                Effect::BrowserPluginTouch { phase: 1, .. }
+            ]
+        ));
+        assert!(matches!(
+            app.touch(Touch::Up, &f, 2200).as_slice(),
+            [Effect::BrowserPluginTouch { phase: 2, .. }]
+        ));
+    }
+}
+
+#[test]
+fn gesture_pill_overlays_the_full_height_page_without_repainting_its_surface() {
+    let (f, i) = (fonts(), info());
+    for dark in [false, true] {
+        let mut app = App::new(Screen::Home, W, H, PPD);
+        app.state.dark = dark;
+        app.set_navigation(true);
+        assert_eq!(app.theme().m.h, H);
+        assert_eq!(app.theme().bottom_inset, app.nav_height() as f32);
+        assert!(app.frame(&f, &i).canvas.h >= H);
+        let mut canvas = Canvas::filled(W, H, Rgba::rgb(239, 31, 70));
+        let height = app.nav_height();
+        canvas.fill_rect(100.0, (H - height - 1) as f32, 400.0, 1.0, Rgba::rgb(255, 255, 255));
+        for y in H - height..H {
+            canvas.fill_rect(0.0, y as f32, W as f32, 1.0, Rgba::rgb((y % 255) as u8, 41, 90));
+        }
+        let original = canvas.data.clone();
+        app.draw_navigation(&mut canvas);
+        let t = app.theme();
+        let left = (W as f32 - t.m.dp(108.0)) / 2.0;
+        let top = H as f32 - t.m.dp(10.0);
+        for y in H - height..H {
+            for x in 0..W {
+                if (x as f32) >= left - 1.0
+                    && (x as f32) <= left + t.m.dp(108.0) + 1.0
+                    && (y as f32) >= top - 1.0
+                    && (y as f32) <= top + t.m.dp(4.0) + 1.0
+                {
+                    continue;
+                }
+                let at = ((y * W + x) * 4) as usize;
+                assert_eq!(&canvas.data[at..at + 4], &original[at..at + 4]);
+            }
+        }
+        assert_ne!(canvas.data, original);
+    }
+}
+
+#[test]
+fn native_keyboards_draw_their_own_surface_to_the_bottom_with_keys_above_the_pill() {
+    let (f, i) = (fonts(), info());
+    for dark in [false, true] {
+        for screen in [
+            Screen::NewFolder,
+            Screen::Search,
+            Screen::Files,
+            Screen::Terminal,
+            Screen::BrowserAddress,
+        ] {
+            let mut app = App::new(screen, W, H, PPD);
+            app.state.dark = dark;
+            app.set_navigation(true);
+            app.state.files_search = screen == Screen::Files;
+            if screen == Screen::BrowserAddress {
+                app.state.browser.full_active = true;
+                app.state.browser.view = BrowserView::Full;
+            }
+            let t = app.theme();
+            let safe = H as f32 - t.bottom_inset;
+            let frame = app.whole_frame(&f, &i);
+            assert!(
+                frame
+                    .hits
+                    .iter()
+                    .filter(|hit| matches!(hit.action, Action::Type(_)))
+                    .all(|hit| hit.rect.y + hit.rect.h <= safe + 1.0)
+            );
+            if let Some(dock) = &frame.dock {
+                assert!(
+                    dock.hits
+                        .iter()
+                        .filter(|hit| matches!(hit.action, Action::Type(_)))
+                        .all(|hit| H as f32 - dock.canvas.h as f32 + hit.rect.y + hit.rect.h <= safe + 1.0)
+                );
+            }
+            let mut canvas = Canvas::new(W, H);
+            app.compose(&mut canvas, &f, &i, "12:00", 1000);
+            let at = ((H - 1) * W * 4) as usize;
+            let panel = widgets::keyboard_panel(&t);
+            assert_eq!(&canvas.data[at..at + 3], &[panel.r, panel.g, panel.b], "{screen:?}");
+        }
+    }
+}
+
+#[test]
+fn browser_keyboard_surface_extends_under_the_pill_without_covering_normal_web_content() {
+    let mut app = App::new(Screen::BrowserAddress, W, H, PPD);
+    app.set_navigation(true);
+    app.state.browser.full_active = true;
+    app.state.browser.view = BrowserView::Full;
+    let panel = widgets::keyboard_panel(&app.theme());
+    let mut canvas = Canvas::filled(W, H, panel);
+    let height = app.nav_height();
+    canvas.fill_rect(0.0, H as f32 - height as f32 - 10.0, W as f32, 10.0, Rgba::rgb(18, 18, 18));
+    app.draw_navigation(&mut canvas);
+    let at = ((H - 1) * W * 4) as usize;
+    assert_eq!(&canvas.data[at..at + 3], &[panel.r, panel.g, panel.b]);
+    app.stack = vec![(Screen::Browser, 0.0, Focus::Unset)];
+    canvas.clear(Rgba::rgb(40, 70, 110));
+    canvas.fill_rect(0.0, H as f32 - height as f32 - 10.0, W as f32, 10.0, Rgba::rgb(18, 18, 18));
+    app.draw_navigation(&mut canvas);
+    assert_eq!(&canvas.data[at..at + 3], &[40, 70, 110]);
+}
+
+#[test]
+fn recent_tasks_have_no_page_title_and_clearing_cards_does_not_cancel_installation() {
+    let (f, i) = (fonts(), info());
+    let mut app = opened(Screen::Settings, &f, &i);
+    let mut canvas = Canvas::new(W, H);
+    app.compose(&mut canvas, &f, &i, "12:00", 1000);
+    app.overview();
+    let frame = app.frame(&f, &i);
+    assert_eq!(frame.title, "");
+    assert!(!frame.header && !frame.back);
+    app.state.install = Install::Scripting {
+        stage: None,
+        running: true,
+    };
+    let job = app.state.install.clone();
+    assert!(app.act(Action::ClearTasks, 2000).is_empty());
+    assert_eq!(app.state.install, job);
+    assert!(app.state.task_cards.is_empty());
+    assert_eq!(app.screen(), Screen::Home);
+}
+
+#[test]
+fn closing_one_recent_task_removes_only_its_card_and_preserves_background_work() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    for screen in [Screen::Settings, Screen::Files, Screen::Backup] {
+        app.open(screen);
+        app.frame(&f, &i);
+        app.home();
+    }
+    app.overview();
+    assert_eq!(
+        app.state.task_cards.iter().map(|task| task.screen).collect::<Vec<_>>(),
+        [Screen::Backup, Screen::Files, Screen::Settings]
+    );
+    app.state.install = Install::Scripting {
+        stage: None,
+        running: true,
+    };
+    app.state.root_stage = Some(skyward_root::Stage::Writing);
+    app.state.browser.full_active = true;
+    app.state.browser.url = "https://example.com".into();
+    let mut expected = app.state.clone();
+    expected.task_cards.remove(1);
+    let frame = app.frame(&f, &i);
+    let close = frame
+        .hits
+        .iter()
+        .find(|hit| hit.action == Action::CloseTask(Screen::Files))
+        .unwrap()
+        .rect;
+    let (x, y) = close.centre();
+    assert_eq!(frame.hit(x, y).unwrap().action, Action::CloseTask(Screen::Files));
+    assert!(app.touch(Touch::Down(x, y), &f, 1000).is_empty());
+    assert!(app.touch(Touch::Up, &f, 1040).is_empty());
+    assert_eq!(app.screen(), Screen::Tasks);
+    assert_eq!(app.state, expected);
+    assert_eq!(
+        app.state.task_cards.iter().map(|task| task.screen).collect::<Vec<_>>(),
+        [Screen::Backup, Screen::Settings]
+    );
+    // A repeated stale close cannot dismiss the task that moved into its position.
+    assert!(app.act(Action::CloseTask(Screen::Files), 1100).is_empty());
+    assert_eq!(app.state, expected);
+    app.resume_task(1);
+    assert_eq!(app.screen(), Screen::Settings);
+}
+
+#[test]
+fn closing_last_task_returns_home_without_cancelling_work_and_reopening_creates_a_new_card() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    app.open(Screen::Files);
+    app.frame(&f, &i);
+    app.home();
+    app.overview();
+    app.state.install = Install::Scripting {
+        stage: None,
+        running: true,
+    };
+    let job = app.state.install.clone();
+    assert!(app.act(Action::CloseTask(Screen::Files), 1000).is_empty());
+    assert_eq!(app.screen(), Screen::Home);
+    assert!(app.tasks.is_empty() && app.state.task_cards.is_empty());
+    assert!(app.state.task_background.is_none());
+    assert_eq!(app.state.install, job);
+    app.open(Screen::Files);
+    app.frame(&f, &i);
+    assert!(app.act(Action::CloseTask(Screen::Files), 2000).is_empty());
+    assert_eq!(app.screen(), Screen::Files);
+    app.home();
+    assert_eq!(app.tasks.len(), 1);
+    assert_eq!(app.state.task_cards[0].screen, Screen::Files);
+}
+
+#[test]
+fn closing_recent_cards_clamps_scroll_after_the_grid_shrinks() {
+    let (f, i) = (fonts(), info());
+    let mut app = App::new(Screen::Home, W, H, PPD);
+    for screen in [Screen::Settings, Screen::Files, Screen::Backup, Screen::Restore, Screen::Install] {
+        app.open(screen);
+        app.frame(&f, &i);
+        app.home();
+    }
+    app.overview();
+    app.frame(&f, &i);
+    app.top_mut().1 = app.max_scroll();
+    for screen in [Screen::Settings, Screen::Files, Screen::Backup] {
+        app.close_task(screen);
+        app.frame(&f, &i);
+        assert!(app.top().1 <= app.max_scroll());
+        assert_eq!(app.tasks.len(), app.state.task_cards.len());
+    }
+    assert_eq!(app.tasks.len(), 2);
+}
+
+#[test]
+fn scrolling_tasks_never_paints_cards_in_status_or_bottom_controls() {
+    let (f, i) = (fonts(), info());
+    for dark in [false, true] {
+        let mut app = App::new(Screen::Tasks, 720, 1600, 1.875);
+        app.state.dark = dark;
+        app.set_navigation(true);
+        let art = BrowserPicture {
+            width: 36,
+            height: 80,
+            pixels: std::sync::Arc::new([221, 28, 77, 255].repeat(36 * 80)),
+        };
+        app.state.task_background = Some(art.clone());
+        app.state.task_cards = (0..6)
+            .map(|_| TaskCard {
+                screen: Screen::Browser,
+                title: "Browser",
+                preview: Some(art.clone()),
+            })
+            .collect();
+        let t = app.theme();
+        let mut expected = Canvas::new(720, 1600);
+        app.compose(&mut expected, &f, &i, "12:00", 2000);
+        let stride = 720 * 4;
+        let top = t.m.dp(72.0) as usize * stride;
+        let bottom = (t.m.h - t.m.dp(76.0) as u32) as usize * stride;
+        for scroll in [t.m.dp(115.0), t.m.dp(480.0), app.max_scroll()] {
+            app.top_mut().1 = scroll;
+            app.refresh();
+            app.tick(4000);
+            let mut got = Canvas::new(720, 1600);
+            app.compose(&mut got, &f, &i, "12:00", 4000);
+            assert_eq!(&got.data[..top], &expected.data[..top]);
+            assert_eq!(&got.data[bottom..], &expected.data[bottom..]);
+        }
+        app.top_mut().1 = t.m.dp(115.0);
+        app.refresh();
+        app.frame(&f, &i);
+        app.touch(Touch::Down(100.0, t.m.dp(60.0)), &f, 5000);
+        app.touch(Touch::Up, &f, 5010);
+        assert_eq!(app.screen(), Screen::Tasks);
+    }
+}
+
+#[test]
+fn recent_task_previews_render_identically_in_scroll_bands_and_stay_inside_rounded_cards() {
+    let (f, i) = (fonts(), info());
+    let t = Theme::dark(720, 1600, 1.875);
+    let mut state = State::default();
+    let art = BrowserPicture {
+        width: 36,
+        height: 80,
+        pixels: std::sync::Arc::new([220, 70, 90, 255].repeat(36 * 80)),
+    };
+    state.task_background = Some(art.clone());
+    state.task_cards = (0..6)
+        .map(|_| TaskCard {
+            screen: Screen::Browser,
+            title: "Browser",
+            preview: Some(art.clone()),
+        })
+        .collect();
+    let cx = |band| Ctx {
+        t: &t,
+        f: &f,
+        info: &i,
+        state: &state,
+        term: None,
+        band,
+    };
+    let whole = pages::render(Screen::Tasks, &cx(None)).canvas;
+    let mut merged = Canvas::unfilled(720, whole.h, 0..whole.h);
+    for start in (0..whole.h).step_by(211) {
+        let part = pages::render(
+            Screen::Tasks,
+            &cx(Some(Band {
+                rows: (start, (start + 211).min(whole.h)),
+                cols: (0, 720),
+            })),
+        )
+        .canvas;
+        merged.replace(&part);
+    }
+    assert_eq!(merged.data, whole.data);
+    let tile = task_preview_rect(&t, task_tiles(&t, 6)[0]);
+    let corner = ((tile.y as u32 * 720 + tile.x as u32) * 4) as usize;
+    let center = (((tile.y + tile.h / 2.0) as u32 * 720 + (tile.x + tile.w / 2.0) as u32) * 4) as usize;
+    assert_eq!(&whole.data[center..center + 3], &[220, 70, 90]);
+    assert_ne!(&whole.data[corner..corner + 3], &[220, 70, 90]);
+}
+
+#[test]
+fn folder_names_are_checked_before_a_filesystem_effect_is_emitted() {
+    let mut app = App::new(Screen::Files, W, H, PPD);
+    app.act(Action::NewFolder, 0);
+    for invalid in ["", ".", "..", "../bad", "a/b", "a\\b"] {
+        app.state.new_name = invalid.into();
+        assert!(app.act(Action::CreateFolder, 100).is_empty());
+    }
+    if cfg!(feature = "pinyin-input") {
+        app.state.new_name.clear();
+        app.act(Action::ImeToggle, 200);
+        for ch in "nihao".chars() {
+            app.act(Action::Type(Cap::Char(ch)), 300);
+        }
+        app.act(Action::ImePick(0), 400);
+        assert_eq!(app.state.new_name, "你好");
+    }
 }
 
 #[test]
@@ -1270,7 +1688,8 @@ fn navigation_home_parks_the_page_without_cancelling_an_installer() {
     app.frame(&f, &i);
     let y = H as f32 - app.nav_height() as f32 / 2.0;
     app.touch(Touch::Down(W as f32 / 2.0, y), &f, 2000);
-    assert!(app.touch(Touch::Up, &f, 2010).is_empty());
+    app.touch(Touch::Move(W as f32 / 2.0, y - PPD * 90.0), &f, 2010);
+    app.touch(Touch::Up, &f, 2020);
     assert_eq!(app.screen(), Screen::Home);
     assert_eq!(app.state.install, job);
 }
@@ -5948,34 +6367,24 @@ fn the_terminal_sends_every_key_to_its_shell() {
     );
 }
 #[test]
-fn the_file_managers_button_opens_the_terminal_in_the_folder_shown() {
+fn the_file_managers_button_creates_a_folder_without_losing_its_directory() {
     let (f, i) = (fonts(), info());
     let mut app = App::new(Screen::Files, W, H, PPD);
     app.set_files("/sdcard/Download".into(), Ok(vec![entry("a.txt", FileKind::File)]), 0);
-    assert_eq!(app.frame(&f, &i).button, Some((widgets::Glyph::Terminal, Action::TerminalHere)));
+    assert_eq!(app.frame(&f, &i).button, Some((widgets::Glyph::Add, Action::NewFolder)));
+    assert!(tap_button(&mut app, &f, &i, 0).is_empty());
+    assert_eq!(app.screen(), Screen::NewFolder);
+    app.state.new_name = "备份".into();
     assert_eq!(
-        tap_button(&mut app, &f, &i, 0),
-        vec![Effect::StartShell("/sdcard/Download".into())],
-        "a shell starts there"
+        app.act(Action::CreateFolder, 100),
+        vec![Effect::MakeFolder {
+            folder: "/sdcard/Download".into(),
+            name: "备份".into()
+        }]
     );
-    assert_eq!(app.screen(), Screen::Terminal);
-    let (rows, cols) = app.term_size(&f);
-    app.term_started(rows, cols);
-    app.term_ended(TermEnd::Exited(0));
-    assert_eq!(
-        tap(&mut app, &f, &i, Action::Type(Cap::Enter)),
-        vec![Effect::StartShell("/sdcard/Download".into())],
-        "Enter starts it again there"
-    );
-    app.term_started(rows, cols);
-    tap_back(&mut app, &f, &i, 0);
-    app.set_files("/data/adb".into(), Ok(Vec::new()), 0);
-    assert_eq!(
-        tap_button(&mut app, &f, &i, 0),
-        vec![Effect::ShellTo("/data/adb".into())],
-        "the shell running goes there"
-    );
-    assert_eq!(app.screen(), Screen::Terminal);
+    app.folder_created(200);
+    assert_eq!(app.screen(), Screen::Files);
+    assert_eq!(app.state.files.path, "/sdcard/Download");
 }
 #[test]
 fn the_file_page_searches_below_its_folder_and_one_button_cycles_the_order() {
@@ -6152,11 +6561,11 @@ fn the_bars_round_button_darkens_under_a_finger_on_the_frames_drawn() {
     let rest = pixel(&mut app, 0);
     app.touch(Touch::Down(x, y), &f, 100);
     assert_ne!(pixel(&mut app, 100), rest, "held down, its disc darkens");
-    assert_eq!(app.touch(Touch::Up, &f, 150), vec![Effect::StartShell("/data/adb".into())]);
+    assert!(app.touch(Touch::Up, &f, 150).is_empty());
     for now in (150..1000).step_by(8) {
         pixel(&mut app, now);
     }
-    assert_eq!(app.screen(), Screen::Terminal, "the terminal slides in");
+    assert_eq!(app.screen(), Screen::NewFolder, "the folder popup opens");
     app.text_opened(&f, "/data/adb/a.txt".into(), Ok(Some(b"a".to_vec())), 1000);
     app.state.editor.as_mut().expect("the editor page shows a file").insert('b');
     app.refresh();

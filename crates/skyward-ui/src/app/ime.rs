@@ -3,7 +3,7 @@ use super::*;
 impl App {
     pub(super) fn text_context(&self) -> bool {
         match self.screen() {
-            Screen::Search | Screen::Rename | Screen::WlanPassword | Screen::Terminal | Screen::BrowserAddress => true,
+            Screen::Search | Screen::Rename | Screen::NewFolder | Screen::WlanPassword | Screen::Terminal | Screen::BrowserAddress => true,
             Screen::WlanAdd => self.state.adding.is_some(),
             Screen::Editor => self.state.editor.is_some(),
             Screen::BrowserForm | Screen::Browser => {

@@ -75,6 +75,7 @@ pub use frame::*;
 pub use install::*;
 pub use manager::*;
 pub use mount::*;
+pub use navigation::{TaskCard, task_kind, task_preview_rect, task_tiles};
 pub use prefs::*;
 pub use reboot::*;
 pub use relabel::*;
@@ -101,6 +102,9 @@ pub enum Screen {
     BrowserHistory,
     BrowserBookmarks,
     RootModules,
+    KernelSu,
+    RootModuleInstall,
+    NewFolder,
     Partitions,
     ControlCenter,
     Tasks,
@@ -224,6 +228,8 @@ pub enum Screen {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
+    KernelSu,
+    RootModuleInstall,
     /// Change an AVB check on the slot the phone runs from.
     Avb,
     Reboot,
@@ -277,10 +283,16 @@ pub enum Confirm {
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    NewFolder,
+    CreateFolder,
+    PickRootModule,
     NavBack,
     NavHome,
     NavTasks,
     ResumeTask,
+    ResumeTaskAt(usize),
+    CloseTask(Screen),
+    ClearTasks,
     ReadRootModules,
     RootModule(usize, u8),
     OpenControlCenter,
@@ -582,6 +594,11 @@ pub enum Shot {
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
+    RootInstall(skyward_root::Job),
+    MakeFolder {
+        folder: String,
+        name: String,
+    },
     ReadRootModules,
     RootModule {
         path: String,
@@ -1505,8 +1522,9 @@ pub struct App {
     immersive_pull: Option<browser::ImmersivePull>,
     shade_pull: Option<shade::ShadePull>,
     shade: Option<shade::Shade>,
-    parked: Option<Vec<(Screen, f32, Focus)>>,
-    nav_press: Option<u8>,
+    tasks: Vec<navigation::ParkedTask>,
+    nav_gesture: Option<navigation::NavGesture>,
+    browser_edge: Option<navigation::BrowserEdge>,
     navigation: bool,
     pub state: State,
     /// The pages open, the one shown last: each with how far it is
@@ -1663,8 +1681,9 @@ impl App {
             immersive_pull: None,
             shade_pull: None,
             shade: None,
-            parked: None,
-            nav_press: None,
+            tasks: Vec::new(),
+            nav_gesture: None,
+            browser_edge: None,
             navigation: false,
             state: State::default(),
             stack: vec![(start, 0.0, Focus::Unset)],
@@ -1740,19 +1759,12 @@ impl App {
 
 impl App {
     pub fn theme(&self) -> Theme {
-        let height = if self.browser_fullscreen() {
-            self.h
-        } else {
-            self.h.saturating_sub(self.nav_height())
-        };
         let mut theme = if self.state.dark || self.screen() == Screen::ControlCenter || self.browser_fullscreen() {
-            Theme::dark(self.w, height, self.px_per_dp)
+            Theme::dark(self.w, self.h, self.px_per_dp)
         } else {
-            Theme::light(self.w, height, self.px_per_dp)
+            Theme::light(self.w, self.h, self.px_per_dp)
         };
-        if self.browser_fullscreen() {
-            theme.bottom_inset = self.nav_height() as f32;
-        }
+        theme.bottom_inset = self.nav_height() as f32;
         theme
     }
 }
@@ -1860,6 +1872,7 @@ impl App {
             blink,
             darkens,
             chord,
+            self.navigation_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -1900,7 +1913,7 @@ impl App {
     /// deadline goes away.
     pub fn tick(&mut self, now: u64) -> Vec<Effect> {
         self.tick_shade(now);
-        let mut fx = Vec::new();
+        let mut fx = self.tick_navigation(now);
         if self.chord.is_some_and(|(_, at)| now >= at + CHORD_MS) {
             fx.extend(self.let_chord_go(now));
         }

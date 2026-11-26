@@ -1,5 +1,15 @@
 ![Skyward Recovery](assets/hero.jpg)
 
+> This branch contains the REDMI K80 Pro (`miro`) adaptation. See
+> [the accepted test45 baseline](docs/MIRO-TEST45.md) and
+> [the upstream 0.5.1 integration](docs/MIRO-UPSTREAM051.md). The original
+> upstream is [kirklin/skyward](https://github.com/kirklin/skyward), with
+> device adaptation references from
+> [Rinrroy/skyward-for-haotian](https://github.com/Rinrroy/skyward-for-haotian).
+> The inherited upstream overview follows. Browser-enabled development
+> images are not publicly distributed; see
+> [runtime distribution restrictions](crates/skyward-browser/NOTICE.md).
+
 # Skyward for the Xiaomi 15 Pro
 
 English | [简体中文](README.zh-CN.md)

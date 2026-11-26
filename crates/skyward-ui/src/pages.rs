@@ -65,6 +65,9 @@ pub struct Band {
 
 pub fn render(screen: Screen, cx: &Ctx) -> Frame {
     match screen {
+        Screen::KernelSu => crate::tools::root_install(cx, true),
+        Screen::RootModuleInstall => crate::tools::root_install(cx, false),
+        Screen::NewFolder => new_folder(cx),
         Screen::RootModules => crate::tools::modules(cx),
         Screen::Partitions => crate::tools::partitions(cx),
         Screen::ControlCenter => crate::tools::control(cx),
@@ -139,6 +142,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
 pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
     const INSTALL: Text = crate::texts::confirm::INSTALL;
     let (label, danger) = match which {
+        Confirm::KernelSu | Confirm::RootModuleInstall => (crate::texts::confirm::INSTALL, true),
         Confirm::Avb => (
             crate::lang::legacy(["滑动以修改 vbmeta", "滑動以變更 vbmeta", "Slide to change vbmeta"]),
             true,
@@ -4917,7 +4921,7 @@ pub fn files(cx: &Ctx) -> Frame {
         (_, true) => Some(keyboard_dock(cx, s)),
         _ => None,
     };
-    let button = Some((widgets::Glyph::Terminal, Action::TerminalHere));
+    let button = Some((widgets::Glyph::Add, Action::NewFolder));
     Frame {
         dock,
         button,
@@ -5050,6 +5054,53 @@ fn search_rows(cx: &Ctx, c: &mut Canvas) -> Option<Rows> {
 
 const FILES_SEARCH_HINT: Text = crate::lang::legacy(["搜索文件", "搜尋檔案", "Search files"]);
 const FILES_SEARCH_ENTER: Text = crate::texts::common::DONE;
+
+pub fn new_folder(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let behind = files(cx);
+    let mut c = behind.canvas.crop_height(t.m.h);
+    if let Some(rows) = &behind.rows {
+        for index in rows.within(0.0, t.m.h as f32) {
+            let top = rows.edges[index];
+            let height = (rows.edges[index + 1] - top).ceil() as u32;
+            let mut art = Canvas::new(t.m.w, height);
+            row(Screen::Files, cx, index, &mut art);
+            c.blit_rgba(&art.data, art.w, art.h, 0, top as i32);
+        }
+    }
+    if let Some(pinned) = &behind.pinned {
+        c.blit_rgba(&pinned.canvas.data, pinned.canvas.w, pinned.canvas.h, 0, pinned.top as i32);
+    }
+    c.dim(0.4);
+    let top = t.m.dp(144.0);
+    let width = t.m.w as f32 - t.m.margin * 2.0;
+    c.fill_round_rect(t.m.margin, top, width, t.m.dp(196.0), t.m.dp(8.0), t.pal.card);
+    c.text_vc(
+        &f.heading,
+        l.pick(["新建文件夹", "新增資料夾", "New folder"]),
+        t.m.margin + t.m.inner,
+        top + t.m.dp(30.0),
+        t.m.row_title_px,
+        t.pal.text,
+        Some(width - t.m.inner * 2.0),
+    );
+    let (_, caret) = widgets::text_field(&mut c, t, f, top + t.m.dp(56.0), &s.new_name);
+    let list = widgets::list(
+        &mut c,
+        t,
+        f,
+        top + t.m.dp(124.0),
+        &[Row::new(l.pick(["创建", "建立", "Create"])).trail(Trail::None)],
+    );
+    let mut out = hits(&list.rows, &[Action::CreateFolder]);
+    keyboard_hits(&mut c, t, f, s, l.pick(DONE), &mut out);
+    Frame {
+        header: false,
+        fixed: true,
+        caret: Some(caret),
+        ..Frame::new(t, c, out, "", top)
+    }
+}
 
 /// What the entries of a folder are in the order of, as the bar of them
 /// names it. The order itself is `sort::sort`, which is where a `SortKey`

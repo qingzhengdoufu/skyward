@@ -335,7 +335,8 @@ impl App {
     }
 
     pub fn browser_cancel_touch(&mut self) -> Vec<Effect> {
-        self.nav_press = None;
+        self.nav_gesture = None;
+        self.browser_edge = None;
         if matches!(self.drag, Drag::BrowserTouch { .. }) {
             self.drag = Drag::Idle;
             return vec![Effect::BrowserPluginCancelTouch];

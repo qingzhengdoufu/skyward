@@ -4,12 +4,18 @@ use super::*;
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
+    pub task_cards: Vec<TaskCard>,
+    pub task_background: Option<BrowserPicture>,
     pub control_clock: String,
     pub control_date: String,
     pub image_only: bool,
     pub browser: super::Browser,
     pub root_modules: Option<Result<(String, Vec<skyward_files::root_modules::Module>), String>>,
     pub root_notice: String,
+    pub root_stage: Option<skyward_root::Stage>,
+    pub root_result: Option<Result<String, String>>,
+    pub module_picker: bool,
+    pub module_package: Option<String>,
     /// What the AVB page last read: none before its first read, and why
     /// where it could not be read.
     pub avb: Option<Result<avbctl::State, String>>,
@@ -297,12 +303,18 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
+            task_cards: Vec::new(),
+            task_background: None,
             control_clock: "00:00".into(),
             control_date: String::new(),
             image_only: false,
             browser: super::Browser::default(),
             root_modules: None,
             root_notice: String::new(),
+            root_stage: None,
+            root_result: None,
+            module_picker: false,
+            module_package: None,
             avb: None,
             avb_pending: None,
             avb_notice: None,

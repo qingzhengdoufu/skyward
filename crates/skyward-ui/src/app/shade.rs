@@ -215,7 +215,7 @@ impl App {
 }
 
 /// Blur a small snapshot once per pull, not the live page on every animation frame.
-fn frosted(source: &Canvas) -> Canvas {
+pub(super) fn frosted(source: &Canvas) -> Canvas {
     let mut out = source.clone();
     if !source.whole() || source.w == 0 || source.h == 0 {
         return out;

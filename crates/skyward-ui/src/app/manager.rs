@@ -341,10 +341,16 @@ impl App {
     /// a file to install in, with what it holds that may be installed.
     pub fn set_place(&mut self, place: Place, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
         let images = self.state.image_only;
+        let modules = self.state.module_picker;
         let files = files.map(|entries| {
             entries
                 .into_iter()
                 .filter(installable)
+                .filter(|entry| {
+                    !modules
+                        || matches!(entry.kind, FileKind::Folder { .. } | FileKind::Link { folder: true, .. })
+                        || entry.name.to_ascii_lowercase().ends_with(".zip")
+                })
                 .filter(|e| {
                     !images
                         || matches!(e.kind, FileKind::Folder { .. } | FileKind::Link { folder: true, .. })

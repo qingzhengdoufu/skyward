@@ -20,20 +20,60 @@ impl App {
             return self.browser_act(action, now);
         }
         match action {
+            Action::NewFolder => {
+                self.state.new_name.clear();
+                self.state.files_search = false;
+                self.state.layer = Layer::Letters;
+                self.open(Screen::NewFolder);
+            }
+            Action::CreateFolder => {
+                let name = self.state.new_name.trim().to_string();
+                if name.is_empty() || matches!(name.as_str(), "." | "..") || name.contains(['/', '\\', '\0']) || name.len() > 255 {
+                    self.say(
+                        l.pick(["请输入有效的文件夹名称", "請輸入有效的資料夾名稱", "Enter a valid folder name"]),
+                        now,
+                    );
+                } else {
+                    return vec![Effect::MakeFolder {
+                        folder: self.state.files.path.clone(),
+                        name,
+                    }];
+                }
+            }
+            Action::PickRootModule => {
+                if !self.state.data.storage_open() {
+                    self.say(l.pick(DECRYPT_FIRST), now);
+                    return Vec::new();
+                }
+                if self.state.root_stage.is_none() {
+                    self.state.root_result = None;
+                }
+                self.state.module_picker = true;
+                self.state.image_only = false;
+                self.open(Screen::Choose(Place::Storage));
+                return self.arrive_at(Screen::Choose(Place::Storage));
+            }
             Action::NavHome => {
                 self.home();
                 return Vec::new();
             }
             Action::NavTasks => {
-                if self.shade.is_some() {
-                    self.dismiss_shade();
-                }
-                if self.screen() != Screen::Home && self.screen() != Screen::Tasks {
-                    self.parked = Some(self.stack.clone());
-                }
-                if self.screen() != Screen::Tasks {
-                    self.open(Screen::Tasks);
-                }
+                self.overview();
+                return Vec::new();
+            }
+            Action::ResumeTaskAt(at) => {
+                self.resume_task(at);
+                return Vec::new();
+            }
+            Action::CloseTask(kind) => {
+                self.close_task(kind);
+                return Vec::new();
+            }
+            Action::ClearTasks => {
+                self.tasks.clear();
+                self.state.task_cards.clear();
+                self.state.task_background = None;
+                self.home();
                 return Vec::new();
             }
             Action::ResumeTask => {
@@ -51,6 +91,7 @@ impl App {
             }
             Action::FlashPartitionImage => {
                 self.state.image_only = true;
+                self.state.module_picker = false;
                 let place = if self.state.data.storage_open() {
                     Place::Storage
                 } else if self.state.usb_drive == Some(UsbDrive::Shown) {
@@ -98,6 +139,7 @@ impl App {
                 }
                 if s == Screen::Install {
                     self.state.image_only = false;
+                    self.state.module_picker = false;
                 }
                 if s == Screen::Search && self.screen() == Screen::Home {
                     if let Some((rest, _)) = self.seek.take() {
@@ -667,6 +709,16 @@ impl App {
                         return vec![Effect::ReadPlace(place, path)];
                     }
                     FileKind::File | FileKind::Link { folder: false, .. } => {
+                        if self.state.module_picker {
+                            let root = if place == Place::Storage { "/sdcard" } else { USB_DRIVE };
+                            self.state.module_package = Some(std::path::Path::new(root).join(path).display().to_string());
+                            self.state.module_picker = false;
+                            self.open(Screen::RootModuleInstall);
+                            if self.state.root_stage.is_none() {
+                                self.state.root_result = None;
+                            }
+                            return Vec::new();
+                        }
                         return self.install_file(place, path, entry.size, now);
                     }
                     FileKind::Special => unreachable!("a place lists no special files"),
@@ -1024,7 +1076,7 @@ impl App {
             Screen::Search => &mut self.state.search,
             Screen::Files => &mut self.state.files_query,
             Screen::Decrypt => &mut self.state.code,
-            Screen::Rename => &mut self.state.new_name,
+            Screen::Rename | Screen::NewFolder => &mut self.state.new_name,
             Screen::WlanPassword => &mut self.state.password,
             Screen::WlanAdd => {
                 let a = self.state.adding.as_mut().expect("the page adds a network");
@@ -1072,6 +1124,7 @@ impl App {
             }
             Cap::Show(layer) => self.state.layer = layer,
             Cap::Enter => match self.screen() {
+                Screen::NewFolder => return self.act(Action::CreateFolder, now),
                 Screen::BrowserAddress => {
                     let mut effects = Vec::new();
                     for _ in 0..32 {
@@ -1208,8 +1261,24 @@ impl App {
 impl App {
     /// What a swipe-to-confirm control slid to its end does.
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
+        if matches!(which, Confirm::KernelSu | Confirm::RootModuleInstall) {
+            if self.state.root_stage.is_some() {
+                return Vec::new();
+            }
+            let job = match which {
+                Confirm::KernelSu => skyward_root::Job::InstallKernelSu { kernel: String::new() },
+                _ => {
+                    let Some(path) = self.state.module_package.clone() else {
+                        return Vec::new();
+                    };
+                    skyward_root::Job::InstallModule { path }
+                }
+            };
+            return vec![Effect::RootInstall(job)];
+        }
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::KernelSu | Confirm::RootModuleInstall => unreachable!("handled before regular confirms"),
             Confirm::SkywardUpdate => {
                 let slot = self.state.skyward_job.as_ref().and_then(|job| match job.outcome {
                     Some(SkywardEnd::Ready(slot)) => Some(slot),

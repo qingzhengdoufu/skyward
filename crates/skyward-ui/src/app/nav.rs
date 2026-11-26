@@ -100,6 +100,9 @@ impl App {
     /// In the file manager, back climbs a folder until it reaches the root,
     /// and in a place, until it reaches the place's top.
     pub(super) fn back(&mut self, now: u64) -> Vec<Effect> {
+        if self.screen() == Screen::NewFolder {
+            self.state.new_name.clear();
+        }
         if self.browser_immersive() {
             return self.set_browser_immersive(false);
         }
@@ -143,6 +146,7 @@ impl App {
                 if let Some(up) = self.state.folder(Screen::Choose(place)).up() {
                     return vec![Effect::ReadPlace(place, up)];
                 }
+                self.state.module_picker = false;
             }
             Screen::FileInfo => {
                 self.state.file = None;
